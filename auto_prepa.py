@@ -78,11 +78,18 @@ DRIVE_BDC_FOLDER_ID = "10gxP-IbO_-F03QiS75B027HLgKXI0mPs"  # TODO : renseigner l
 
 def get_credentials():
     # En CI : variable d'environnement contenant le JSON du compte de service
-    sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+    sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
     if sa_json:
+        try:
+            sa_info = json.loads(sa_json)
+        except json.JSONDecodeError as e:
+            print(f"ERREUR : GOOGLE_SERVICE_ACCOUNT_JSON n'est pas un JSON valide ({e})")
+            print(f"  Longueur du secret reçu : {len(sa_json)} caractères")
+            print(f"  Début : {sa_json[:80]!r}")
+            raise
         from google.oauth2 import service_account
         return service_account.Credentials.from_service_account_info(
-            json.loads(sa_json), scopes=SCOPES)
+            sa_info, scopes=SCOPES)
 
     # En local : flux OAuth classique
     creds = None
