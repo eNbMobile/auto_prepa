@@ -1,0 +1,18 @@
+pdf_cache/
+BDC/
+__pycache__/
+*.pyc
+*.log
+*.lock
+
+# Binaires compilés
+v 3.0x/v 3.7.4/prepa_drive_degrade
+v 3.7.5/prepa_drive_degrade
+
+# Fichiers temporaires C++
+v 3.0x/v 3.7.4/bon_prepa.txt
+v 3.0x/v 3.7.4/bon_prepa_*.txt
+v 3.0x/v 3.7.4/bon_anticipation*.txt
+v 3.0x/v 3.7.4/BonDeCommande_*.pdf
+v 3.0x/v 3.7.4/tmp*
+v 3.0x/v 3.7.4/temp*

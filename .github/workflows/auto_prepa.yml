@@ -1,0 +1,43 @@
+name: Auto Prépa Drive
+
+on:
+  schedule:
+    # Toutes les 15 min, de 5h à 18h UTC (= 7h-20h Paris été, 6h-19h hiver)
+    # Lundi à samedi uniquement
+    - cron: '*/15 5-18 * * 1-6'
+  workflow_dispatch:  # déclenchement manuel depuis l'interface GitHub
+
+jobs:
+  auto-prepa:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Restaurer le cache PDFs
+        uses: actions/cache@v4
+        with:
+          path: pdf_cache
+          key: pdf-cache-${{ github.run_id }}
+          restore-keys: pdf-cache-
+
+      - name: Installer pdftotext (poppler-utils)
+        run: sudo apt-get install -y poppler-utils
+
+      - name: Compiler prepa_drive_degrade
+        working-directory: "v 3.0x/v 3.7.4"
+        run: gcc -o prepa_drive_degrade Programmes/prepa_drive_degrade.c Programmes/fct_prepa_drive_degrade.c -lm
+
+      - name: Installer Python et dépendances
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Exécuter auto_prepa.py
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: python3 auto_prepa.py
