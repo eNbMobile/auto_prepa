@@ -77,21 +77,18 @@ DRIVE_BDC_FOLDER_ID = "10gxP-IbO_-F03QiS75B027HLgKXI0mPs"  # TODO : renseigner l
 # ── Auth ───────────────────────────────────────────────────────────
 
 def get_credentials():
-    # En CI : variable d'environnement contenant le JSON du compte de service
-    sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
-    if sa_json:
+    # En CI : token OAuth stocké comme secret GitHub (GOOGLE_TOKEN_JSON)
+    token_json = os.environ.get("GOOGLE_TOKEN_JSON", "").strip()
+    if token_json:
         try:
-            sa_info = json.loads(sa_json)
+            json.loads(token_json)  # validation rapide
         except json.JSONDecodeError as e:
-            print(f"ERREUR : GOOGLE_SERVICE_ACCOUNT_JSON n'est pas un JSON valide ({e})")
-            print(f"  Longueur du secret reçu : {len(sa_json)} caractères")
-            print(f"  Début : {sa_json[:80]!r}")
+            print(f"ERREUR : GOOGLE_TOKEN_JSON n'est pas un JSON valide ({e})")
             raise
-        from google.oauth2 import service_account
-        return service_account.Credentials.from_service_account_info(
-            sa_info, scopes=SCOPES)
+        with open(TOKEN_FILE, "w") as f:
+            f.write(token_json)
 
-    # En local : flux OAuth classique
+    # Flux OAuth (local ou CI après écriture du token ci-dessus)
     creds = None
     if os.path.exists(TOKEN_FILE):
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
