@@ -186,7 +186,7 @@ def get_orders_a_venir(sheets_svc):
             continue
         try:
             num = int(float(str(row[COL_NUMERO]).replace(",", ".")))
-            montant = row[COL_MONTANT].strip() if len(row) > COL_MONTANT else ""
+            montant = row[COL_MONTANT].strip().replace(',', '.') if len(row) > COL_MONTANT else ""
             dossier = d.strftime("%d_%m")
             orders[f"BonDeCommande_{num}.pdf"] = (montant, dossier)
         except (ValueError, TypeError):
@@ -489,7 +489,7 @@ def _main():
             if "Montant initial" in _ligne:
                 _m = re.search(r'(\d+[.,]\d+)', _ligne)
                 if _m:
-                    montant_pdf = _m.group(1).replace('.', ',')
+                    montant_pdf = _m.group(1).replace(',', '.')  # point = séparateur stockage
                 break
 
         print(f"  [{order_num}] Génération...", end="", flush=True)
