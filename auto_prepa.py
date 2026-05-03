@@ -532,6 +532,11 @@ def _main():
 
         shutil.copy2(os.path.join(CACHE_DIR, pdf), os.path.join(WORK_DIR, pdf))
 
+        # Créer gencod_adresses.csv vide si absent (requis par le C++)
+        gencod_adr = os.path.join(WORK_DIR, "gencod_adresses.csv")
+        if not os.path.exists(gencod_adr):
+            open(gencod_adr, 'w').close()
+
         # Vérifier que pdftotext arrive à lire le PDF
         pdf_path = os.path.join(WORK_DIR, pdf)
         pt = subprocess.run(["pdftotext", "-layout", pdf_path, "-"],
