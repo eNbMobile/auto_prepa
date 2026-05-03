@@ -20,12 +20,23 @@ jobs:
           key: pdf-cache-${{ github.run_id }}
           restore-keys: pdf-cache-
 
+      - name: Cache exécutable C++ (recompile si sources changent)
+        id: cache-bin
+        uses: actions/cache@v4
+        with:
+          path: "v 3.0x/v 3.7.4/prepa_drive_degrade"
+          key: cpp-bin-${{ hashFiles('v 3.0x/v 3.7.4/Programmes/*.c') }}
+
+      - name: Compiler prepa_drive_degrade (si pas en cache)
+        if: steps.cache-bin.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get install -y gcc
+          gcc -o "v 3.0x/v 3.7.4/prepa_drive_degrade" \
+              "v 3.0x/v 3.7.4/Programmes/prepa_drive_degrade.c" \
+              "v 3.0x/v 3.7.4/Programmes/fct_prepa_drive_degrade.c" -lm
+
       - name: Installer pdftotext (poppler-utils)
         run: sudo apt-get install -y poppler-utils
-
-      - name: Compiler prepa_drive_degrade
-        working-directory: "v 3.0x/v 3.7.4"
-        run: gcc -o prepa_drive_degrade Programmes/prepa_drive_degrade.c Programmes/fct_prepa_drive_degrade.c -lm
 
       - name: Installer Python et dépendances
         uses: actions/setup-python@v5
