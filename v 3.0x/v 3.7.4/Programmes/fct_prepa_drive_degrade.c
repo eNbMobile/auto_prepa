@@ -2569,13 +2569,7 @@ void crea_anticipation()
 	remove("tmp");
 	char pbl[1500]={0};
 	pbl[j] = getc(database);
-	while (pbl[j] != '\n') // Récupère la première ligne
-	{
-		j++;
-		pbl[j] = getc(database);
-	}
-	pbl[j] = getc(database);
-	while (pbl[j] != '\n') // Récupère la seconde ligne
+	while (pbl[j] != '\n') // Récupère la première ligne (en-tête M,1,...)
 	{
 		j++;
 		pbl[j] = getc(database);
@@ -2583,7 +2577,7 @@ void crea_anticipation()
 	/*char lettre_anticip[2]={0};
 	printf("Choisissez le rayon a anticiper. Entrez la lettre correspondante au rayon comme suit et appuyez sur entrée.\nA : BAZAR & TEXTILE\nB : BOULANGERIE\nC : BVP\nD : CHOCOLATS A OFFRIR\nE : POISSIONNERIE\nF : TRAITEUR CHAUD\n");
 	scanf("%c", &lettre_anticip[0]);*/
-	while (i < nbLignes-2)
+	while (i < nbLignes-1)
 	{
 		char gencod1[20]={0}, reste[1500]={0};
 		int k=0, l=0, nbLignes2=0, drive=0;
