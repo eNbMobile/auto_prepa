@@ -2,9 +2,7 @@ name: Auto Prépa Drive
 
 on:
   schedule:
-    # Toutes les 15 min, de 5h à 18h UTC (= 7h-20h Paris été, 6h-19h hiver)
-    # Lundi à samedi uniquement
-    - cron: '*/15 5-18 * * 1-6'
+    - cron: '*/5 * * * *'
   workflow_dispatch:  # déclenchement manuel depuis l'interface GitHub
 
 jobs:
