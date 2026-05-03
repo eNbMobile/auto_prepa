@@ -69,6 +69,10 @@ SCOPES = [
 # Créer un dossier "MobUDrive_Bons" dans Drive, copier son ID ici.
 DRIVE_BONS_FOLDER_ID = "1yw_z0d90UxAix6RZ-fLpxKXuc897ghk_"
 
+# Dossier Drive pour l'archivage des PDFs BDC (même logique que BDC_DIR local).
+# Créer un dossier "BDC" dans Drive, copier son ID ici.
+DRIVE_BDC_FOLDER_ID = "10gxP-IbO_-F03QiS75B027HLgKXI0mPs"  # TODO : renseigner l'ID du dossier BDC sur Drive
+
 
 # ── Auth ───────────────────────────────────────────────────────────
 
@@ -353,6 +357,58 @@ def upload_bon(drive_svc, local_path):
         return False
 
 
+# ── Archivage BDC sur Drive ───────────────────────────────────────
+
+def _get_or_create_subfolder(drive_svc, parent_id, name):
+    """Retourne l'ID d'un sous-dossier, le crée si nécessaire."""
+    try:
+        res = drive_svc.files().list(
+            q=(f"name='{name}' and '{parent_id}' in parents "
+               f"and mimeType='application/vnd.google-apps.folder' and trashed=false"),
+            fields="files(id)",
+        ).execute()
+        files = res.get("files", [])
+        if files:
+            return files[0]["id"]
+        folder = drive_svc.files().create(
+            body={"name": name,
+                  "mimeType": "application/vnd.google-apps.folder",
+                  "parents": [parent_id]},
+            fields="id",
+        ).execute()
+        return folder["id"]
+    except Exception as e:
+        print(f"    Création dossier Drive '{name}' échouée : {e}")
+        return None
+
+
+def archiver_pdf_drive(drive_svc, pdf_path, dossier_jj_mm):
+    """Archive un PDF dans DRIVE_BDC_FOLDER_ID/JJ_MM/ sur Drive."""
+    if not DRIVE_BDC_FOLDER_ID:
+        return
+    filename = os.path.basename(pdf_path)
+    try:
+        subfolder_id = _get_or_create_subfolder(drive_svc, DRIVE_BDC_FOLDER_ID, dossier_jj_mm)
+        if not subfolder_id:
+            return
+        # Ne pas re-uploader si déjà archivé
+        res = drive_svc.files().list(
+            q=f"name='{filename}' and '{subfolder_id}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        if res.get("files"):
+            return
+        media = MediaFileUpload(pdf_path, mimetype="application/pdf", resumable=False)
+        drive_svc.files().create(
+            body={"name": filename, "parents": [subfolder_id]},
+            media_body=media,
+            fields="id",
+        ).execute()
+        print(f"    {filename} → Drive BDC/{dossier_jj_mm}/ OK")
+    except Exception as e:
+        print(f"    Archivage Drive BDC/{dossier_jj_mm}/ échoué : {e}")
+
+
 # ── Pipeline principal ────────────────────────────────────────────
 
 LOCK_FILE = os.path.expanduser("~/.auto_prepa.lock")
@@ -451,13 +507,16 @@ def _main():
     for pdf in sorted(fetched):
         order_num = pdf.removeprefix("BonDeCommande_").removesuffix(".pdf")
 
-        # Archiver le PDF d'origine dans BDC/JJ_MM/
+        # Archiver le PDF d'origine dans BDC/JJ_MM/ (local + Drive)
         _, dossier_jj_mm = montants.get(pdf, ("", ""))
         bdc_subdir = os.path.join(BDC_DIR, dossier_jj_mm) if dossier_jj_mm else BDC_DIR
         os.makedirs(bdc_subdir, exist_ok=True)
         bdc_dst = os.path.join(bdc_subdir, pdf)
+        cache_path = os.path.join(CACHE_DIR, pdf)
         if not os.path.exists(bdc_dst):
-            shutil.copy2(os.path.join(CACHE_DIR, pdf), bdc_dst)
+            shutil.copy2(cache_path, bdc_dst)
+        if dossier_jj_mm:
+            archiver_pdf_drive(drive_svc, cache_path, dossier_jj_mm)
 
         # Nettoyer tous les fichiers temporaires du C++ avant génération
         for fname in [
