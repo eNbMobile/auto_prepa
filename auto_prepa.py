@@ -262,6 +262,28 @@ def lister_bons_disponibles(drive_svc):
     return bons
 
 
+def chercher_confirmation_commande(drive_svc, numero):
+    """Cherche 'Confirmation commande ... cde : NUMERO' dans tout Drive.
+    Retourne (drive_id, nom_original) ou (None, None) si introuvable."""
+    try:
+        res = drive_svc.files().list(
+            q=f"name contains '{numero}' and mimeType='application/pdf' and trashed=false",
+            fields="files(id, name)",
+            pageSize=20,
+            includeItemsFromAllDrives=True,
+            supportsAllDrives=True,
+        ).execute()
+        for f in res.get("files", []):
+            name = f["name"]
+            # Vérifie que c'est bien une confirmation de commande et non un autre PDF
+            name_lower = name.lower()
+            if "confirmation" in name_lower or ("commande" in name_lower and "cde" in name_lower):
+                return f["id"], name
+    except Exception as e:
+        print(f"    Recherche confirmation {numero} : erreur {e}")
+    return None, None
+
+
 def download_pdf(drive_svc, file_id, dest_path):
     req = drive_svc.files().get_media(
         fileId=file_id,
@@ -371,6 +393,17 @@ def _main():
     disponibles = lister_bons_disponibles(drive_svc)  # {filename: drive_id}
     new_ones = {k: v for k, v in disponibles.items()
                 if k in attendus and k not in traites}
+
+    # Fallback : commandes attendues sans BonDeCommande → chercher "Confirmation commande"
+    manquants = [f for f in attendus if f not in disponibles and f not in traites]
+    for pdf in manquants:
+        numero = pdf.removeprefix("BonDeCommande_").removesuffix(".pdf")
+        fid, nom_original = chercher_confirmation_commande(drive_svc, numero)
+        if fid:
+            print(f"  → Confirmation trouvée pour {numero} : {nom_original}")
+            new_ones[pdf] = fid
+        else:
+            print(f"  → Aucun PDF trouvé pour la commande {numero}")
 
     if not new_ones:
         print(f"Pas de nouvelle commande ({len(traites)} déjà traitée(s)).")
