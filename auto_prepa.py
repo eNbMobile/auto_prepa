@@ -285,22 +285,6 @@ def chercher_confirmation_commande(drive_svc, numero):
     return None, None
 
 
-def extraire_montant_encaissement(work_dir):
-    """Lit 'Montant initial   XX.XX €' dans bon_encaissement.csv et retourne le montant."""
-    chemin = os.path.join(work_dir, "bon_encaissement.csv")
-    if not os.path.exists(chemin):
-        return ""
-    try:
-        with open(chemin, encoding='utf-8', errors='replace') as f:
-            for ligne in f:
-                if "Montant initial" in ligne:
-                    m = re.search(r'(\d+[.,]\d+)', ligne)
-                    if m:
-                        return m.group(1).replace('.', ',')
-    except Exception:
-        pass
-    return ""
-
 
 def _montant_valide(montant):
     """Retourne False si le montant est absent ou numériquement nul."""
@@ -499,6 +483,15 @@ def _main():
             processed.add(pdf)
             continue
 
+        # Extraire le montant depuis le texte du PDF (le C++ supprime bon_encaissement.csv)
+        montant_pdf = ""
+        for _ligne in pt.stdout.splitlines():
+            if "Montant initial" in _ligne:
+                _m = re.search(r'(\d+[.,]\d+)', _ligne)
+                if _m:
+                    montant_pdf = _m.group(1).replace('.', ',')
+                break
+
         print(f"  [{order_num}] Génération...", end="", flush=True)
         r = subprocess.run(["./prepa_drive_degrade"], cwd=WORK_DIR,
                            capture_output=True, text=True, timeout=120)
@@ -523,9 +516,9 @@ def _main():
         # Injecter le montant dans l'en-tête du bon_prepa
         montant, _ = montants.get(pdf, ("", ""))
         if not _montant_valide(montant):
-            montant = extraire_montant_encaissement(WORK_DIR)
+            montant = montant_pdf
             if montant:
-                print(f"    Montant extrait de bon_encaissement.csv : {montant} €")
+                print(f"    Montant extrait du PDF : {montant} €")
         if montant:
             with open(bon_prepa_path, 'r', encoding='utf-8') as f:
                 lignes = f.readlines()
