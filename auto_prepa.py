@@ -532,10 +532,16 @@ def _main():
 
         shutil.copy2(os.path.join(CACHE_DIR, pdf), os.path.join(WORK_DIR, pdf))
 
-        # Créer gencod_adresses.csv vide si absent (requis par le C++)
-        gencod_adr = os.path.join(WORK_DIR, "gencod_adresses.csv")
-        if not os.path.exists(gencod_adr):
-            open(gencod_adr, 'w').close()
+        # Vérifier que les bases C++ sont présentes et non vides
+        _bases_ok = True
+        for csv_requis in ["gencod_adresses.csv", "gencod_nomenclatures.csv"]:
+            fpath = os.path.join(WORK_DIR, csv_requis)
+            if not os.path.exists(fpath) or os.path.getsize(fpath) == 0:
+                print(f"  ERREUR CRITIQUE : {csv_requis} absent ou vide dans {WORK_DIR}")
+                _bases_ok = False
+                break
+        if not _bases_ok:
+            break
 
         # Vérifier que pdftotext arrive à lire le PDF
         pdf_path = os.path.join(WORK_DIR, pdf)
