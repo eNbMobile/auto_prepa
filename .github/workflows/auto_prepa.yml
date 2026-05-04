@@ -39,18 +39,19 @@ jobs:
           ).read())
           access = resp["access_token"]
 
-          FOLDER_ID = "14qLtxkSkoPkwJJCu3dsRL784TJ6o9Etn"
-          q = f"'{FOLDER_ID}' in parents and trashed=false"
           url = "https://www.googleapis.com/drive/v3/files?" + urllib.parse.urlencode({
-              "q": q, "fields": "files(name)", "pageSize": "50"
+              "q": "name contains 'BonDeCommande' and trashed=false",
+              "fields": "files(name)",
+              "pageSize": "50",
+              "includeItemsFromAllDrives": "true",
+              "supportsAllDrives": "true",
           })
           files = json.loads(urllib.request.urlopen(
               urllib.request.Request(url, headers={"Authorization": f"Bearer {access}"})
           ).read()).get("files", [])
 
-          pdfs = [f for f in files if f["name"].endswith(".pdf")]
-          result = "true" if pdfs else "false"
-          print(f"{len(pdfs)} PDF(s) détecté(s) → continuer={result}")
+          result = "true" if files else "false"
+          print(f"{len(files)} BonDeCommande(s) détecté(s) → continuer={result}")
           with open(os.environ["GITHUB_OUTPUT"], "a") as f: f.write(f"has_new={result}\n")
           EOF
 
