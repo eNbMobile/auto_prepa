@@ -38,20 +38,50 @@ jobs:
               urllib.request.Request("https://oauth2.googleapis.com/token", data=data)
           ).read())
           access = resp["access_token"]
+          headers = {"Authorization": f"Bearer {access}"}
 
-          url = "https://www.googleapis.com/drive/v3/files?" + urllib.parse.urlencode({
+          # 1. Charger la liste des PDFs déjà traités (auto_prepa_state.json)
+          DRIVE_BONS_FOLDER_ID = "1yw_z0d90UxAix6RZ-fLpxKXuc897ghk_"
+          state_url = "https://www.googleapis.com/drive/v3/files?" + urllib.parse.urlencode({
+              "q": f"name='auto_prepa_state.json' and '{DRIVE_BONS_FOLDER_ID}' in parents and trashed=false",
+              "fields": "files(id)",
+          })
+          state_files = json.loads(urllib.request.urlopen(
+              urllib.request.Request(state_url, headers=headers)
+          ).read()).get("files", [])
+
+          traites = set()
+          if state_files:
+              dl_url = f"https://www.googleapis.com/drive/v3/files/{state_files[0]['id']}?alt=media"
+              raw = json.loads(urllib.request.urlopen(
+                  urllib.request.Request(dl_url, headers=headers)
+              ).read())
+              if isinstance(raw, list):
+                  traites = set(raw)
+              elif isinstance(raw, dict):
+                  for v in raw.values():
+                      if isinstance(v, list): traites.update(v)
+          print(f"{len(traites)} PDF(s) déjà traité(s) en mémoire.")
+
+          # 2. Lister les BonDeCommande disponibles sur Drive
+          list_url = "https://www.googleapis.com/drive/v3/files?" + urllib.parse.urlencode({
               "q": "name contains 'BonDeCommande' and trashed=false",
               "fields": "files(name)",
-              "pageSize": "50",
+              "pageSize": "200",
               "includeItemsFromAllDrives": "true",
               "supportsAllDrives": "true",
           })
-          files = json.loads(urllib.request.urlopen(
-              urllib.request.Request(url, headers={"Authorization": f"Bearer {access}"})
+          disponibles = json.loads(urllib.request.urlopen(
+              urllib.request.Request(list_url, headers=headers)
           ).read()).get("files", [])
 
-          result = "true" if files else "false"
-          print(f"{len(files)} BonDeCommande(s) détecté(s) → continuer={result}")
+          # 3. Nouveaux = disponibles et pas encore dans l'état
+          new_ones = [f for f in disponibles
+                      if (f["name"] if f["name"].endswith(".pdf") else f["name"] + ".pdf")
+                      not in traites]
+
+          result = "true" if new_ones else "false"
+          print(f"{len(new_ones)} nouveau(x) BonDeCommande(s) → continuer={result}")
           with open(os.environ["GITHUB_OUTPUT"], "a") as f: f.write(f"has_new={result}\n")
           EOF
 
