@@ -479,20 +479,21 @@ def traiter_modifications_clients(drive_svc, gmail_svc, traites):
     """Lit les mails de modification de commande, supprime les anciens bons, archive les mails."""
     try:
         label_id = _get_or_create_gmail_label(gmail_svc, GMAIL_LABEL_NOM)
-        res = gmail_svc.users().messages().list(
-            userId='me',
-            q=f'subject:"Modification par le client de la commande" -label:{GMAIL_LABEL_NOM}',
-            maxResults=50,
-        ).execute()
-        messages = res.get('messages', [])
+        q_modif  = f'subject:"Modification par le client de la commande" -label:{GMAIL_LABEL_NOM}'
+        q_annul  = f'subject:"Alerte annulation par le client commande" -label:{GMAIL_LABEL_NOM}'
+        messages = []
+        for q in [q_modif, q_annul]:
+            res = gmail_svc.users().messages().list(
+                userId='me', q=q, maxResults=50).execute()
+            messages += res.get('messages', [])
     except Exception as e:
-        print(f"  Gmail inaccessible ({e}) — modifications ignorées.")
+        print(f"  Gmail inaccessible ({e}) — modifications/annulations ignorées.")
         return
 
     if not messages:
         return
 
-    print(f"  {len(messages)} mail(s) de modification à traiter.")
+    print(f"  {len(messages)} mail(s) de modification/annulation à traiter.")
     for m in messages:
         try:
             msg = gmail_svc.users().messages().get(
@@ -501,16 +502,27 @@ def traiter_modifications_clients(drive_svc, gmail_svc, traites):
             ).execute()
             subject = next(
                 (h['value'] for h in msg['payload']['headers'] if h['name'] == 'Subject'), '')
-            match = re.search(r'N°\s*cde:(\d+).*?N°\s*cde:(\d+)', subject)
-            if not match:
+
+            # Modification : deux numéros
+            match_modif = re.search(r'N°\s*cde:(\d+).*?N°\s*cde:(\d+)', subject)
+            # Annulation : un seul numéro
+            match_annul = re.search(r'N°\s*:\s*(\d+)', subject)
+
+            if match_modif:
+                num_ancien, num_nouveau = match_modif.group(1), match_modif.group(2)
+                print(f"  Modification : cde {num_ancien} → remplacée par {num_nouveau}")
+                _supprimer_bons_drive(drive_svc, num_ancien)
+                _uploader_annulation_drive(drive_svc, num_ancien)
+                traites.add(f"BonDeCommande_{num_ancien}.pdf")
+            elif match_annul:
+                num_annule = match_annul.group(1)
+                print(f"  Annulation : cde {num_annule} supprimée")
+                _supprimer_bons_drive(drive_svc, num_annule)
+                _uploader_annulation_drive(drive_svc, num_annule)
+                traites.add(f"BonDeCommande_{num_annule}.pdf")
+            else:
                 print(f"    Sujet non reconnu : {subject[:80]}")
                 continue
-            num_ancien, num_nouveau = match.group(1), match.group(2)
-            print(f"  Modification : cde {num_ancien} annulée → remplacée par {num_nouveau}")
-
-            _supprimer_bons_drive(drive_svc, num_ancien)
-            _uploader_annulation_drive(drive_svc, num_ancien)
-            traites.add(f"BonDeCommande_{num_ancien}.pdf")  # empêche tout retraitement
 
             modify_body = {'removeLabelIds': ['UNREAD', 'INBOX']}
             if label_id:
