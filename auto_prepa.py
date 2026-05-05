@@ -512,7 +512,7 @@ def traiter_modifications_clients(drive_svc, gmail_svc, traites):
             _uploader_annulation_drive(drive_svc, num_ancien)
             traites.add(f"BonDeCommande_{num_ancien}.pdf")  # empêche tout retraitement
 
-            modify_body = {'removeLabelIds': ['UNREAD']}
+            modify_body = {'removeLabelIds': ['UNREAD', 'INBOX']}
             if label_id:
                 modify_body['addLabelIds'] = [label_id]
             gmail_svc.users().messages().modify(
