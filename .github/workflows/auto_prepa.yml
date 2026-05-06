@@ -72,16 +72,16 @@ jobs:
         id: cache-bin
         uses: actions/cache@v4
         with:
-          path: "v 3.0x/v 3.7.4/prepa_drive_degrade"
-          key: cpp-bin-${{ hashFiles('v 3.0x/v 3.7.4/Programmes/*.c') }}
+          path: "v 4.0.0/prepa_drive_degrade"
+          key: cpp-bin-${{ hashFiles('v 4.0.0/Programmes/*.c') }}
 
       - name: Compiler prepa_drive_degrade (si pas en cache)
         if: steps.check_pdfs.outputs.has_new == 'true' && steps.cache-bin.outputs.cache-hit != 'true'
         run: |
           sudo apt-get install -y gcc
-          gcc -o "v 3.0x/v 3.7.4/prepa_drive_degrade" \
-              "v 3.0x/v 3.7.4/Programmes/prepa_drive_degrade.c" \
-              "v 3.0x/v 3.7.4/Programmes/fct_prepa_drive_degrade.c" -lm
+          gcc -o "v 4.0.0/prepa_drive_degrade" \
+              "v 4.0.0/Programmes/prepa_drive_degrade.c" \
+              "v 4.0.0/Programmes/fct_prepa_drive_degrade.c" -lm
 
       - name: Installer pdftotext (poppler-utils)
         if: steps.check_pdfs.outputs.has_new == 'true'
