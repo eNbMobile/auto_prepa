@@ -490,8 +490,9 @@ def traiter_modifications_clients(drive_svc, gmail_svc, traites):
         label_id = _get_or_create_gmail_label(gmail_svc, GMAIL_LABEL_NOM)
         q_modif  = f'subject:"Modification par le client de la commande" -label:{GMAIL_LABEL_NOM}'
         q_annul  = f'subject:"Alerte annulation par le client commande" -label:{GMAIL_LABEL_NOM}'
+        q_annul2 = f'subject:"Alerte annulation commande" -label:{GMAIL_LABEL_NOM}'
         messages = []
-        for q in [q_modif, q_annul]:
+        for q in [q_modif, q_annul, q_annul2]:
             res = gmail_svc.users().messages().list(
                 userId='me', q=q, maxResults=50).execute()
             messages += res.get('messages', [])
