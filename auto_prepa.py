@@ -441,6 +441,14 @@ def _uploader_annulation_drive(drive_svc, numero):
     """Dépose annuler_NUMERO.txt dans DRIVE_BONS_FOLDER_ID pour déclencher la suppression sur le téléphone."""
     nom_fichier = f"annuler_{numero}.txt"
     try:
+        # Ne pas uploader en double si le fichier existe déjà (relance auto_prepa)
+        res = drive_svc.files().list(
+            q=f"name='{nom_fichier}' and '{DRIVE_BONS_FOLDER_ID}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        if res.get("files"):
+            print(f"    Annulation déjà présente sur Drive : {nom_fichier}")
+            return
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
                                          delete=False, encoding="utf-8") as f:
             f.write(numero)
@@ -456,6 +464,7 @@ def _uploader_annulation_drive(drive_svc, numero):
             os.remove(tmp)
     except Exception as e:
         print(f"    Upload annulation {nom_fichier} échoué : {e}")
+        raise
 
 
 def _get_or_create_gmail_label(gmail_svc, nom):
