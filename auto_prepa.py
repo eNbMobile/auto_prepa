@@ -43,7 +43,7 @@ DRIVE_FOLDER_ID = "14qLtxkSkoPkwJJCu3dsRL784TJ6o9Etn"
 _BASE = os.path.dirname(os.path.abspath(__file__))
 
 # Dossier de travail du programme C++
-WORK_DIR  = os.environ.get("WORK_DIR",  os.path.join(_BASE, "v 3.0x", "v 3.7.4"))
+WORK_DIR  = os.environ.get("WORK_DIR",  os.path.join(_BASE, "v 4.0.0"))
 
 # Dossier cache : PDFs téléchargés une fois, conservés ici
 CACHE_DIR = os.environ.get("CACHE_DIR", os.path.join(_BASE, "pdf_cache"))
