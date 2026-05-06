@@ -1264,7 +1264,6 @@ void rewrite_bon_encaissement_02()
 		newDB = fopen("bon_encaissement_NEW_final.csv", "a");
 		if ((gencod[0] != '3' || gencod[1] != '3' || gencod[2] != '6' || gencod[3] != '8' || gencod[4] != '9' || gencod[5] != '5' || gencod[6] != '8' || gencod[7] != '4' || gencod[8] != '6' || gencod[9] != '7' || gencod[10] != '8' || gencod[11] != '0' || gencod[12] != '9') && (gencod[0] != '9' || gencod[1] != '9'))
 		{
-			printf("gencod = %s\n", gencod);
 			if (poids[0] == 'O' && (gencod[0] == '0' || (gencod[0] == '2' && (gencod[1] != '0' || gencod[2] != '0' || gencod[3] != '0' || gencod[4] != '0')))) // Le produit contient un PV si le gencod commence par un 0 ou un 2
 			{
 				FILE* temp2 = NULL;

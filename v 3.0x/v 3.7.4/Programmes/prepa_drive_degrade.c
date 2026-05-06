@@ -10,12 +10,12 @@ int main()
 	change_format_fichier();
 	test_bon_encaissement();
 	rewrite_bon_encaissement_02();
-	match_adresses();
-	match_position_2();
-	rangement_produits();
-	rangement_produits();
-    ajout_DLC();
-    crea_anticipation();
+	//match_adresses();
+	//match_position_2();
+	//rangement_produits();
+	//rangement_produits();
+    //ajout_DLC();
+    //crea_anticipation();
 	printf("\n\nProgramme terminé.\n");
 	return 0;
 }
