@@ -1674,17 +1674,17 @@ void match_position_2()
 			{
 				if (nb_files_def != 1)
 				{
-					if (no_mag1 == 1 || no_mag1 == 2) fprintf(newDB, "%s;%d;%s;M%d-%s-%d-%d;ADRESSE INCONNUE;V\n", gencod, k, reste, no_mag1, zone_mag1, gondole1, element1); // W étant la letttre définissant la zone non adressé de la ramasse
-					else fprintf(newDB, "%s;%d;%s;M%d-%s-%d;ADRESSE INCONNUE;V\n", gencod, k, reste, no_mag1, zone_mag1, gondole1);
+					if (no_mag1 == 1 || no_mag1 == 2) fprintf(newDB, "%s;%d;%s;M%d-%s-%d-%d;ADRESSE INCONNUE;W\n", gencod, k, reste, no_mag1, zone_mag1, gondole1, element1); // W étant la letttre définissant la zone non adressé de la ramasse
+					else fprintf(newDB, "%s;%d;%s;M%d-%s-%d;ADRESSE INCONNUE;W\n", gencod, k, reste, no_mag1, zone_mag1, gondole1);
 				}
 				else
 				{
 					if (no_mag1 == 1 || no_mag1 == 2) fprintf(newDB, "%s;%d;%s;M%d-%s-%d-%d;ADRESSE INCONNUE\n", gencod, k, reste, no_mag1, zone_mag1, gondole1, element1); // W étant la letttre définissant la zone non adressé de la ramasse
-					else fprintf(newDB, "%s;%d;%s;M%d-%s-%d;ADRESSE INCONNUE\n", gencod, k, reste, no_mag1, zone_mag1, gondole1);
+					else fprintf(newDB, "%s;%d;%s;M%d-%s-%d;ADRESSE INCONNUE;W\n", gencod, k, reste, no_mag1, zone_mag1, gondole1);
 				}
 			}
 			else if (choix1[0] == '0' && nb_files_def != 1) fprintf(newDB, "%s;%d;%s;no adress;no adress;L\n", gencod, k, reste);
-			else if (choix1[0] == '0' && nb_files_def == 1) fprintf(newDB, "%s;%d;%s;no adress;no adress\n", gencod, k, reste);
+			else if (choix1[0] == '0' && nb_files_def == 1) fprintf(newDB, "%s;%d;%s;no adress;no adress;L\n", gencod, k, reste);
 			fclose(newDB);
 		}
 		if (choix1[0] == '0') recup_nom_adr(nom_save_2, gencod, reste);
