@@ -80,6 +80,16 @@ DRIVE_BONS_FOLDER_ID = "1yw_z0d90UxAix6RZ-fLpxKXuc897ghk_"
 # Créer un dossier "BDC" dans Drive, copier son ID ici.
 DRIVE_BDC_FOLDER_ID = "10gxP-IbO_-F03QiS75B027HLgKXI0mPs"  # TODO : renseigner l'ID du dossier BDC sur Drive
 
+# Dossier Drive contenant les fichiers de configuration (CSV)
+DRIVE_CONFIG_FOLDER_ID = "1rWyZiKe89c7c67eemD33gN4eSLal_FeV"
+
+CONFIG_FILES = [
+    "chemin_prepa_mono.csv",
+    "chemin_prepa_ramasse.csv",
+    "gencod_adresses.csv",
+    "gencod_nomenclatures.csv",
+]
+
 
 # ── Auth ───────────────────────────────────────────────────────────
 
@@ -368,6 +378,26 @@ def upload_bon(drive_svc, local_path):
         return False
 
 
+# ── Fichiers de configuration (CSV) ──────────────────────────────
+
+def telecharger_config_drive(drive_svc):
+    """Télécharge les CSV de config depuis Drive vers WORK_DIR."""
+    for filename in CONFIG_FILES:
+        dest = os.path.join(WORK_DIR, filename)
+        try:
+            res = drive_svc.files().list(
+                q=f"name='{filename}' and '{DRIVE_CONFIG_FOLDER_ID}' in parents and trashed=false",
+                fields="files(id)",
+            ).execute()
+            files = res.get("files", [])
+            if not files:
+                print(f"  ERREUR config : {filename} introuvable sur Drive")
+                continue
+            download_pdf(drive_svc, files[0]["id"], dest)
+        except Exception as e:
+            print(f"  ERREUR config {filename} : {e}")
+
+
 # ── Archivage BDC sur Drive ───────────────────────────────────────
 
 def _get_or_create_subfolder(drive_svc, parent_id, name):
@@ -639,6 +669,9 @@ def _main():
     if args.debug:
         debug_list_folder(drive_svc)
         return
+
+    # Télécharger les fichiers de config depuis Drive
+    telecharger_config_drive(drive_svc)
 
     # Mettre à jour chemin_prepa_ramasse.csv sur Drive (pour le téléphone)
     chemin_csv = os.path.join(WORK_DIR, "chemin_prepa_ramasse.csv")

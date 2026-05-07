@@ -24,3 +24,9 @@ v 4.0.0/bon_anticipation*.txt
 v 4.0.0/BonDeCommande_*.pdf
 v 4.0.0/tmp*
 v 4.0.0/temp*
+
+# Fichiers de config téléchargés depuis Drive
+v 4.0.0/chemin_prepa_mono.csv
+v 4.0.0/chemin_prepa_ramasse.csv
+v 4.0.0/gencod_adresses.csv
+v 4.0.0/gencod_nomenclatures.csv
