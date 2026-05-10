@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 auto_prepa.py - Automatisation préparation Drive supermarché
-Détecte les nouvelles commandes du jour dans le Google Sheets,
-télécharge les PDFs correspondants, génère bon_prepa.txt
-et le pousse sur le téléphone via USB.
+Lit les emails de confirmation de commande (no-reply@systeme-u.fr),
+télécharge bon_encaissement.pdf → renomme en BonDeCommande_XXX.pdf,
+génère bon_prepa_XXX.txt via le binaire C++ et le pousse sur Drive.
 """
 
 import os
@@ -13,10 +13,10 @@ import re
 import shutil
 import subprocess
 import io
+import base64
 import tempfile
 import fcntl
 from datetime import date
-import argparse
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -28,18 +28,7 @@ from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 # CONFIGURATION — à remplir une seule fois
 # ─────────────────────────────────────────────────────────────────
 
-# ID du Google Sheets (dans l'URL : /spreadsheets/d/CECI/edit)
-SPREADSHEET_ID = "1COrHcrypy4Xkp0MpE5Mag80xf01ZLjpUdYe6jpuS8b8"
-
-# Colonnes dans la plage "A:N" (index 0 = colonne A)
-COL_DATE    = 4  # E : date au format JJ/MM/AAAA
-COL_NUMERO  = 6  # G : numéro de commande
-COL_MONTANT = 9  # J : montant de la commande
-
-# ID du dossier Drive contenant les PDFs (dans l'URL : /folders/CECI)
-DRIVE_FOLDER_ID = "14qLtxkSkoPkwJJCu3dsRL784TJ6o9Etn"
-
-# Répertoire de base : dossier contenant ce script (fonctionne en local et en CI)
+# Répertoire de base : dossier contenant ce script
 _BASE = os.path.dirname(os.path.abspath(__file__))
 
 # Dossier de travail du programme C++
@@ -63,22 +52,22 @@ LOG_CONTROLE_FILENAME = "controle_articles.log"
 
 
 SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets.readonly",
     "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/gmail.modify",
 ]
 
-# Label Gmail où archiver les mails de modification traités
+# Label Gmail pour archiver les confirmations de commande traitées
+GMAIL_LABEL_CONF = "BDC_Conf_Traites"
+
+# Label Gmail pour archiver les modifications/annulations traitées
 GMAIL_LABEL_NOM = "BDC_Modif_Traites"
 
 # Dossier Drive où déposer les bons pour le téléphone.
-# Créer un dossier "MobUDrive_Bons" dans Drive, copier son ID ici.
 DRIVE_BONS_FOLDER_ID = "1yw_z0d90UxAix6RZ-fLpxKXuc897ghk_"
 
-# Dossier Drive pour l'archivage des PDFs BDC (même logique que BDC_DIR local).
-# Créer un dossier "BDC" dans Drive, copier son ID ici.
-DRIVE_BDC_FOLDER_ID = "10gxP-IbO_-F03QiS75B027HLgKXI0mPs"  # TODO : renseigner l'ID du dossier BDC sur Drive
+# Dossier Drive pour l'archivage des PDFs BDC.
+DRIVE_BDC_FOLDER_ID = "10gxP-IbO_-F03QiS75B027HLgKXI0mPs"
 
 # Dossier Drive contenant les fichiers de configuration (CSV)
 DRIVE_CONFIG_FOLDER_ID = "1rWyZiKe89c7c67eemD33gN4eSLal_FeV"
@@ -94,18 +83,16 @@ CONFIG_FILES = [
 # ── Auth ───────────────────────────────────────────────────────────
 
 def get_credentials():
-    # En CI : token OAuth stocké comme secret GitHub (GOOGLE_TOKEN_JSON)
     token_json = os.environ.get("GOOGLE_TOKEN_JSON", "").strip()
     if token_json:
         try:
-            json.loads(token_json)  # validation rapide
+            json.loads(token_json)
         except json.JSONDecodeError as e:
             print(f"ERREUR : GOOGLE_TOKEN_JSON n'est pas un JSON valide ({e})")
             raise
         with open(TOKEN_FILE, "w") as f:
             f.write(token_json)
 
-    # Flux OAuth (local ou CI après écriture du token ci-dessus)
     creds = None
     if os.path.exists(TOKEN_FILE):
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
@@ -185,141 +172,189 @@ def sauvegarder_traites(drive_svc, traites):
         print(f"  Sauvegarde historique Drive échouée : {e}")
 
 
-# ── Google Sheets ─────────────────────────────────────────────────
+# ── Gmail — helpers ───────────────────────────────────────────────
 
-def get_orders_a_venir(sheets_svc):
-    """Retourne {filename: (montant, dossier_jj_mm)} pour les commandes d'aujourd'hui et du futur."""
-    res = sheets_svc.spreadsheets().values().get(
-        spreadsheetId=SPREADSHEET_ID,
-        range="A:N",
-        valueRenderOption="FORMATTED_VALUE",
-    ).execute()
-    rows = res.get("values", [])
-    today = date.today()
-    orders = {}
-    for row in rows[1:]:
-        if len(row) <= COL_DATE:
-            continue
+def _get_or_create_gmail_label(gmail_svc, nom):
+    try:
+        labels = gmail_svc.users().labels().list(userId='me').execute().get('labels', [])
+        for label in labels:
+            if label['name'] == nom:
+                return label['id']
+        new_label = gmail_svc.users().labels().create(
+            userId='me',
+            body={'name': nom, 'labelListVisibility': 'labelShow',
+                  'messageListVisibility': 'show'},
+        ).execute()
+        return new_label['id']
+    except Exception as e:
+        print(f"    Label Gmail '{nom}' : {e}")
+        return None
+
+
+def _iter_parts(payload):
+    """Parcourt récursivement les parties MIME d'un message Gmail."""
+    if 'parts' in payload:
+        for part in payload['parts']:
+            yield from _iter_parts(part)
+    else:
+        yield payload
+
+
+def _marquer_email(gmail_svc, msg_id, label_id):
+    """Ajoute un label et retire UNREAD/INBOX."""
+    try:
+        body = {'removeLabelIds': ['UNREAD', 'INBOX']}
+        if label_id:
+            body['addLabelIds'] = [label_id]
+        gmail_svc.users().messages().modify(userId='me', id=msg_id, body=body).execute()
+    except Exception as e:
+        print(f"    Marquage email échoué : {e}")
+
+
+# ── Gmail — confirmations de commande ────────────────────────────
+
+def telecharger_bons_email(gmail_svc, cache_dir, traites):
+    """
+    Lit les emails de confirmation (no-reply@systeme-u.fr),
+    télécharge bon_encaissement.pdf → BonDeCommande_XXX.pdf dans cache_dir.
+    Retourne {filename: dossier_jj_mm} pour les nouveaux PDFs téléchargés.
+    """
+    label_id = _get_or_create_gmail_label(gmail_svc, GMAIL_LABEL_CONF)
+    q = f'from:no-reply@systeme-u.fr subject:"Confirmation commande" -label:{GMAIL_LABEL_CONF}'
+
+    try:
+        res = gmail_svc.users().messages().list(userId='me', q=q, maxResults=50).execute()
+        messages = res.get('messages', [])
+    except Exception as e:
+        print(f"  Gmail inaccessible pour les confirmations ({e})")
+        return {}
+
+    if not messages:
+        return {}
+
+    print(f"  {len(messages)} email(s) de confirmation à traiter.")
+    nouveaux = {}  # {filename: dossier_jj_mm}
+
+    for m in messages:
         try:
-            j, m, a = row[COL_DATE].strip().split("/")
-            d = date(int(a), int(m), int(j))
-        except (ValueError, TypeError):
-            continue
-        if d < today:
-            continue
-        if len(row) <= COL_NUMERO:
-            continue
+            msg = gmail_svc.users().messages().get(
+                userId='me', id=m['id'], format='full'
+            ).execute()
+
+            headers = {h['name']: h['value']
+                       for h in msg['payload'].get('headers', [])}
+            subject = headers.get('Subject', '')
+
+            # Extraire le numéro de commande depuis l'objet du mail
+            match_num = re.search(r'N°\s*cde\s*[:\s]+(\d+)', subject)
+            if not match_num:
+                print(f"    Sujet non reconnu : {subject[:80]}")
+                continue
+            numero = match_num.group(1)
+            filename = f"BonDeCommande_{numero}.pdf"
+
+            # Extraire la date du créneau (DD/MM/YYYY) depuis l'objet pour le classement
+            match_date = re.search(r'(\d{2}/\d{2}/\d{4})', subject)
+            dossier_jj_mm = ""
+            if match_date:
+                dossier_jj_mm = match_date.group(1)[:5].replace('/', '_')  # DD_MM
+
+            # Déjà traité : marquer quand même et ignorer
+            if filename in traites:
+                _marquer_email(gmail_svc, m['id'], label_id)
+                continue
+
+            # Chercher l'attachement bon_encaissement.pdf
+            attachment_id = None
+            for part in _iter_parts(msg['payload']):
+                if part.get('filename', '').lower() == 'bon_encaissement.pdf':
+                    attachment_id = part['body'].get('attachmentId')
+                    break
+
+            if not attachment_id:
+                print(f"    Aucun bon_encaissement.pdf dans l'email pour cde {numero}")
+                continue
+
+            # Télécharger l'attachement
+            cache_path = os.path.join(cache_dir, filename)
+            if not os.path.exists(cache_path):
+                att = gmail_svc.users().messages().attachments().get(
+                    userId='me', messageId=m['id'], id=attachment_id
+                ).execute()
+                pdf_bytes = base64.urlsafe_b64decode(att['data'] + '==')
+                with open(cache_path, 'wb') as f:
+                    f.write(pdf_bytes)
+                print(f"    ↓ {filename} OK")
+
+            nouveaux[filename] = dossier_jj_mm
+            _marquer_email(gmail_svc, m['id'], label_id)
+
+        except Exception as e:
+            print(f"    Erreur traitement email : {e}")
+
+    return nouveaux
+
+
+# ── Gmail — modifications / annulations client ───────────────────
+
+def traiter_modifications_clients(drive_svc, gmail_svc, traites):
+    """Lit les mails de modification de commande, supprime les anciens bons, archive les mails."""
+    try:
+        label_id = _get_or_create_gmail_label(gmail_svc, GMAIL_LABEL_NOM)
+        q_modif  = f'subject:"Modification par le client de la commande" -label:{GMAIL_LABEL_NOM}'
+        q_annul  = f'subject:"Alerte annulation par le client commande" -label:{GMAIL_LABEL_NOM}'
+        q_annul2 = f'subject:"Alerte annulation commande" -label:{GMAIL_LABEL_NOM}'
+        messages = []
+        for q in [q_modif, q_annul, q_annul2]:
+            res = gmail_svc.users().messages().list(
+                userId='me', q=q, maxResults=50).execute()
+            messages += res.get('messages', [])
+    except Exception as e:
+        print(f"  Gmail inaccessible ({e}) — modifications/annulations ignorées.")
+        return
+
+    if not messages:
+        return
+
+    print(f"  {len(messages)} mail(s) de modification/annulation à traiter.")
+    for m in messages:
         try:
-            num = int(float(str(row[COL_NUMERO]).replace(",", ".")))
-            montant = row[COL_MONTANT].strip().replace(',', '.') if len(row) > COL_MONTANT else ""
-            dossier = d.strftime("%d_%m")
-            orders[f"BonDeCommande_{num}.pdf"] = (montant, dossier)
-        except (ValueError, TypeError):
-            pass
-    return orders
+            msg = gmail_svc.users().messages().get(
+                userId='me', id=m['id'],
+                format='metadata', metadataHeaders=['Subject'],
+            ).execute()
+            subject = next(
+                (h['value'] for h in msg['payload']['headers'] if h['name'] == 'Subject'), '')
+
+            match_modif = re.search(r'N°\s*cde:(\d+).*?N°\s*cde:(\d+)', subject)
+            match_annul = re.search(r'N°\s*:\s*(\d+)', subject)
+
+            if match_modif:
+                num_ancien, num_nouveau = match_modif.group(1), match_modif.group(2)
+                print(f"  Modification : cde {num_ancien} → remplacée par {num_nouveau}")
+                _supprimer_bons_drive(drive_svc, num_ancien)
+                _uploader_annulation_drive(drive_svc, num_ancien)
+                traites.add(f"BonDeCommande_{num_ancien}.pdf")
+            elif match_annul:
+                num_annule = match_annul.group(1)
+                print(f"  Annulation : cde {num_annule} supprimée")
+                _supprimer_bons_drive(drive_svc, num_annule)
+                _uploader_annulation_drive(drive_svc, num_annule)
+                traites.add(f"BonDeCommande_{num_annule}.pdf")
+            else:
+                print(f"    Sujet non reconnu : {subject[:80]}")
+                continue
+
+            modify_body = {'removeLabelIds': ['UNREAD', 'INBOX']}
+            if label_id:
+                modify_body['addLabelIds'] = [label_id]
+            gmail_svc.users().messages().modify(
+                userId='me', id=m['id'], body=modify_body).execute()
+        except Exception as e:
+            print(f"    Erreur traitement mail : {e}")
 
 
 # ── Google Drive ───────────────────────────────────────────────────
-
-def debug_list_folder(drive_svc):
-    print(f"\n── DEBUG : contenu du dossier Drive ({DRIVE_FOLDER_ID}) ──")
-    for corpora in ["user", "allDrives"]:
-        params = dict(
-            q=f"'{DRIVE_FOLDER_ID}' in parents and trashed=false",
-            fields="files(id, name, mimeType)",
-            pageSize=20,
-            corpora=corpora,
-        )
-        if corpora == "allDrives":
-            params["includeItemsFromAllDrives"] = True
-            params["supportsAllDrives"] = True
-        try:
-            res = drive_svc.files().list(**params).execute()
-            files = res.get("files", [])
-            print(f"  corpora={corpora} → {len(files)} fichier(s)")
-            for f in files[:10]:
-                print(f"    • {f['name']}  ({f['mimeType']})")
-            if len(files) > 10:
-                print(f"    … et {len(files)-10} autres")
-        except Exception as e:
-            print(f"  corpora={corpora} → erreur : {e}")
-
-    print("\n── DEBUG : recherche sans contrainte de dossier ──")
-    try:
-        res = drive_svc.files().list(
-            q="name contains 'BonDeCommande' and trashed=false",
-            fields="files(id, name, parents)",
-            pageSize=5,
-            includeItemsFromAllDrives=True,
-            supportsAllDrives=True,
-        ).execute()
-        files = res.get("files", [])
-        print(f"  {len(files)} fichier(s) 'BonDeCommande' accessibles :")
-        for f in files:
-            print(f"    • {f['name']}  parents={f.get('parents')}")
-    except Exception as e:
-        print(f"  Erreur : {e}")
-    print()
-
-
-def lister_bons_disponibles(drive_svc):
-    """Retourne {filename_avec_pdf: drive_id} pour tous les BonDeCommande disponibles."""
-    bons = {}
-    page_token = None
-    while True:
-        params = dict(
-            q="name contains 'BonDeCommande' and trashed=false",
-            fields="nextPageToken,files(id,name)",
-            pageSize=200,
-            includeItemsFromAllDrives=True,
-            supportsAllDrives=True,
-        )
-        if page_token:
-            params["pageToken"] = page_token
-        res = drive_svc.files().list(**params).execute()
-        for f in res.get("files", []):
-            name = f["name"]
-            local_name = name if name.endswith(".pdf") else name + ".pdf"
-            if local_name.startswith("BonDeCommande_"):
-                bons[local_name] = f["id"]
-        page_token = res.get("nextPageToken")
-        if not page_token:
-            break
-    return bons
-
-
-def chercher_confirmation_commande(drive_svc, numero):
-    """Cherche 'Confirmation commande ... cde : NUMERO' dans tout Drive.
-    Retourne (drive_id, nom_original) ou (None, None) si introuvable."""
-    try:
-        res = drive_svc.files().list(
-            q=f"name contains '{numero}' and mimeType='application/pdf' and trashed=false",
-            fields="files(id, name)",
-            pageSize=20,
-            includeItemsFromAllDrives=True,
-            supportsAllDrives=True,
-        ).execute()
-        for f in res.get("files", []):
-            name = f["name"]
-            # Vérifie que c'est bien une confirmation de commande et non un autre PDF
-            name_lower = name.lower()
-            if "confirmation" in name_lower or ("commande" in name_lower and "cde" in name_lower):
-                return f["id"], name
-    except Exception as e:
-        print(f"    Recherche confirmation {numero} : erreur {e}")
-    return None, None
-
-
-
-def _montant_valide(montant):
-    """Retourne False si le montant est absent ou numériquement nul."""
-    if not montant:
-        return False
-    try:
-        return float(montant.replace(',', '.')) > 0
-    except ValueError:
-        return False
-
 
 def download_pdf(drive_svc, file_id, dest_path):
     req = drive_svc.files().get_media(
@@ -341,14 +376,12 @@ def upload_bon(drive_svc, local_path):
         return False
     filename = os.path.basename(local_path)
 
-    # Vérifier que le dossier est accessible
     try:
         drive_svc.files().get(fileId=DRIVE_BONS_FOLDER_ID, fields="id").execute()
     except Exception as e:
         print(f"    Dossier Drive inaccessible (ID={DRIVE_BONS_FOLDER_ID}) : {e}")
         return False
 
-    # Chercher si le fichier existe déjà (sans contrainte de space)
     try:
         res = drive_svc.files().list(
             q=f"name='{filename}' and '{DRIVE_BONS_FOLDER_ID}' in parents and trashed=false",
@@ -432,7 +465,6 @@ def archiver_pdf_drive(drive_svc, pdf_path, dossier_jj_mm):
         subfolder_id = _get_or_create_subfolder(drive_svc, DRIVE_BDC_FOLDER_ID, dossier_jj_mm)
         if not subfolder_id:
             return
-        # Ne pas re-uploader si déjà archivé
         res = drive_svc.files().list(
             q=f"name='{filename}' and '{subfolder_id}' in parents and trashed=false",
             fields="files(id)",
@@ -450,7 +482,7 @@ def archiver_pdf_drive(drive_svc, pdf_path, dossier_jj_mm):
         print(f"    Archivage Drive BDC/{dossier_jj_mm}/ échoué : {e}")
 
 
-# ── Modifications client (Gmail) ─────────────────────────────────
+# ── Modifications client (Drive) ──────────────────────────────────
 
 def _supprimer_bons_drive(drive_svc, numero):
     """Supprime bon_prepa_ et bon_anticipation_ d'un numéro donné dans DRIVE_BONS_FOLDER_ID."""
@@ -471,7 +503,6 @@ def _uploader_annulation_drive(drive_svc, numero):
     """Dépose annuler_NUMERO.txt dans DRIVE_BONS_FOLDER_ID pour déclencher la suppression sur le téléphone."""
     nom_fichier = f"annuler_{numero}.txt"
     try:
-        # Ne pas uploader en double si le fichier existe déjà (relance auto_prepa)
         res = drive_svc.files().list(
             q=f"name='{nom_fichier}' and '{DRIVE_BONS_FOLDER_ID}' in parents and trashed=false",
             fields="files(id)",
@@ -495,82 +526,6 @@ def _uploader_annulation_drive(drive_svc, numero):
     except Exception as e:
         print(f"    Upload annulation {nom_fichier} échoué : {e}")
         raise
-
-
-def _get_or_create_gmail_label(gmail_svc, nom):
-    try:
-        labels = gmail_svc.users().labels().list(userId='me').execute().get('labels', [])
-        for label in labels:
-            if label['name'] == nom:
-                return label['id']
-        new_label = gmail_svc.users().labels().create(
-            userId='me',
-            body={'name': nom, 'labelListVisibility': 'labelShow',
-                  'messageListVisibility': 'show'},
-        ).execute()
-        return new_label['id']
-    except Exception as e:
-        print(f"    Label Gmail '{nom}' : {e}")
-        return None
-
-
-def traiter_modifications_clients(drive_svc, gmail_svc, traites):
-    """Lit les mails de modification de commande, supprime les anciens bons, archive les mails."""
-    try:
-        label_id = _get_or_create_gmail_label(gmail_svc, GMAIL_LABEL_NOM)
-        q_modif  = f'subject:"Modification par le client de la commande" -label:{GMAIL_LABEL_NOM}'
-        q_annul  = f'subject:"Alerte annulation par le client commande" -label:{GMAIL_LABEL_NOM}'
-        q_annul2 = f'subject:"Alerte annulation commande" -label:{GMAIL_LABEL_NOM}'
-        messages = []
-        for q in [q_modif, q_annul, q_annul2]:
-            res = gmail_svc.users().messages().list(
-                userId='me', q=q, maxResults=50).execute()
-            messages += res.get('messages', [])
-    except Exception as e:
-        print(f"  Gmail inaccessible ({e}) — modifications/annulations ignorées.")
-        return
-
-    if not messages:
-        return
-
-    print(f"  {len(messages)} mail(s) de modification/annulation à traiter.")
-    for m in messages:
-        try:
-            msg = gmail_svc.users().messages().get(
-                userId='me', id=m['id'],
-                format='metadata', metadataHeaders=['Subject'],
-            ).execute()
-            subject = next(
-                (h['value'] for h in msg['payload']['headers'] if h['name'] == 'Subject'), '')
-
-            # Modification : deux numéros
-            match_modif = re.search(r'N°\s*cde:(\d+).*?N°\s*cde:(\d+)', subject)
-            # Annulation : un seul numéro
-            match_annul = re.search(r'N°\s*:\s*(\d+)', subject)
-
-            if match_modif:
-                num_ancien, num_nouveau = match_modif.group(1), match_modif.group(2)
-                print(f"  Modification : cde {num_ancien} → remplacée par {num_nouveau}")
-                _supprimer_bons_drive(drive_svc, num_ancien)
-                _uploader_annulation_drive(drive_svc, num_ancien)
-                traites.add(f"BonDeCommande_{num_ancien}.pdf")
-            elif match_annul:
-                num_annule = match_annul.group(1)
-                print(f"  Annulation : cde {num_annule} supprimée")
-                _supprimer_bons_drive(drive_svc, num_annule)
-                _uploader_annulation_drive(drive_svc, num_annule)
-                traites.add(f"BonDeCommande_{num_annule}.pdf")
-            else:
-                print(f"    Sujet non reconnu : {subject[:80]}")
-                continue
-
-            modify_body = {'removeLabelIds': ['UNREAD', 'INBOX']}
-            if label_id:
-                modify_body['addLabelIds'] = [label_id]
-            gmail_svc.users().messages().modify(
-                userId='me', id=m['id'], body=modify_body).execute()
-        except Exception as e:
-            print(f"    Erreur traitement mail : {e}")
 
 
 # ── Contrôle articles/produits ────────────────────────────────────
@@ -654,21 +609,11 @@ def main():
 
 
 def _main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--debug", action="store_true",
-                        help="Lister les fichiers visibles dans le dossier Drive")
-    args = parser.parse_args()
-
     os.makedirs(CACHE_DIR, exist_ok=True)
 
     creds = get_credentials()
-    sheets_svc = build("sheets", "v4", credentials=creds)
-    drive_svc  = build("drive",  "v3", credentials=creds)
-    gmail_svc  = build("gmail",  "v1", credentials=creds)
-
-    if args.debug:
-        debug_list_folder(drive_svc)
-        return
+    drive_svc = build("drive", "v3", credentials=creds)
+    gmail_svc = build("gmail", "v1", credentials=creds)
 
     # Télécharger les fichiers de config depuis Drive
     telecharger_config_drive(drive_svc)
@@ -681,65 +626,29 @@ def _main():
     # 1. Charger la liste des bons déjà traités
     traites = charger_traites(drive_svc)
 
-    # 1b. Traiter les modifications client reçues par mail
+    # 1b. Traiter les modifications/annulations client reçues par mail
     traiter_modifications_clients(drive_svc, gmail_svc, traites)
 
-    # 2. Commandes attendues aujourd'hui ou dans le futur (via Sheets)
-    montants = get_orders_a_venir(sheets_svc)  # {filename: (montant, dossier_jj_mm)}
-    attendus = set(montants.keys())
+    # 2. Télécharger les bons depuis les emails de confirmation Gmail
+    nouveaux = telecharger_bons_email(gmail_svc, CACHE_DIR, traites)
+    # nouveaux = {filename: dossier_jj_mm}
 
-    # 3. Lister les BonDeCommande disponibles dans Drive et garder l'intersection
-    disponibles = lister_bons_disponibles(drive_svc)  # {filename: drive_id}
-    new_ones = {k: v for k, v in disponibles.items()
-                if k in attendus and k not in traites}
-
-    # Fallback : commandes attendues sans BonDeCommande → chercher "Confirmation commande"
-    manquants = [f for f in attendus if f not in disponibles and f not in traites]
-    for pdf in manquants:
-        numero = pdf.removeprefix("BonDeCommande_").removesuffix(".pdf")
-        fid, nom_original = chercher_confirmation_commande(drive_svc, numero)
-        if fid:
-            print(f"  → Confirmation trouvée pour {numero} : {nom_original}")
-            new_ones[pdf] = fid
-        else:
-            print(f"  → Aucun PDF trouvé pour la commande {numero}")
-
-    if not new_ones:
+    if not nouveaux:
         print(f"Pas de nouvelle commande ({len(traites)} déjà traitée(s)).")
         return
 
-    print(f"{len(new_ones)} nouvelle(s) commande(s) détectée(s) :")
-    for pdf in sorted(new_ones):
+    print(f"{len(nouveaux)} nouvelle(s) commande(s) détectée(s) :")
+    for pdf in sorted(nouveaux):
         print(f"  • {pdf}")
 
-    # 3. Télécharger les nouveaux PDFs dans le cache
-    fetched = {}  # {filename: drive_id}
-    for pdf, fid in sorted(new_ones.items()):
-        cache_path = os.path.join(CACHE_DIR, pdf)
-        if os.path.exists(cache_path):
-            fetched[pdf] = fid
-            continue
-        print(f"  ↓ {pdf} ...", end="", flush=True)
-        try:
-            download_pdf(drive_svc, fid, cache_path)
-            fetched[pdf] = fid
-            print(" OK")
-        except Exception as e:
-            print(f" ÉCHEC : {e}")
-
-    if not fetched:
-        print("Aucun PDF récupéré avec succès.")
-        return
-
-    # 4. Traiter chaque nouveau PDF → bon_prepa_XXXXXXXX.txt
+    # 3. Traiter chaque nouveau PDF → bon_prepa_XXXXXXXX.txt
     os.makedirs(BDC_DIR, exist_ok=True)
     processed = set()
 
-    for pdf in sorted(fetched):
+    for pdf, dossier_jj_mm in sorted(nouveaux.items()):
         order_num = pdf.removeprefix("BonDeCommande_").removesuffix(".pdf")
 
         # Archiver le PDF d'origine dans BDC/JJ_MM/ (local + Drive)
-        _, dossier_jj_mm = montants.get(pdf, ("", ""))
         bdc_subdir = os.path.join(BDC_DIR, dossier_jj_mm) if dossier_jj_mm else BDC_DIR
         os.makedirs(bdc_subdir, exist_ok=True)
         bdc_dst = os.path.join(bdc_subdir, pdf)
@@ -761,7 +670,7 @@ def _main():
             if os.path.exists(fpath):
                 os.remove(fpath)
 
-        shutil.copy2(os.path.join(CACHE_DIR, pdf), os.path.join(WORK_DIR, pdf))
+        shutil.copy2(cache_path, os.path.join(WORK_DIR, pdf))
 
         # Vérifier que les bases C++ sont présentes et non vides
         _bases_ok = True
@@ -787,13 +696,13 @@ def _main():
         # Extraire articles et produits depuis le PDF pour contrôle ultérieur
         articles_pdf, produits_pdf = extraire_articles_produits_pdf(pt.stdout)
 
-        # Extraire le montant depuis le texte du PDF (le C++ supprime bon_encaissement.csv)
+        # Extraire le montant depuis le texte du PDF
         montant_pdf = ""
         for _ligne in pt.stdout.splitlines():
             if "Montant initial" in _ligne:
                 _m = re.search(r'(\d+[.,]\d+)', _ligne)
                 if _m:
-                    montant_pdf = _m.group(1).replace(',', '.')  # point = séparateur stockage
+                    montant_pdf = _m.group(1).replace(',', '.')
                 break
 
         print(f"  [{order_num}] Génération...", end="", flush=True)
@@ -818,16 +727,11 @@ def _main():
         print(" OK")
 
         # Injecter le montant dans l'en-tête du bon_prepa
-        montant, _ = montants.get(pdf, ("", ""))
-        if not _montant_valide(montant):
-            montant = montant_pdf
-            if montant:
-                print(f"    Montant extrait du PDF : {montant} €")
-        if montant:
+        if montant_pdf:
             with open(bon_prepa_path, 'r', encoding='utf-8') as f:
                 lignes = f.readlines()
             if lignes:
-                lignes[0] = lignes[0].rstrip('\n') + ',' + montant + '\n'
+                lignes[0] = lignes[0].rstrip('\n') + ',' + montant_pdf + '\n'
             with open(bon_prepa_path, 'w', encoding='utf-8') as f:
                 f.writelines(lignes)
 
@@ -871,7 +775,7 @@ def _main():
 
         processed.add(pdf)
 
-    # 5. Sauvegarder l'état dans Drive
+    # 4. Sauvegarder l'état dans Drive
     sauvegarder_traites(drive_svc, traites | processed)
 
 
