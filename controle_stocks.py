@@ -56,7 +56,7 @@ _CONFIG_FILES            = ["gencod_adresses.csv", "libelles_dict.csv"]
 
 TOKEN_FILE         = os.path.expanduser("~/.auto_prepa_token.json")
 SCOPES             = ["https://www.googleapis.com/auth/drive"]
-EMAIL_DESTINATAIRE = "erwan.ropars22810@gmail.com"
+EMAIL_DESTINATAIRE = "superu.arnage.drive@systeme-u.fr"
 
 
 # ─────────────────────────────────────────────────────────────────
