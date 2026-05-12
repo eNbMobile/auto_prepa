@@ -1,0 +1,56 @@
+name: Générer Ventes
+
+on:
+  schedule:
+    - cron: '0 17 * * *'  # 18h Paris (hiver) / 19h Paris (été) — ajuster à '0 16 * * *' en été si besoin
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Date (JJ/MM/AAAA) — laisser vide pour aujourd'hui"
+        required: false
+        type: string
+
+jobs:
+  ventes:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer poppler-utils avec cache
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: poppler-utils
+          version: 1.0
+
+      - name: Installer les dépendances pip
+        run: pip install -r requirements.txt
+
+      - name: Générer les ventes
+        env:
+          GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
+          WORK_DIR: "v 4.0.0"
+        run: |
+          DATE_ARG=""
+          if [ -n "${{ inputs.date }}" ]; then
+            DATE_ARG="--date ${{ inputs.date }}"
+          fi
+          python3 generer_ventes.py $DATE_ARG
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+          fi

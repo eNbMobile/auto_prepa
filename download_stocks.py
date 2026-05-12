@@ -18,6 +18,7 @@ import os
 import sys
 import urllib.request
 import urllib.parse
+from datetime import date, timedelta
 
 DRIVE_CONTROLE_FOLDER_ID = "1GVu_mv2IiMRB3LabFA-6jf2I-9RMSjpa"
 EXPECTED = ["j1.xlsx", "j.xlsx"]
@@ -81,6 +82,19 @@ def main():
         print(f"  → {name} ({size:,} octets)")
 
     print("Stocks téléchargés.")
+
+    # Télécharger le fichier ventes pré-calculé de J-1 si disponible
+    work_dir = os.environ.get("WORK_DIR", "v 4.0.0")
+    dossier_j1 = (date.today() - timedelta(days=1)).strftime("%d_%m")
+    ventes_nom = f"ventes_{dossier_j1}.csv"
+    if ventes_nom in index:
+        dest = os.path.join(work_dir, ventes_nom)
+        os.makedirs(work_dir, exist_ok=True)
+        print(f"Téléchargement {ventes_nom} …", flush=True)
+        drive_download(access, index[ventes_nom], dest)
+        print(f"  → {dest} ({os.path.getsize(dest):,} octets)")
+    else:
+        print(f"  {ventes_nom} absent de Drive — les BDC seront téléchargés à la volée.")
 
 
 if __name__ == "__main__":

@@ -268,12 +268,37 @@ def extraire_ventes_pdf(texte, gencods_r1):
     return ventes, libelles
 
 
+def _charger_ventes_csv(chemin):
+    """Charge un ventes_JJ_MM.csv pré-calculé. Retourne ({gencod: qty}, {gencod: libelle})."""
+    ventes = {}
+    libelles = {}
+    with open(chemin, newline='', encoding='utf-8-sig') as f:
+        for row in csv.reader(f, delimiter=';'):
+            if len(row) >= 2 and row[0] not in ('gencod', ''):
+                try:
+                    ventes[row[0]] = int(float(row[1]))
+                    if len(row) >= 3 and row[2].strip():
+                        libelles[row[0]] = row[2].strip()
+                except ValueError:
+                    pass
+    print(f"  → {len(ventes)} gencods, {sum(ventes.values())} produits total")
+    return ventes, libelles
+
+
 def generer_ventes(date_j1):
     """
     Extrait les ventes du jour date_j1 via pdftotext sur les BonDeCommande.
+    Si ventes_JJ_MM.csv existe déjà dans WORK_DIR, le charge directement.
     Retourne ({gencod: qty}, {gencod: libelle}).
     """
     dossier    = date_j1.strftime("%d_%m")
+
+    # Charger les ventes pré-calculées si disponibles (générées par generer_ventes.py)
+    chemin_precompute = os.path.join(WORK_DIR, f"ventes_{dossier}.csv")
+    if os.path.exists(chemin_precompute):
+        print(f"  Ventes pré-calculées : {chemin_precompute}")
+        return _charger_ventes_csv(chemin_precompute)
+
     bdc_subdir = os.path.join(BDC_DIR, dossier)
 
     synced = telecharger_bdc_depuis_drive(dossier)
