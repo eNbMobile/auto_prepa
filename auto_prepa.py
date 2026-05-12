@@ -814,14 +814,15 @@ def _main():
             continue
         print(" OK")
 
-        # Injecter le montant dans l'en-tête du bon_prepa
-        if montant_pdf:
-            with open(bon_prepa_path, 'r', encoding='utf-8') as f:
-                lignes = f.readlines()
-            if lignes:
+        # Injecter le montant et nettoyer les préfixes "-N;" parasites du C++
+        with open(bon_prepa_path, 'r', encoding='utf-8') as f:
+            lignes = f.readlines()
+        if lignes:
+            if montant_pdf:
                 lignes[0] = lignes[0].rstrip('\n') + ',' + montant_pdf + '\n'
-            with open(bon_prepa_path, 'w', encoding='utf-8') as f:
-                f.writelines(lignes)
+            lignes[1:] = [re.sub(r'^-\d+;(\d{13};)', r'\1', l) for l in lignes[1:]]
+        with open(bon_prepa_path, 'w', encoding='utf-8') as f:
+            f.writelines(lignes)
 
         # Contrôle articles/produits : PDF vs généré
         if articles_pdf is not None and produits_pdf is not None:
