@@ -16,7 +16,7 @@ import io
 import base64
 import tempfile
 import fcntl
-from datetime import date
+from datetime import date, datetime
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -332,13 +332,22 @@ def traiter_modifications_clients(drive_svc, gmail_svc, traites):
             if match_modif:
                 num_ancien, num_nouveau = match_modif.group(1), match_modif.group(2)
                 print(f"  Modification : cde {num_ancien} → remplacée par {num_nouveau}")
+                now = datetime.now()
+                if now.hour >= 6:
+                    dt_orig = _get_heure_email_original(gmail_svc, num_ancien)
+                    if dt_orig and dt_orig.date() == now.date() and dt_orig.hour < 6:
+                        contenu_antici = _telecharger_anticipation_drive(drive_svc, num_ancien)
+                        if contenu_antici:
+                            _envoyer_email_anticipation(gmail_svc, num_ancien, contenu_antici)
                 _supprimer_bons_drive(drive_svc, num_ancien)
+                _supprimer_bdc_drive(drive_svc, num_ancien)
                 _uploader_annulation_drive(drive_svc, num_ancien)
                 traites.add(f"BonDeCommande_{num_ancien}.pdf")
             elif match_annul:
                 num_annule = match_annul.group(1)
                 print(f"  Annulation : cde {num_annule} supprimée")
                 _supprimer_bons_drive(drive_svc, num_annule)
+                _supprimer_bdc_drive(drive_svc, num_annule)
                 _uploader_annulation_drive(drive_svc, num_annule)
                 traites.add(f"BonDeCommande_{num_annule}.pdf")
             else:
@@ -484,6 +493,23 @@ def archiver_pdf_drive(drive_svc, pdf_path, dossier_jj_mm):
 
 # ── Modifications client (Drive) ──────────────────────────────────
 
+def _supprimer_bdc_drive(drive_svc, numero):
+    """Supprime BonDeCommande_NUMERO.pdf du dossier Drive BDC (tous sous-dossiers)."""
+    if not DRIVE_BDC_FOLDER_ID or not drive_svc:
+        return
+    nom = f"BonDeCommande_{numero}.pdf"
+    try:
+        res = drive_svc.files().list(
+            q=f"name='{nom}' and trashed=false",
+            fields="files(id,name)",
+        ).execute()
+        for f in res.get("files", []):
+            drive_svc.files().delete(fileId=f["id"]).execute()
+            print(f"    Supprimé Drive BDC : {nom}")
+    except Exception as e:
+        print(f"    Suppression Drive BDC {nom} échouée : {e}")
+
+
 def _supprimer_bons_drive(drive_svc, numero):
     """Supprime bon_prepa_ et bon_anticipation_ d'un numéro donné dans DRIVE_BONS_FOLDER_ID."""
     for nom_fichier in [f"bon_prepa_{numero}.txt", f"bon_anticipation_{numero}.txt"]:
@@ -526,6 +552,62 @@ def _uploader_annulation_drive(drive_svc, numero):
     except Exception as e:
         print(f"    Upload annulation {nom_fichier} échoué : {e}")
         raise
+
+
+# ── Email anticipation (modification commande jour J) ────────────
+
+def _get_heure_email_original(gmail_svc, numero):
+    """Retourne le datetime local de réception de l'email de confirmation original."""
+    q = f'label:{GMAIL_LABEL_CONF} "{numero}"'
+    try:
+        res = gmail_svc.users().messages().list(userId='me', q=q, maxResults=1).execute()
+        messages = res.get('messages', [])
+        if not messages:
+            return None
+        msg = gmail_svc.users().messages().get(
+            userId='me', id=messages[0]['id'], format='minimal').execute()
+        return datetime.fromtimestamp(int(msg['internalDate']) / 1000)
+    except Exception as e:
+        print(f"    Horodatage email original {numero} introuvable : {e}")
+        return None
+
+
+def _telecharger_anticipation_drive(drive_svc, numero):
+    """Télécharge et retourne le contenu de bon_anticipation_NUMERO.txt depuis Drive."""
+    nom = f"bon_anticipation_{numero}.txt"
+    try:
+        res = drive_svc.files().list(
+            q=f"name='{nom}' and '{DRIVE_BONS_FOLDER_ID}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        files = res.get("files", [])
+        if not files:
+            return ""
+        buf = io.BytesIO()
+        dl = MediaIoBaseDownload(buf, drive_svc.files().get_media(fileId=files[0]["id"]))
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        return buf.getvalue().decode("utf-8", errors="replace")
+    except Exception as e:
+        print(f"    Téléchargement anticipation {numero} échoué : {e}")
+        return ""
+
+
+def _envoyer_email_anticipation(gmail_svc, numero, contenu):
+    """Envoie le contenu du bon d'anticipation supprimé par email."""
+    from email.mime.text import MIMEText
+    destinataire = "superu.arnage.drive@systeme-u.fr"
+    sujet = f"Commande {numero} - anticipation renouvellée"
+    try:
+        msg = MIMEText(contenu, "plain", "utf-8")
+        msg["to"] = destinataire
+        msg["subject"] = sujet
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
+        print(f"    Email anticipation envoyé pour cde {numero} → {destinataire}")
+    except Exception as e:
+        print(f"    Envoi email anticipation {numero} échoué : {e}")
 
 
 # ── Contrôle articles/produits ────────────────────────────────────
