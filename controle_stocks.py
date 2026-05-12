@@ -508,7 +508,7 @@ def generer_pdf_ecarts(compares, date_j1):
     nom_pdf = f"ecarts_{date_j1.strftime('%Y%m%d')}.pdf"
     doc = SimpleDocTemplate(nom_pdf, pagesize=A4,
                             topMargin=8*mm, bottomMargin=8*mm,
-                            leftMargin=6*mm, rightMargin=6*mm)
+                            leftMargin=3*mm, rightMargin=3*mm)
 
     styles  = getSampleStyleSheet()
     small   = ParagraphStyle('small', fontSize=8, leading=10)
@@ -520,7 +520,7 @@ def generer_pdf_ecarts(compares, date_j1):
         f"&nbsp;&nbsp;({len(ecarts)} écarts)", styles['Title']))
     elements.append(Spacer(1, 5*mm))
 
-    col_widths = [108, 70, 160, 33, 40, 33, 33, 34]  # ≈ 511 pt
+    col_widths = [108, 70, 176, 33, 40, 33, 33, 34]  # ≈ 527 pt (marges 3mm)
     hdr = [Paragraph(t, header_s) for t in
            ['Code-barres', 'Gencod', 'Libellé', 'J-1', 'Ventes', 'Théo', 'J', 'Écart']]
     data = [hdr]
@@ -532,7 +532,7 @@ def generer_pdf_ecarts(compares, date_j1):
         data.append([
             bc,
             Paragraph(gencod, small),
-            Paragraph(lib[:65], small),
+            Paragraph(lib, small),
             Paragraph(str(int(s_j1)), small),
             Paragraph(str(int(v)),    small),
             Paragraph(str(int(s_theo)), small),
