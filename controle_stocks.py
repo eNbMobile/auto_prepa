@@ -496,7 +496,7 @@ def generer_pdf_ecarts(compares, date_j1):
     def make_barcode(code):
         try:
             return createBarcodeDrawing('EAN13', value=code,
-                                        barWidth=0.85, barHeight=22,
+                                        barWidth=1.05, barHeight=28,
                                         humanReadable=False)
         except Exception:
             return None
@@ -507,8 +507,8 @@ def generer_pdf_ecarts(compares, date_j1):
 
     nom_pdf = f"ecarts_{date_j1.strftime('%Y%m%d')}.pdf"
     doc = SimpleDocTemplate(nom_pdf, pagesize=A4,
-                            topMargin=12*mm, bottomMargin=12*mm,
-                            leftMargin=10*mm, rightMargin=10*mm)
+                            topMargin=8*mm, bottomMargin=8*mm,
+                            leftMargin=6*mm, rightMargin=6*mm)
 
     styles  = getSampleStyleSheet()
     small   = ParagraphStyle('small', fontSize=8, leading=10)
@@ -520,7 +520,7 @@ def generer_pdf_ecarts(compares, date_j1):
         f"&nbsp;&nbsp;({len(ecarts)} écarts)", styles['Title']))
     elements.append(Spacer(1, 5*mm))
 
-    col_widths = [95, 88, 158, 33, 40, 33, 33, 34]  # ≈ 514 pt
+    col_widths = [108, 70, 160, 33, 40, 33, 33, 34]  # ≈ 511 pt
     hdr = [Paragraph(t, header_s) for t in
            ['Code-barres', 'Gencod', 'Libellé', 'J-1', 'Ventes', 'Théo', 'J', 'Écart']]
     data = [hdr]
@@ -551,8 +551,8 @@ def generer_pdf_ecarts(compares, date_j1):
         ('VALIGN',         (0, 0), (-1, -1), 'MIDDLE'),
         ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#EEF6FB')]),
         ('GRID',           (0, 0), (-1, -1), 0.3, colors.lightgrey),
-        ('TOPPADDING',     (0, 0), (-1, -1), 7),
-        ('BOTTOMPADDING',  (0, 0), (-1, -1), 7),
+        ('TOPPADDING',     (0, 0), (-1, -1), 12),
+        ('BOTTOMPADDING',  (0, 0), (-1, -1), 12),
     ])
     for i, r in enumerate(ecarts, 1):
         c = colors.HexColor('#D32F2F') if float(r[5]) < 0 else colors.HexColor('#E65100')
