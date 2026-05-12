@@ -52,8 +52,9 @@ _SORTIE_CANDIDATS = [
 DRIVE_CONTROLE_FOLDER_ID = "1GVu_mv2IiMRB3LabFA-6jf2I-9RMSjpa"
 DRIVE_BDC_FOLDER_ID      = "10gxP-IbO_-F03QiS75B027HLgKXI0mPs"
 
-TOKEN_FILE = os.path.expanduser("~/.auto_prepa_token.json")
-SCOPES     = ["https://www.googleapis.com/auth/drive"]
+TOKEN_FILE         = os.path.expanduser("~/.auto_prepa_token.json")
+SCOPES             = ["https://www.googleapis.com/auth/drive"]
+EMAIL_DESTINATAIRE = "erwan.ropars22810@gmail.com"
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -359,6 +360,23 @@ def _get_drive_service():
         return None
 
 
+def _get_gmail_service():
+    try:
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+        from googleapiclient.discovery import build
+        if not os.path.exists(TOKEN_FILE):
+            return None
+        creds = Credentials.from_authorized_user_file(
+            TOKEN_FILE, ["https://www.googleapis.com/auth/gmail.modify"])
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        return build("gmail", "v1", credentials=creds)
+    except Exception as e:
+        print(f"  Gmail inaccessible : {e}")
+        return None
+
+
 def telecharger_bdc_depuis_drive(dossier_jj_mm):
     """Télécharge les PDFs BDC depuis Drive pour un sous-dossier JJ_MM."""
     if not DRIVE_BDC_FOLDER_ID:
@@ -455,6 +473,139 @@ def upload_drive(local_path):
     except Exception as e:
         print(f"  Upload Drive échoué : {e}")
         return False
+
+
+# ─────────────────────────────────────────────────────────────────
+# PDF des écarts + envoi email
+# ─────────────────────────────────────────────────────────────────
+
+def generer_pdf_ecarts(compares, date_j1):
+    """Génère un PDF des lignes ECART (trié |écart| desc). Retourne le chemin ou None."""
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib import colors
+        from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle,
+                                        Paragraph, Spacer, Flowable)
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import mm
+        from reportlab.graphics.barcode import ean as ean_bc
+    except ImportError:
+        print("  reportlab non installé — PDF ignoré.")
+        return None
+
+    class BarcodeEAN13(Flowable):
+        def __init__(self, code):
+            Flowable.__init__(self)
+            self.code = code
+            self.width = 72
+            self.height = 20
+        def draw(self):
+            try:
+                bc = ean_bc.EAN13(self.code, barWidth=0.7, barHeight=16, humanReadable=False)
+                bc.drawOn(self.canv, 0, 2)
+            except Exception:
+                self.canv.setFontSize(7)
+                self.canv.drawString(0, 6, self.code)
+
+    ecarts = [r for r in compares if r[6] == "ECART"]
+    if not ecarts:
+        return None
+
+    nom_pdf = f"ecarts_{date_j1.strftime('%Y%m%d')}.pdf"
+    doc = SimpleDocTemplate(nom_pdf, pagesize=A4,
+                            topMargin=12*mm, bottomMargin=12*mm,
+                            leftMargin=10*mm, rightMargin=10*mm)
+
+    styles  = getSampleStyleSheet()
+    small   = ParagraphStyle('small', fontSize=8, leading=10)
+    header_s = ParagraphStyle('hdr', fontSize=8, leading=10, textColor=colors.white)
+
+    elements = []
+    elements.append(Paragraph(
+        f"<b>Contrôle de stocks — {date_j1.strftime('%d/%m/%Y')}</b>"
+        f"&nbsp;&nbsp;({len(ecarts)} écarts)", styles['Title']))
+    elements.append(Spacer(1, 5*mm))
+
+    col_widths = [74, 68, 180, 33, 40, 33, 33, 34]  # ≈ 495 pt
+    hdr = [Paragraph(t, header_s) for t in
+           ['Code-barres', 'Gencod', 'Libellé', 'J-1', 'Ventes', 'Théo', 'J', 'Écart']]
+    data = [hdr]
+
+    for r in ecarts:
+        gencod, s_j1, v, s_theo, s_j, ecart, _, lib = r
+        bc = BarcodeEAN13(gencod) if len(gencod) == 13 else Paragraph(gencod, small)
+        data.append([
+            bc,
+            Paragraph(gencod, small),
+            Paragraph(lib[:65], small),
+            Paragraph(str(int(s_j1)), small),
+            Paragraph(str(int(v)),    small),
+            Paragraph(str(int(s_theo)), small),
+            Paragraph(str(int(s_j)),  small),
+            Paragraph(f"{ecart:+d}",  small),
+        ])
+
+    BLEU = colors.HexColor('#006797')
+    style = TableStyle([
+        ('BACKGROUND',     (0, 0), (-1, 0), BLEU),
+        ('FONTNAME',       (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE',       (0, 0), (-1, 0), 8),
+        ('ALIGN',          (0, 0), (-1, 0), 'CENTER'),
+        ('FONTSIZE',       (0, 1), (-1, -1), 8),
+        ('ALIGN',          (3, 1), (-1, -1), 'CENTER'),
+        ('VALIGN',         (0, 0), (-1, -1), 'MIDDLE'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#EEF6FB')]),
+        ('GRID',           (0, 0), (-1, -1), 0.3, colors.lightgrey),
+        ('TOPPADDING',     (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING',  (0, 0), (-1, -1), 3),
+    ])
+    for i, r in enumerate(ecarts, 1):
+        c = colors.HexColor('#D32F2F') if r[5] < 0 else colors.HexColor('#E65100')
+        style.add('TEXTCOLOR', (7, i), (7, i), c)
+        style.add('FONTNAME',  (7, i), (7, i), 'Helvetica-Bold')
+
+    table = Table(data, colWidths=col_widths, repeatRows=1)
+    table.setStyle(style)
+    elements.append(table)
+    doc.build(elements)
+    print(f"  → {nom_pdf} ({len(ecarts)} écarts)")
+    return nom_pdf
+
+
+def envoyer_email_pdf(pdf_path, date_j1, nb_ecart, manquant, surplus):
+    """Envoie le PDF par email via Gmail API."""
+    try:
+        import base64
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        from email.mime.application import MIMEApplication
+
+        svc = _get_gmail_service()
+        if not svc:
+            return
+
+        msg = MIMEMultipart()
+        msg['To']      = EMAIL_DESTINATAIRE
+        msg['Subject'] = (f"Contrôle stocks {date_j1.strftime('%d/%m/%Y')} "
+                          f"— {nb_ecart} écart{'s' if nb_ecart > 1 else ''}")
+        corps = (f"Contrôle de stocks du {date_j1.strftime('%d/%m/%Y')}\n\n"
+                 f"  Écarts   : {nb_ecart}\n"
+                 f"  Manquant : {manquant:.0f} unités\n"
+                 f"  Surplus  : +{surplus:.0f} unités\n\n"
+                 f"Détail en pièce jointe.")
+        msg.attach(MIMEText(corps, 'plain', 'utf-8'))
+
+        with open(pdf_path, 'rb') as f:
+            part = MIMEApplication(f.read(), 'pdf')
+            part.add_header('Content-Disposition', 'attachment',
+                            filename=os.path.basename(pdf_path))
+            msg.attach(part)
+
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        svc.users().messages().send(userId='me', body={'raw': raw}).execute()
+        print(f"  Email envoyé → {EMAIL_DESTINATAIRE}")
+    except Exception as e:
+        print(f"  Email échoué : {e}")
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -587,6 +738,13 @@ def main():
 
     print("\nUpload Drive …")
     upload_drive(nom_sortie)
+
+    if nb_ecart > 0:
+        print("\nGénération PDF écarts …")
+        nom_pdf = generer_pdf_ecarts(compares, date_j1)
+        if nom_pdf:
+            print("\nEnvoi email …")
+            envoyer_email_pdf(nom_pdf, date_j1, nb_ecart, manquant, surplus)
 
 
 if __name__ == "__main__":
