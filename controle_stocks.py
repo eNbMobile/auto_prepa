@@ -520,18 +520,32 @@ def generer_pdf_ecarts(compares, date_j1):
         f"&nbsp;&nbsp;({len(ecarts)} écarts)", styles['Title']))
     elements.append(Spacer(1, 5*mm))
 
-    col_widths = [108, 70, 176, 33, 40, 33, 33, 34]  # ≈ 527 pt (marges 3mm)
+    col_widths = [108, 246, 33, 40, 33, 33, 34]  # ≈ 527 pt (marges 3mm, sans colonne gencod)
     hdr = [Paragraph(t, header_s) for t in
-           ['Code-barres', 'Gencod', 'Libellé', 'J-1', 'Ventes', 'Théo', 'J', 'Écart']]
+           ['Code-barres', 'Libellé', 'J-1', 'Ventes', 'Théo', 'J', 'Écart']]
     data = [hdr]
+
+    tiny_c = ParagraphStyle('tiny_c', fontSize=7, leading=8, alignment=1)
 
     for r in ecarts:
         gencod, s_j1, v, s_theo, s_j, ecart, _, lib = r
         bc = make_barcode(gencod) if len(gencod) == 13 else None
-        bc = bc or Paragraph(gencod, small)
+        if bc:
+            bc_cell = Table(
+                [[bc], [Paragraph(gencod, tiny_c)]],
+                colWidths=[108],
+                style=TableStyle([
+                    ('ALIGN',         (0, 0), (-1, -1), 'CENTER'),
+                    ('TOPPADDING',    (0, 0), (-1, -1), 0),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+                    ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+                    ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+                ]),
+            )
+        else:
+            bc_cell = Paragraph(gencod, small)
         data.append([
-            bc,
-            Paragraph(gencod, small),
+            bc_cell,
             Paragraph(lib, small),
             Paragraph(str(int(s_j1)), small),
             Paragraph(str(int(v)),    small),
@@ -547,7 +561,7 @@ def generer_pdf_ecarts(compares, date_j1):
         ('FONTSIZE',       (0, 0), (-1, 0), 8),
         ('ALIGN',          (0, 0), (-1, 0), 'CENTER'),
         ('FONTSIZE',       (0, 1), (-1, -1), 8),
-        ('ALIGN',          (3, 1), (-1, -1), 'CENTER'),
+        ('ALIGN',          (2, 1), (-1, -1), 'CENTER'),
         ('VALIGN',         (0, 0), (-1, -1), 'MIDDLE'),
         ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#EEF6FB')]),
         ('GRID',           (0, 0), (-1, -1), 0.3, colors.lightgrey),
@@ -556,8 +570,8 @@ def generer_pdf_ecarts(compares, date_j1):
     ])
     for i, r in enumerate(ecarts, 1):
         c = colors.HexColor('#D32F2F') if float(r[5]) < 0 else colors.HexColor('#E65100')
-        style.add('TEXTCOLOR', (7, i), (7, i), c)
-        style.add('FONTNAME',  (7, i), (7, i), 'Helvetica-Bold')
+        style.add('TEXTCOLOR', (6, i), (6, i), c)
+        style.add('FONTNAME',  (6, i), (6, i), 'Helvetica-Bold')
 
     table = Table(data, colWidths=col_widths, repeatRows=1)
     table.setStyle(style)
