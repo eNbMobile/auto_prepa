@@ -264,7 +264,9 @@ def extraire_ventes_pdf(texte, gencods_r1):
         m_q = _RE_QTY.match(line)
         if m_q:
             pending_qty   = int(m_q.group(1))
-            pending_label = m_q.group(2).strip()
+            label = m_q.group(2).strip()
+            idx = label.lower().find('dont tva')
+            pending_label = label[:idx].strip() if idx != -1 else label
     return ventes, libelles
 
 
