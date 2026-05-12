@@ -51,8 +51,8 @@ _SORTIE_CANDIDATS = [
 
 DRIVE_CONTROLE_FOLDER_ID  = "1GVu_mv2IiMRB3LabFA-6jf2I-9RMSjpa"
 DRIVE_BDC_FOLDER_ID       = "10gxP-IbO_-F03QiS75B027HLgKXI0mPs"
-DRIVE_CONFIG_FOLDER_NAME  = "MobUDrive_config"
-_CONFIG_FILES             = ["gencod_adresses.csv", "libelles_dict.csv"]
+DRIVE_CONFIG_FOLDER_ID   = "1rWyZiKe89c7c67eemD33gN4eSLal_FeV"
+_CONFIG_FILES            = ["gencod_adresses.csv", "libelles_dict.csv"]
 
 TOKEN_FILE         = os.path.expanduser("~/.auto_prepa_token.json")
 SCOPES             = ["https://www.googleapis.com/auth/drive"]
@@ -508,26 +508,17 @@ def telecharger_config_depuis_drive():
         if not svc:
             return
         res = svc.files().list(
-            q=f"name='{DRIVE_CONFIG_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false",
-            fields="files(id)", pageSize=1,
-        ).execute()
-        folders = res.get("files", [])
-        if not folders:
-            print(f"  Dossier Drive '{DRIVE_CONFIG_FOLDER_NAME}' introuvable.")
-            return
-        folder_id = folders[0]["id"]
-        res2 = svc.files().list(
-            q=f"'{folder_id}' in parents and trashed=false",
+            q=f"'{DRIVE_CONFIG_FOLDER_ID}' in parents and trashed=false",
             fields="files(id,name)",
         ).execute()
-        index = {f["name"]: f["id"] for f in res2.get("files", [])}
+        index = {f["name"]: f["id"] for f in res.get("files", [])}
         os.makedirs(WORK_DIR, exist_ok=True)
         for nom in _CONFIG_FILES:
             dest = os.path.join(WORK_DIR, nom)
             if os.path.exists(dest):
                 continue
             if nom not in index:
-                print(f"  {nom} absent de {DRIVE_CONFIG_FOLDER_NAME}.")
+                print(f"  {nom} absent de MobUDrive_config.")
                 continue
             req = svc.files().get_media(fileId=index[nom])
             buf = io.BytesIO()
