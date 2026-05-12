@@ -537,7 +537,7 @@ def generer_pdf_ecarts(compares, date_j1):
             Paragraph(str(int(v)),    small),
             Paragraph(str(int(s_theo)), small),
             Paragraph(str(int(s_j)),  small),
-            Paragraph(f"{ecart:+d}",  small),
+            Paragraph(f"{int(ecart):+d}", small),
         ])
 
     BLEU = colors.HexColor('#006797')
@@ -555,7 +555,7 @@ def generer_pdf_ecarts(compares, date_j1):
         ('BOTTOMPADDING',  (0, 0), (-1, -1), 3),
     ])
     for i, r in enumerate(ecarts, 1):
-        c = colors.HexColor('#D32F2F') if r[5] < 0 else colors.HexColor('#E65100')
+        c = colors.HexColor('#D32F2F') if float(r[5]) < 0 else colors.HexColor('#E65100')
         style.add('TEXTCOLOR', (7, i), (7, i), c)
         style.add('FONTNAME',  (7, i), (7, i), 'Helvetica-Bold')
 
