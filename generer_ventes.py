@@ -21,7 +21,7 @@ from controle_stocks import (
     WORK_DIR, BDC_DIR, TOKEN_FILE,
     telecharger_bdc_depuis_drive, extraire_ventes_pdf,
     charger_gencods_r1, charger_libelles_dict, lire_stock,
-    telecharger_fichier_controle, upload_drive,
+    telecharger_fichier_controle, telecharger_config_depuis_drive, upload_drive,
 )
 
 
@@ -31,6 +31,9 @@ def main():
     if token_json:
         with open(TOKEN_FILE, "w") as f:
             f.write(token_json)
+
+    # Télécharger la config depuis Drive si absente (GH Actions)
+    telecharger_config_depuis_drive()
 
     # Date cible (défaut : aujourd'hui)
     date_cible = date.today()

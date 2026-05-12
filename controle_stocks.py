@@ -49,8 +49,10 @@ _SORTIE_CANDIDATS = [
     ("bon_prepa.txt",        1, 4),  # gencod;libellé;prix;remise;qty (toujours généré)
 ]
 
-DRIVE_CONTROLE_FOLDER_ID = "1GVu_mv2IiMRB3LabFA-6jf2I-9RMSjpa"
-DRIVE_BDC_FOLDER_ID      = "10gxP-IbO_-F03QiS75B027HLgKXI0mPs"
+DRIVE_CONTROLE_FOLDER_ID  = "1GVu_mv2IiMRB3LabFA-6jf2I-9RMSjpa"
+DRIVE_BDC_FOLDER_ID       = "10gxP-IbO_-F03QiS75B027HLgKXI0mPs"
+DRIVE_CONFIG_FOLDER_NAME  = "MobUDrive_config"
+_CONFIG_FILES             = ["gencod_adresses.csv", "libelles_dict.csv"]
 
 TOKEN_FILE         = os.path.expanduser("~/.auto_prepa_token.json")
 SCOPES             = ["https://www.googleapis.com/auth/drive"]
@@ -495,6 +497,51 @@ def telecharger_fichier_controle(nom, dest=None):
         return None
 
 
+def telecharger_config_depuis_drive():
+    """Télécharge gencod_adresses.csv et libelles_dict.csv depuis MobUDrive_config si absents."""
+    if all(os.path.exists(os.path.join(WORK_DIR, f)) for f in _CONFIG_FILES):
+        return  # déjà présents (exécution locale)
+    try:
+        import io
+        from googleapiclient.http import MediaIoBaseDownload
+        svc = _get_drive_service()
+        if not svc:
+            return
+        res = svc.files().list(
+            q=f"name='{DRIVE_CONFIG_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false",
+            fields="files(id)", pageSize=1,
+        ).execute()
+        folders = res.get("files", [])
+        if not folders:
+            print(f"  Dossier Drive '{DRIVE_CONFIG_FOLDER_NAME}' introuvable.")
+            return
+        folder_id = folders[0]["id"]
+        res2 = svc.files().list(
+            q=f"'{folder_id}' in parents and trashed=false",
+            fields="files(id,name)",
+        ).execute()
+        index = {f["name"]: f["id"] for f in res2.get("files", [])}
+        os.makedirs(WORK_DIR, exist_ok=True)
+        for nom in _CONFIG_FILES:
+            dest = os.path.join(WORK_DIR, nom)
+            if os.path.exists(dest):
+                continue
+            if nom not in index:
+                print(f"  {nom} absent de {DRIVE_CONFIG_FOLDER_NAME}.")
+                continue
+            req = svc.files().get_media(fileId=index[nom])
+            buf = io.BytesIO()
+            dl  = MediaIoBaseDownload(buf, req)
+            done = False
+            while not done:
+                _, done = dl.next_chunk()
+            with open(dest, "wb") as f:
+                f.write(buf.getvalue())
+            print(f"  Config : {nom} ({os.path.getsize(dest):,} octets)")
+    except Exception as e:
+        print(f"  telecharger_config_depuis_drive() échoué : {e}")
+
+
 # ─────────────────────────────────────────────────────────────────
 # Upload Drive (optionnel)
 # ─────────────────────────────────────────────────────────────────
@@ -710,6 +757,9 @@ def main():
     for g, l in libelles_stock_j.items():
         if g not in libelles_stock:
             libelles_stock[g] = l
+
+    # Télécharger la config depuis Drive si absente (GH Actions)
+    telecharger_config_depuis_drive()
 
     # Charger le dictionnaire complet coursesu.com (priorité sur xlsx tronqué)
     print("\nChargement libellés coursesu ...")
