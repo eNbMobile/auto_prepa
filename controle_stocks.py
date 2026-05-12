@@ -496,7 +496,7 @@ def generer_pdf_ecarts(compares, date_j1):
     def make_barcode(code):
         try:
             return createBarcodeDrawing('EAN13', value=code,
-                                        barWidth=1.05, barHeight=28,
+                                        width=100, height=30,
                                         humanReadable=False)
         except Exception:
             return None
