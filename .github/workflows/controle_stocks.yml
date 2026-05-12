@@ -1,0 +1,70 @@
+name: Contrôle Stocks
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Date J-1 (JJ/MM/AAAA) — laisser vide pour hier"
+        required: false
+        type: string
+
+jobs:
+  controle:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer poppler-utils (pdftotext)
+        run: sudo apt-get install -y poppler-utils
+
+      - name: Installer les dépendances pip
+        run: pip install -r requirements.txt
+
+      - name: Télécharger les fichiers stock depuis Drive
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_STOCKS_FOLDER_ID: ${{ secrets.DRIVE_STOCKS_FOLDER_ID }}
+        run: python3 download_stocks.py
+
+      - name: Lancer le contrôle des stocks
+        env:
+          GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
+          WORK_DIR: "v 4.0.0"
+        run: |
+          # Restaurer le token pour que controle_stocks.py puisse l'utiliser
+          echo "$GOOGLE_TOKEN_JSON" > ~/.auto_prepa_token.json
+
+          DATE_ARG=""
+          if [ -n "${{ inputs.date }}" ]; then
+            DATE_ARG="--date ${{ inputs.date }}"
+          fi
+
+          python3 controle_stocks.py stock_j1.xlsx stock_j.xlsx $DATE_ARG --upload
+
+      - name: Publier le CSV résultat en artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: controle-stocks-${{ github.run_id }}
+          path: "controle_stocks_*.csv"
+          if-no-files-found: warn
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+            echo "Secret GOOGLE_TOKEN_JSON mis à jour."
+          fi
