@@ -2,7 +2,7 @@ name: Générer Ventes
 
 on:
   schedule:
-    - cron: '7 15 * * *'  # 17h07 Paris (été, CEST=UTC+2) / 16h07 Paris (hiver, CET=UTC+1)
+    - cron: '18 15 * * *'  # 17h18 Paris (été, CEST=UTC+2) / 16h18 Paris (hiver, CET=UTC+1)
   workflow_dispatch:
     inputs:
       date:
