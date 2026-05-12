@@ -496,7 +496,7 @@ def generer_pdf_ecarts(compares, date_j1):
     def make_barcode(code):
         try:
             return createBarcodeDrawing('EAN13', value=code,
-                                        barWidth=0.7, barHeight=16,
+                                        barWidth=0.85, barHeight=22,
                                         humanReadable=False)
         except Exception:
             return None
@@ -520,7 +520,7 @@ def generer_pdf_ecarts(compares, date_j1):
         f"&nbsp;&nbsp;({len(ecarts)} écarts)", styles['Title']))
     elements.append(Spacer(1, 5*mm))
 
-    col_widths = [74, 68, 180, 33, 40, 33, 33, 34]  # ≈ 495 pt
+    col_widths = [95, 88, 158, 33, 40, 33, 33, 34]  # ≈ 514 pt
     hdr = [Paragraph(t, header_s) for t in
            ['Code-barres', 'Gencod', 'Libellé', 'J-1', 'Ventes', 'Théo', 'J', 'Écart']]
     data = [hdr]
@@ -551,8 +551,8 @@ def generer_pdf_ecarts(compares, date_j1):
         ('VALIGN',         (0, 0), (-1, -1), 'MIDDLE'),
         ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#EEF6FB')]),
         ('GRID',           (0, 0), (-1, -1), 0.3, colors.lightgrey),
-        ('TOPPADDING',     (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING',  (0, 0), (-1, -1), 3),
+        ('TOPPADDING',     (0, 0), (-1, -1), 7),
+        ('BOTTOMPADDING',  (0, 0), (-1, -1), 7),
     ])
     for i, r in enumerate(ecarts, 1):
         c = colors.HexColor('#D32F2F') if float(r[5]) < 0 else colors.HexColor('#E65100')
