@@ -30,8 +30,7 @@ jobs:
 
       - name: Télécharger les fichiers stock depuis Drive
         env:
-          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
-          DRIVE_STOCKS_FOLDER_ID: ${{ secrets.DRIVE_STOCKS_FOLDER_ID }}
+          GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
         run: python3 download_stocks.py
 
       - name: Lancer le contrôle des stocks

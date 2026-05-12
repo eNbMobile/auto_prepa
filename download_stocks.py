@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-download_stocks.py — Télécharge stock_j1.xlsx et stock_j.xlsx depuis un dossier Drive.
+download_stocks.py — Télécharge stock_j1.xlsx et stock_j.xlsx depuis le dossier Drive contrôle.
 
 Utilisé par le workflow GitHub Actions controle_stocks.yml.
-Variables d'environnement requises :
-  GOOGLE_TOKEN_JSON        — JSON du token OAuth2 (même secret que auto_prepa)
-  DRIVE_STOCKS_FOLDER_ID   — ID du dossier Drive contenant les xlsx de stock
+Variable d'environnement requise :
+  GOOGLE_TOKEN_JSON — JSON du token OAuth2 (même secret que auto_prepa)
 
-Attend deux fichiers nommés exactement :
+Attend deux fichiers nommés exactement dans le dossier DRIVE_CONTROLE_FOLDER_ID :
   stock_j1.xlsx   (stock J-1)
   stock_j.xlsx    (stock J)
 
@@ -20,6 +19,7 @@ import sys
 import urllib.request
 import urllib.parse
 
+DRIVE_CONTROLE_FOLDER_ID = "1GVu_mv2IiMRB3LabFA-6jf2I-9RMSjpa"
 EXPECTED = ["stock_j1.xlsx", "stock_j.xlsx"]
 
 
@@ -56,17 +56,14 @@ def drive_download(access_token, file_id, dest):
 
 def main():
     token_json = os.environ.get("GOOGLE_TOKEN_JSON", "").strip()
-    folder_id  = os.environ.get("DRIVE_STOCKS_FOLDER_ID", "").strip()
 
     if not token_json:
         print("ERREUR : variable GOOGLE_TOKEN_JSON manquante.")
         sys.exit(1)
-    if not folder_id:
-        print("ERREUR : variable DRIVE_STOCKS_FOLDER_ID manquante.")
-        sys.exit(1)
 
     token  = json.loads(token_json)
     access = get_access_token(token)
+    folder_id = DRIVE_CONTROLE_FOLDER_ID
 
     files = drive_list(access, folder_id)
     index = {f["name"]: f["id"] for f in files}
