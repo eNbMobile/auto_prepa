@@ -20,7 +20,7 @@ import urllib.request
 import urllib.parse
 
 DRIVE_CONTROLE_FOLDER_ID = "1GVu_mv2IiMRB3LabFA-6jf2I-9RMSjpa"
-EXPECTED = ["stock_j1.xlsx", "stock_j.xlsx"]
+EXPECTED = ["j1.xlsx", "j.xlsx"]
 
 
 def get_access_token(token):

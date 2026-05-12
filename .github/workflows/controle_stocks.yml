@@ -46,7 +46,7 @@ jobs:
             DATE_ARG="--date ${{ inputs.date }}"
           fi
 
-          python3 controle_stocks.py stock_j1.xlsx stock_j.xlsx $DATE_ARG --upload
+          python3 controle_stocks.py j1.xlsx j.xlsx $DATE_ARG --upload
 
       - name: Publier le CSV résultat en artefact
         if: always()
