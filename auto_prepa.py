@@ -333,9 +333,10 @@ def traiter_modifications_clients(drive_svc, gmail_svc, traites):
                 num_ancien, num_nouveau = match_modif.group(1), match_modif.group(2)
                 print(f"  Modification : cde {num_ancien} → remplacée par {num_nouveau}")
                 now = datetime.now()
-                if now.hour >= 6:
+                seuil = 5 if now.weekday() == 5 else 6
+                if now.hour >= seuil:
                     dt_orig = _get_heure_email_original(gmail_svc, num_ancien)
-                    if dt_orig and dt_orig.date() == now.date() and dt_orig.hour < 6:
+                    if dt_orig and dt_orig.date() == now.date() and dt_orig.hour < seuil:
                         contenu_antici = _telecharger_anticipation_drive(drive_svc, num_ancien)
                         if contenu_antici:
                             _envoyer_email_anticipation(gmail_svc, num_ancien, contenu_antici)
