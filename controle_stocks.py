@@ -485,27 +485,21 @@ def generer_pdf_ecarts(compares, date_j1):
         from reportlab.lib.pagesizes import A4
         from reportlab.lib import colors
         from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle,
-                                        Paragraph, Spacer, Flowable)
+                                        Paragraph, Spacer)
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import mm
-        from reportlab.graphics.barcode import ean as ean_bc
+        from reportlab.graphics.barcode import createBarcodeDrawing
     except Exception as e:
         print(f"  PDF ignoré : {e}")
         return None
 
-    class BarcodeEAN13(Flowable):
-        def __init__(self, code):
-            Flowable.__init__(self)
-            self.code = code
-            self.width = 72
-            self.height = 20
-        def draw(self):
-            try:
-                bc = ean_bc.EAN13(self.code, barWidth=0.7, barHeight=16, humanReadable=False)
-                bc.drawOn(self.canv, 0, 2)
-            except Exception:
-                self.canv.setFontSize(7)
-                self.canv.drawString(0, 6, self.code)
+    def make_barcode(code):
+        try:
+            return createBarcodeDrawing('EAN13', value=code,
+                                        barWidth=0.7, barHeight=16,
+                                        humanReadable=False)
+        except Exception:
+            return None
 
     ecarts = [r for r in compares if r[6] == "ECART"]
     if not ecarts:
@@ -533,7 +527,8 @@ def generer_pdf_ecarts(compares, date_j1):
 
     for r in ecarts:
         gencod, s_j1, v, s_theo, s_j, ecart, _, lib = r
-        bc = BarcodeEAN13(gencod) if len(gencod) == 13 else Paragraph(gencod, small)
+        bc = make_barcode(gencod) if len(gencod) == 13 else None
+        bc = bc or Paragraph(gencod, small)
         data.append([
             bc,
             Paragraph(gencod, small),
