@@ -489,8 +489,8 @@ def generer_pdf_ecarts(compares, date_j1):
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import mm
         from reportlab.graphics.barcode import ean as ean_bc
-    except ImportError:
-        print("  reportlab non installé — PDF ignoré.")
+    except Exception as e:
+        print(f"  PDF ignoré : {e}")
         return None
 
     class BarcodeEAN13(Flowable):
