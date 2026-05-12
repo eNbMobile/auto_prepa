@@ -20,7 +20,8 @@ sys.path.insert(0, _HERE)
 from controle_stocks import (
     WORK_DIR, BDC_DIR, TOKEN_FILE,
     telecharger_bdc_depuis_drive, extraire_ventes_pdf,
-    charger_gencods_r1, upload_drive,
+    charger_gencods_r1, charger_libelles_dict, lire_stock,
+    telecharger_fichier_controle, upload_drive,
 )
 
 
@@ -90,6 +91,41 @@ def main():
     print(f"  → {chemin} ({len(ventes)} lignes)")
 
     upload_drive(chemin)
+
+    # Calculer le théorique (j1 - ventes) et l'uploader
+    print("\nTéléchargement j1.xlsx pour calcul théorique …")
+    j1_path = telecharger_fichier_controle('j1.xlsx')
+    if j1_path:
+        stock_j1, libelles_j1 = lire_stock(j1_path)
+        libelles_dict = charger_libelles_dict()
+        gencods_r1    = charger_gencods_r1()
+        tous = gencods_r1 if gencods_r1 is not None else set(stock_j1)
+
+        def _fmt(v):
+            v = float(v)
+            return str(int(v)) if v == int(v) else f"{v:.3f}"
+
+        nom_theo   = f"theo_{dossier}.csv"
+        chemin_theo = os.path.join(WORK_DIR, nom_theo)
+        nb_theo = 0
+        with open(chemin_theo, "w", newline="", encoding="utf-8-sig") as f:
+            w = csv.writer(f, delimiter=";")
+            w.writerow(["gencod", "libelle", "stock_j1", "ventes", "stock_theo"])
+            for gencod in sorted(tous):
+                if gencod not in stock_j1:
+                    continue
+                s_j1_v  = float(stock_j1[gencod])
+                v_val   = float(ventes.get(gencod, 0))
+                s_theo  = s_j1_v - v_val
+                lib     = (libelles_dict.get(gencod)
+                           or libelles_j1.get(gencod)
+                           or libelles.get(gencod, ''))
+                w.writerow([gencod, lib, _fmt(s_j1_v), _fmt(v_val), _fmt(s_theo)])
+                nb_theo += 1
+        print(f"  → {chemin_theo} ({nb_theo} lignes)")
+        upload_drive(chemin_theo)
+    else:
+        print("  j1.xlsx indisponible — théorique non calculé.")
 
 
 if __name__ == "__main__":

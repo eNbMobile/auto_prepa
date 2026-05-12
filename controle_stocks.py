@@ -288,6 +288,28 @@ def _charger_ventes_csv(chemin):
     return ventes, libelles
 
 
+def _charger_theo_csv(chemin):
+    """Charge un theo_JJ_MM.csv pré-calculé. Retourne ({gencod: (s_j1, v, s_theo)}, {gencod: libelle})."""
+    theo = {}
+    libelles = {}
+    with open(chemin, newline='', encoding='utf-8-sig') as f:
+        for row in csv.reader(f, delimiter=';'):
+            if len(row) >= 5 and row[0] not in ('gencod', ''):
+                try:
+                    g = row[0]
+                    lib = row[1].strip()
+                    s_j1   = float(row[2])
+                    v      = float(row[3])
+                    s_theo = float(row[4])
+                    theo[g] = (s_j1, v, s_theo)
+                    if lib:
+                        libelles[g] = lib
+                except (ValueError, IndexError):
+                    pass
+    print(f"  → {len(theo)} gencods théoriques chargés")
+    return theo, libelles
+
+
 def generer_ventes(date_j1):
     """
     Extrait les ventes du jour date_j1 via pdftotext sur les BonDeCommande.
@@ -438,6 +460,38 @@ def telecharger_bdc_depuis_drive(dossier_jj_mm):
         return local_dir
     except Exception as e:
         print(f"  Erreur téléchargement Drive BDC : {e}")
+        return None
+
+
+def telecharger_fichier_controle(nom, dest=None):
+    """Télécharge le fichier 'nom' depuis DRIVE_CONTROLE_FOLDER_ID. Retourne le chemin local ou None."""
+    try:
+        import io
+        from googleapiclient.http import MediaIoBaseDownload
+        svc = _get_drive_service()
+        if not svc:
+            return None
+        res = svc.files().list(
+            q=f"name='{nom}' and '{DRIVE_CONTROLE_FOLDER_ID}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        files = res.get("files", [])
+        if not files:
+            print(f"  {nom} introuvable dans Drive contrôle.")
+            return None
+        req = svc.files().get_media(fileId=files[0]["id"])
+        buf = io.BytesIO()
+        dl  = MediaIoBaseDownload(buf, req)
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        chemin = dest or nom
+        with open(chemin, "wb") as f:
+            f.write(buf.getvalue())
+        print(f"  → {chemin} téléchargé ({os.path.getsize(chemin):,} octets)")
+        return chemin
+    except Exception as e:
+        print(f"  telecharger_fichier_controle({nom}) échoué : {e}")
         return None
 
 
@@ -661,9 +715,17 @@ def main():
     print("\nChargement libellés coursesu ...")
     libelles_dict = charger_libelles_dict()
 
-    # 2. Générer les ventes depuis les BDC de J-1
-    print(f"\nGénération ventes depuis BDC du {date_j1.strftime('%d/%m/%Y')} …")
-    ventes, libelles_ventes = generer_ventes(date_j1)
+    # 2. Théorique pré-calculé (generer_ventes.py) ou recalcul depuis BDC
+    dossier = date_j1.strftime("%d_%m")
+    chemin_theo = os.path.join(WORK_DIR, f"theo_{dossier}.csv")
+    if os.path.exists(chemin_theo):
+        print(f"\nThéorique pré-calculé : {chemin_theo}")
+        theo_data, libelles_theo = _charger_theo_csv(chemin_theo)
+        libelles_extra = libelles_theo
+    else:
+        print(f"\nGénération ventes depuis BDC du {date_j1.strftime('%d/%m/%Y')} …")
+        ventes, libelles_extra = generer_ventes(date_j1)
+        theo_data = None
 
     # 3. Comparaison — uniquement les 1087 gencods R1
     gencods_r1 = charger_gencods_r1()
@@ -673,18 +735,22 @@ def main():
     orphelins = []
 
     for gencod in sorted(tous):
-        present_j1 = gencod in stock_j1
+        if theo_data is not None:
+            present_j1 = gencod in theo_data
+            s_j1, v, s_theo = theo_data[gencod] if present_j1 else (0.0, 0.0, 0.0)
+        else:
+            present_j1 = gencod in stock_j1
+            s_j1   = stock_j1.get(gencod, 0.0)
+            v      = ventes.get(gencod, 0.0)
+            s_theo = s_j1 - v
         present_j  = gencod in stock_j
 
-        s_j1   = stock_j1.get(gencod, 0.0)
-        v      = ventes.get(gencod, 0.0)
-        s_theo = s_j1 - v
-        s_j    = stock_j.get(gencod, 0.0)
-        ecart  = s_j - s_theo
-        # Priorité : dict coursesu > xlsx > pdftotext
+        s_j   = stock_j.get(gencod, 0.0)
+        ecart = s_j - s_theo
+        # Priorité : dict coursesu > xlsx > théo/pdftotext
         lib = (libelles_dict.get(gencod)
                or libelles_stock.get(gencod)
-               or libelles_ventes.get(gencod, ''))
+               or libelles_extra.get(gencod, ''))
 
         absents = []
         if not present_j1: absents.append("J-1")
