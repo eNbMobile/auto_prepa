@@ -206,7 +206,10 @@ def charger_libelles_dict():
     with open(chemin, newline='', encoding='utf-8-sig') as f:
         for row in csv.reader(f, delimiter=';'):
             if len(row) >= 2 and row[1].strip():
-                d[row[0].strip()] = row[1].strip()
+                g = row[0].strip()
+                if g.isdigit():
+                    g = g.lstrip('0').zfill(13)
+                d[g] = row[1].strip()
     print(f"  {len(d)} libellés chargés depuis libelles_dict.csv")
     return d
 
