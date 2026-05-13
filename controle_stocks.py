@@ -790,6 +790,10 @@ def main():
         present_j  = gencod in stock_j
 
         s_j   = stock_j.get(gencod, 0.0)
+
+        if s_j1 == 0 and s_j == 0:
+            continue
+
         ecart = s_j - s_theo
         # Priorité : dict coursesu > xlsx > théo/pdftotext
         lib = (libelles_dict.get(gencod)
@@ -802,8 +806,6 @@ def main():
 
         if absents:
             statut = f"ABSENT_{'+'.join(absents)}"
-        elif s_j1 == 0 and s_j == 0:
-            statut = "OK"
         else:
             statut = "OK" if abs(ecart) < 0.001 else "ECART"
         # tuple : gencod, s_j1, v, s_theo, s_j, ecart, statut, libelle
