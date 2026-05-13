@@ -63,14 +63,13 @@ GMAIL_LABEL_CONF = "BDC_Conf_Traites"
 # Label Gmail pour archiver les modifications/annulations traitées
 GMAIL_LABEL_NOM = "BDC_Modif_Traites"
 
-# Dossier Drive où déposer les bons pour le téléphone.
-DRIVE_BONS_FOLDER_ID = "1yw_z0d90UxAix6RZ-fLpxKXuc897ghk_"
+# ID du dossier config Drive — injecté via le secret GitHub DRIVE_CONFIG_FOLDER_ID
+DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
 
-# Dossier Drive pour l'archivage des PDFs BDC.
-DRIVE_BDC_FOLDER_ID = "10gxP-IbO_-F03QiS75B027HLgKXI0mPs"
-
-# Dossier Drive contenant les fichiers de configuration (CSV)
-DRIVE_CONFIG_FOLDER_ID = "1rWyZiKe89c7c67eemD33gN4eSLal_FeV"
+# Chargés depuis config.json sur Drive au démarrage (_charger_config)
+DRIVE_BONS_FOLDER_ID = ""
+DRIVE_BDC_FOLDER_ID  = ""
+EMAIL_ANTICIPATION   = ""
 
 CONFIG_FILES = [
     "chemin_prepa_mono.csv",
@@ -603,7 +602,7 @@ def _telecharger_anticipation_drive(drive_svc, numero):
 def _envoyer_email_anticipation(gmail_svc, numero, contenu):
     """Envoie le contenu du bon d'anticipation supprimé par email."""
     from email.mime.text import MIMEText
-    destinataire = "superu.arnage.drive@systeme-u.fr"
+    destinataire = EMAIL_ANTICIPATION
     sujet = f"Commande {numero} - anticipation renouvellée"
     try:
         msg = MIMEText(contenu, "plain", "utf-8")
@@ -696,12 +695,43 @@ def main():
         lock_f.close()
 
 
+def _charger_config(drive_svc):
+    """Charge config.json depuis DRIVE_CONFIG_FOLDER_ID et initialise les globals."""
+    global DRIVE_BONS_FOLDER_ID, DRIVE_BDC_FOLDER_ID, EMAIL_ANTICIPATION
+    if not DRIVE_CONFIG_FOLDER_ID:
+        print("ERREUR : secret DRIVE_CONFIG_FOLDER_ID manquant.")
+        sys.exit(1)
+    try:
+        res = drive_svc.files().list(
+            q=f"name='config.json' and '{DRIVE_CONFIG_FOLDER_ID}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        files = res.get("files", [])
+        if not files:
+            print("ERREUR : config.json introuvable dans le dossier Drive config.")
+            sys.exit(1)
+        buf = io.BytesIO()
+        dl = MediaIoBaseDownload(buf, drive_svc.files().get_media(fileId=files[0]["id"]))
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        cfg = json.loads(buf.getvalue().decode())
+        DRIVE_BONS_FOLDER_ID = cfg["drive_bons_folder_id"]
+        DRIVE_BDC_FOLDER_ID  = cfg["drive_bdc_folder_id"]
+        EMAIL_ANTICIPATION   = cfg.get("email_destinataire", "")
+    except Exception as e:
+        print(f"ERREUR chargement config Drive : {e}")
+        sys.exit(1)
+
+
 def _main():
     os.makedirs(CACHE_DIR, exist_ok=True)
 
     creds = get_credentials()
     drive_svc = build("drive", "v3", credentials=creds)
     gmail_svc = build("gmail", "v1", credentials=creds)
+
+    _charger_config(drive_svc)
 
     # Télécharger les fichiers de config depuis Drive
     telecharger_config_drive(drive_svc)

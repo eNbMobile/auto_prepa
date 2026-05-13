@@ -20,7 +20,7 @@ import urllib.request
 import urllib.parse
 from datetime import date, timedelta
 
-DRIVE_CONTROLE_FOLDER_ID = "1GVu_mv2IiMRB3LabFA-6jf2I-9RMSjpa"
+DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
 EXPECTED = ["j1.xlsx", "j.xlsx"]
 
 
@@ -55,6 +55,21 @@ def drive_download(access_token, file_id, dest):
         f.write(resp.read())
 
 
+def charger_config(access_token):
+    """Charge config.json depuis DRIVE_CONFIG_FOLDER_ID via l'API Drive REST."""
+    if not DRIVE_CONFIG_FOLDER_ID:
+        print("ERREUR : secret DRIVE_CONFIG_FOLDER_ID manquant.")
+        sys.exit(1)
+    files = drive_list(access_token, DRIVE_CONFIG_FOLDER_ID)
+    index = {f["name"]: f["id"] for f in files}
+    if "config.json" not in index:
+        print("ERREUR : config.json introuvable dans le dossier Drive config.")
+        sys.exit(1)
+    url = f"https://www.googleapis.com/drive/v3/files/{index['config.json']}?alt=media"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {access_token}"})
+    return json.loads(urllib.request.urlopen(req).read())
+
+
 def main():
     token_json = os.environ.get("GOOGLE_TOKEN_JSON", "").strip()
 
@@ -64,7 +79,9 @@ def main():
 
     token  = json.loads(token_json)
     access = get_access_token(token)
-    folder_id = DRIVE_CONTROLE_FOLDER_ID
+
+    cfg       = charger_config(access)
+    folder_id = cfg["drive_controle_folder_id"]
 
     files = drive_list(access, folder_id)
     index = {f["name"]: f["id"] for f in files}

@@ -49,14 +49,17 @@ _SORTIE_CANDIDATS = [
     ("bon_prepa.txt",        1, 4),  # gencod;libellé;prix;remise;qty (toujours généré)
 ]
 
-DRIVE_CONTROLE_FOLDER_ID  = "1GVu_mv2IiMRB3LabFA-6jf2I-9RMSjpa"
-DRIVE_BDC_FOLDER_ID       = "10gxP-IbO_-F03QiS75B027HLgKXI0mPs"
-DRIVE_CONFIG_FOLDER_ID   = "1rWyZiKe89c7c67eemD33gN4eSLal_FeV"
+# ID du dossier config Drive — injecté via le secret GitHub DRIVE_CONFIG_FOLDER_ID
+DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
+
+# Chargés depuis config.json sur Drive au démarrage (_charger_config)
+DRIVE_CONTROLE_FOLDER_ID = ""
+DRIVE_BDC_FOLDER_ID      = ""
 _CONFIG_FILES            = ["gencod_adresses.csv", "libelles_dict.csv"]
 
 TOKEN_FILE         = os.path.expanduser("~/.auto_prepa_token.json")
 SCOPES             = ["https://www.googleapis.com/auth/drive"]
-EMAIL_DESTINATAIRE = "superu.arnage.drive@systeme-u.fr"
+EMAIL_DESTINATAIRE = ""  # chargé depuis config.json
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -713,6 +716,45 @@ def envoyer_email_pdf(pdf_path, date_j1, nb_ecart, manquant, surplus):
 
 
 # ─────────────────────────────────────────────────────────────────
+# Config Drive
+# ─────────────────────────────────────────────────────────────────
+
+def _charger_config():
+    """Charge config.json depuis DRIVE_CONFIG_FOLDER_ID et initialise les globals."""
+    global DRIVE_CONTROLE_FOLDER_ID, DRIVE_BDC_FOLDER_ID, EMAIL_DESTINATAIRE
+    if not DRIVE_CONFIG_FOLDER_ID:
+        print("ERREUR : secret DRIVE_CONFIG_FOLDER_ID manquant.")
+        sys.exit(1)
+    import io as _io
+    from googleapiclient.http import MediaIoBaseDownload
+    svc = _get_drive_service()
+    if not svc:
+        print("ERREUR : Drive inaccessible pour charger la config.")
+        sys.exit(1)
+    try:
+        res = svc.files().list(
+            q=f"name='config.json' and '{DRIVE_CONFIG_FOLDER_ID}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        files = res.get("files", [])
+        if not files:
+            print("ERREUR : config.json introuvable dans le dossier Drive config.")
+            sys.exit(1)
+        buf = _io.BytesIO()
+        dl = MediaIoBaseDownload(buf, svc.files().get_media(fileId=files[0]["id"]))
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        cfg = json.loads(buf.getvalue().decode())
+        DRIVE_CONTROLE_FOLDER_ID = cfg["drive_controle_folder_id"]
+        DRIVE_BDC_FOLDER_ID      = cfg["drive_bdc_folder_id"]
+        EMAIL_DESTINATAIRE       = cfg["email_destinataire"]
+    except Exception as e:
+        print(f"ERREUR chargement config Drive : {e}")
+        sys.exit(1)
+
+
+# ─────────────────────────────────────────────────────────────────
 # Pipeline principal
 # ─────────────────────────────────────────────────────────────────
 
@@ -739,6 +781,8 @@ def main():
         sys.exit(1)
 
     fichier_j1, fichier_j = args
+
+    _charger_config()
 
     # 1. Lire les stocks
     print(f"Lecture stock J-1 : {fichier_j1}")
