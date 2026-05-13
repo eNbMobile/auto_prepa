@@ -19,6 +19,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 from controle_stocks import (
     WORK_DIR, BDC_DIR, TOKEN_FILE,
+    _charger_config,
     telecharger_bdc_depuis_drive, extraire_ventes_pdf,
     charger_gencods_r1, charger_libelles_dict, lire_stock,
     telecharger_fichier_controle, telecharger_config_depuis_drive, upload_drive,
@@ -32,7 +33,8 @@ def main():
         with open(TOKEN_FILE, "w") as f:
             f.write(token_json)
 
-    # Télécharger la config depuis Drive si absente (GH Actions)
+    # Charger les IDs Drive depuis config.json, puis les CSVs de config
+    _charger_config()
     telecharger_config_depuis_drive()
 
     # Date cible (défaut : aujourd'hui)
