@@ -55,6 +55,33 @@ def drive_download(access_token, file_id, dest):
         f.write(resp.read())
 
 
+def find_in_archive(access_token, controle_folder_id, subfolder, filename):
+    """Cherche filename dans controle_folder_id/Archives/{subfolder}/. Retourne l'ID ou None."""
+    try:
+        def _find_folder(parent_id, name):
+            params = urllib.parse.urlencode({
+                "q": (f"name='{name}' and '{parent_id}' in parents "
+                      f"and mimeType='application/vnd.google-apps.folder' and trashed=false"),
+                "fields": "files(id)", "pageSize": "10",
+            })
+            url = f"https://www.googleapis.com/drive/v3/files?{params}"
+            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {access_token}"})
+            files = json.loads(urllib.request.urlopen(req).read()).get("files", [])
+            return files[0]["id"] if files else None
+
+        archives_id = _find_folder(controle_folder_id, "Archives")
+        if not archives_id:
+            return None
+        sub_id = _find_folder(archives_id, subfolder)
+        if not sub_id:
+            return None
+        files = drive_list(access_token, sub_id)
+        index = {f["name"]: f["id"] for f in files}
+        return index.get(filename)
+    except Exception:
+        return None
+
+
 def charger_config(access_token):
     """Charge config.json depuis DRIVE_CONFIG_FOLDER_ID via l'API Drive REST."""
     if not DRIVE_CONFIG_FOLDER_ID:
@@ -105,21 +132,16 @@ def main():
     dossier_j1 = (date.today() - timedelta(days=1)).strftime("%d_%m")
     os.makedirs(work_dir, exist_ok=True)
 
-    theo_nom = f"theo_{dossier_j1}.csv"
-    if theo_nom in index:
-        dest = os.path.join(work_dir, theo_nom)
-        print(f"Téléchargement {theo_nom} …", flush=True)
-        drive_download(access, index[theo_nom], dest)
-        print(f"  → {dest} ({os.path.getsize(dest):,} octets)")
-    else:
-        print(f"  {theo_nom} absent de Drive — le théorique sera recalculé depuis les BDC.")
-
-    ventes_nom = f"ventes_{dossier_j1}.csv"
-    if ventes_nom in index:
-        dest = os.path.join(work_dir, ventes_nom)
-        print(f"Téléchargement {ventes_nom} …", flush=True)
-        drive_download(access, index[ventes_nom], dest)
-        print(f"  → {dest} ({os.path.getsize(dest):,} octets)")
+    for nom, subfolder in [(f"theo_{dossier_j1}.csv", "théo"),
+                            (f"ventes_{dossier_j1}.csv", "ventes")]:
+        file_id = index.get(nom) or find_in_archive(access, folder_id, subfolder, nom)
+        if file_id:
+            dest = os.path.join(work_dir, nom)
+            print(f"Téléchargement {nom} …", flush=True)
+            drive_download(access, file_id, dest)
+            print(f"  → {dest} ({os.path.getsize(dest):,} octets)")
+        elif nom.startswith("theo_"):
+            print(f"  {nom} absent — le théorique sera recalculé depuis les BDC.")
 
 
 if __name__ == "__main__":

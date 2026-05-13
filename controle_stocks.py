@@ -544,6 +544,65 @@ def telecharger_config_depuis_drive():
 # Upload Drive (optionnel)
 # ─────────────────────────────────────────────────────────────────
 
+def _get_or_create_subfolder_drive(svc, parent_id, name):
+    """Retourne l'ID d'un sous-dossier Drive, le crée si absent."""
+    try:
+        res = svc.files().list(
+            q=(f"name='{name}' and '{parent_id}' in parents "
+               f"and mimeType='application/vnd.google-apps.folder' and trashed=false"),
+            fields="files(id)",
+        ).execute()
+        files = res.get("files", [])
+        if files:
+            return files[0]["id"]
+        folder = svc.files().create(
+            body={"name": name,
+                  "mimeType": "application/vnd.google-apps.folder",
+                  "parents": [parent_id]},
+            fields="id",
+        ).execute()
+        return folder["id"]
+    except Exception as e:
+        print(f"  Création dossier Drive '{name}' échouée : {e}")
+        return None
+
+
+def upload_to_archive(local_path, subfolder):
+    """Upload dans DRIVE_CONTROLE_FOLDER_ID/Archives/{subfolder}/ (écrase si existant)."""
+    if not DRIVE_CONTROLE_FOLDER_ID:
+        return False
+    try:
+        from googleapiclient.http import MediaFileUpload
+        svc = _get_drive_service()
+        if not svc:
+            return False
+        archives_id = _get_or_create_subfolder_drive(svc, DRIVE_CONTROLE_FOLDER_ID, "Archives")
+        if not archives_id:
+            return False
+        sub_id = _get_or_create_subfolder_drive(svc, archives_id, subfolder)
+        if not sub_id:
+            return False
+        filename = os.path.basename(local_path)
+        res = svc.files().list(
+            q=f"name='{filename}' and '{sub_id}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        existing = res.get("files", [])
+        media = MediaFileUpload(local_path, mimetype="text/plain", resumable=False)
+        if existing:
+            svc.files().update(fileId=existing[0]["id"], media_body=media).execute()
+        else:
+            svc.files().create(
+                body={"name": filename, "parents": [sub_id]},
+                media_body=media, fields="id",
+            ).execute()
+        print(f"  {filename} → Drive Archives/{subfolder}/ OK")
+        return True
+    except Exception as e:
+        print(f"  Upload Archives/{subfolder}/ échoué : {e}")
+        return False
+
+
 def upload_drive(local_path):
     if not DRIVE_CONTROLE_FOLDER_ID:
         print("  DRIVE_CONTROLE_FOLDER_ID non configuré — upload ignoré.")
@@ -909,6 +968,7 @@ def main():
 
     print("\nUpload Drive …")
     upload_drive(nom_sortie)
+    upload_to_archive(nom_sortie, "écarts")
 
     if nb_ecart > 0:
         print("\nGénération PDF écarts …")

@@ -22,7 +22,8 @@ from controle_stocks import (
     _charger_config,
     telecharger_bdc_depuis_drive, extraire_ventes_pdf,
     charger_gencods_r1, charger_libelles_dict, lire_stock,
-    telecharger_fichier_controle, telecharger_config_depuis_drive, upload_drive,
+    telecharger_fichier_controle, telecharger_config_depuis_drive,
+    upload_to_archive,
 )
 
 
@@ -95,7 +96,7 @@ def main():
             w.writerow([gencod, ventes[gencod], libelles.get(gencod, "")])
     print(f"  → {chemin} ({len(ventes)} lignes)")
 
-    upload_drive(chemin)
+    upload_to_archive(chemin, "ventes")
 
     # Calculer le théorique (j1 - ventes) et l'uploader
     print("\nTéléchargement j1.xlsx pour calcul théorique …")
@@ -128,7 +129,7 @@ def main():
                 w.writerow([gencod, lib, _fmt(s_j1_v), _fmt(v_val), _fmt(s_theo)])
                 nb_theo += 1
         print(f"  → {chemin_theo} ({nb_theo} lignes)")
-        upload_drive(chemin_theo)
+        upload_to_archive(chemin_theo, "théo")
     else:
         print("  j1.xlsx indisponible — théorique non calculé.")
 
