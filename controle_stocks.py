@@ -797,7 +797,12 @@ def main():
         if not present_j1: absents.append("J-1")
         if not present_j:  absents.append("J")
 
-        statut = f"ABSENT_{'+'.join(absents)}" if absents else ("OK" if abs(ecart) < 0.001 else "ECART")
+        if absents:
+            statut = f"ABSENT_{'+'.join(absents)}"
+        elif s_j1 == 0 and s_j == 0:
+            statut = "OK"
+        else:
+            statut = "OK" if abs(ecart) < 0.001 else "ECART"
         # tuple : gencod, s_j1, v, s_theo, s_j, ecart, statut, libelle
         row = (gencod, s_j1, v, s_theo, s_j, ecart, statut, lib)
         (orphelins if absents else compares).append(row)
