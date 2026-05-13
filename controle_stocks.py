@@ -567,8 +567,11 @@ def _get_or_create_subfolder_drive(svc, parent_id, name):
         return None
 
 
-def upload_to_archive(local_path, subfolder):
-    """Upload dans DRIVE_CONTROLE_FOLDER_ID/Archives/{subfolder}/ (écrase si existant)."""
+def upload_to_archive(local_path, subfolder, filename=None):
+    """Upload dans DRIVE_CONTROLE_FOLDER_ID/Archives/{subfolder}/ (écrase si existant).
+
+    filename : nom cible sur Drive (défaut : basename de local_path).
+    """
     if not DRIVE_CONTROLE_FOLDER_ID:
         return False
     try:
@@ -582,13 +585,19 @@ def upload_to_archive(local_path, subfolder):
         sub_id = _get_or_create_subfolder_drive(svc, archives_id, subfolder)
         if not sub_id:
             return False
-        filename = os.path.basename(local_path)
+        if filename is None:
+            filename = os.path.basename(local_path)
+        ext = os.path.splitext(local_path)[1].lower()
+        if ext in (".xlsx", ".xls"):
+            mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        else:
+            mime = "text/plain"
         res = svc.files().list(
             q=f"name='{filename}' and '{sub_id}' in parents and trashed=false",
             fields="files(id)",
         ).execute()
         existing = res.get("files", [])
-        media = MediaFileUpload(local_path, mimetype="text/plain", resumable=False)
+        media = MediaFileUpload(local_path, mimetype=mime, resumable=False)
         if existing:
             svc.files().update(fileId=existing[0]["id"], media_body=media).execute()
         else:
@@ -852,6 +861,7 @@ def main():
     print(f"Lecture stock J   : {fichier_j}")
     stock_j, libelles_stock_j = lire_stock(fichier_j)
     print(f"  → {len(stock_j)} gencods")
+    upload_to_archive(fichier_j, "stocks", f"stock_{date.today().strftime('%d_%m_%Y')}_j.xlsx")
     for g, l in libelles_stock_j.items():
         if g not in libelles_stock:
             libelles_stock[g] = l

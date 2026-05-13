@@ -12,7 +12,7 @@ import sys
 import os
 import csv
 import subprocess
-from datetime import date
+from datetime import date, timedelta
 
 # Importer les fonctions partagées depuis controle_stocks
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -102,6 +102,8 @@ def main():
     print("\nTéléchargement j1.xlsx pour calcul théorique …")
     j1_path = telecharger_fichier_controle('j1.xlsx')
     if j1_path:
+        veille = date_cible - timedelta(days=1)
+        upload_to_archive(j1_path, "stocks", f"stock_{veille.strftime('%d_%m_%Y')}_j1.xlsx")
         stock_j1, libelles_j1 = lire_stock(j1_path)
         libelles_dict = charger_libelles_dict()
         gencods_r1    = charger_gencods_r1()
