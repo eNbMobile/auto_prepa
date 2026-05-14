@@ -179,7 +179,7 @@ def main():
     libelles_dict = charger_libelles_dict()
 
     def _lib(g):
-        return (libelles.get(g) or libelles_dict.get(g) or "")
+        return (libelles_dict.get(g) or libelles.get(g) or "")
 
     os.makedirs(WORK_DIR, exist_ok=True)
 
