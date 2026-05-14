@@ -219,8 +219,9 @@ def main():
     chemin_tv = os.path.join(WORK_DIR, nom_tv)
     with open(chemin_tv, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f, delimiter=";")
-        w.writerow(["gencod", "libelle", "adresse", "ventes_mois", "nomenclature"])
-        w.writerows(top)
+        w.writerow(["gencod", "libelle", "ventes_mois"])
+        for g, lib, _adresse, qty, _nomen in top:
+            w.writerow([g, lib, qty])
     print(f"  Top ventes ELDPH hors R1 : {len(top)} produits")
     print(f"  → {nom_tv}")
     upload_to_archive(chemin_tv, "analyses")
