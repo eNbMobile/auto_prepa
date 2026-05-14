@@ -251,8 +251,8 @@ def charger_gencods_r1():
 
 # Quantité en début de ligne + libellé (première ligne du bloc produit)
 _RE_QTY    = re.compile(r'^\s{0,8}(\d{1,3})\s{10,}(.+)')
-# Gencod EAN (≥5 chiffres) sur ligne fortement indentée
-_RE_GENCOD = re.compile(r'^\s{8,}(\d{13})(?!\d)')
+# Gencod EAN sur ligne fortement indentée — 8 à 13 chiffres (gencods courts sans zéros de tête)
+_RE_GENCOD = re.compile(r'^\s{8,}(\d{8,13})(?!\d)')
 
 
 def extraire_ventes_pdf(texte, gencods_r1):
@@ -264,7 +264,7 @@ def extraire_ventes_pdf(texte, gencods_r1):
     for line in texte.splitlines():
         m_g = _RE_GENCOD.match(line)
         if m_g:
-            gencod = m_g.group(1)
+            gencod = m_g.group(1).zfill(13)
             if gencods_r1 is None or gencod in gencods_r1:
                 ventes[gencod] = ventes.get(gencod, 0) + (pending_qty or 1)
                 if pending_label and gencod not in libelles:
