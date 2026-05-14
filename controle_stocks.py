@@ -56,7 +56,7 @@ DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
 # Chargés depuis config.json sur Drive au démarrage (_charger_config)
 DRIVE_CONTROLE_FOLDER_ID = ""
 DRIVE_BDC_FOLDER_ID      = ""
-_CONFIG_FILES            = ["gencod_adresses.csv", "libelles_dict.csv"]
+_CONFIG_FILES            = ["gencod_adresses.csv", "libelles_dict.csv", "gencod_nomenclatures.csv"]
 
 TOKEN_FILE         = os.path.expanduser("~/.auto_prepa_token.json")
 SCOPES             = ["https://www.googleapis.com/auth/drive"]

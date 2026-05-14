@@ -1,0 +1,51 @@
+name: Analyse Mensuelle
+
+on:
+  schedule:
+    - cron: '0 6 1 * *'  # Le 1er de chaque mois à 6h UTC
+  workflow_dispatch:
+    inputs:
+      mois:
+        description: "Mois à analyser (MM/AAAA) — laisser vide pour le mois précédent"
+        required: false
+        type: string
+
+jobs:
+  analyse:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer les dépendances pip
+        run: pip install -r requirements.txt
+
+      - name: Lancer l'analyse mensuelle
+        env:
+          GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          WORK_DIR: "v 4.0.0"
+        run: |
+          MOIS_ARG=""
+          if [ -n "${{ inputs.mois }}" ]; then
+            MOIS_ARG="--mois ${{ inputs.mois }}"
+          fi
+          python3 analyse_mensuelle.py $MOIS_ARG
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+          fi
