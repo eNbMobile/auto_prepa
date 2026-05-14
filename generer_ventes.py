@@ -68,7 +68,6 @@ def main():
         sys.exit(1)
 
     print(f"  {len(pdfs)} BonDeCommande(s) …")
-    gencods_r1 = charger_gencods_r1()
 
     ventes = {}
     libelles = {}
@@ -77,7 +76,7 @@ def main():
                             capture_output=True, text=True)
         if not pt.stdout.strip():
             continue
-        v, l = extraire_ventes_pdf(pt.stdout, gencods_r1)
+        v, l = extraire_ventes_pdf(pt.stdout, None)
         for gencod, qty in v.items():
             ventes[gencod] = ventes.get(gencod, 0) + qty
             if gencod not in libelles and gencod in l:
