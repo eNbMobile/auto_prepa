@@ -1,17 +1,4 @@
 #!/usr/bin/env python3
-"""
-download_stocks.py — Télécharge stock_j1.xlsx et stock_j.xlsx depuis le dossier Drive contrôle.
-
-Utilisé par le workflow GitHub Actions controle_stocks.yml.
-Variable d'environnement requise :
-  GOOGLE_TOKEN_JSON — JSON du token OAuth2 (même secret que auto_prepa)
-
-Attend deux fichiers nommés exactement dans le dossier DRIVE_CONTROLE_FOLDER_ID :
-  stock_j1.xlsx   (stock J-1)
-  stock_j.xlsx    (stock J)
-
-Télécharge les fichiers dans le répertoire courant.
-"""
 
 import json
 import os
@@ -22,7 +9,6 @@ from datetime import date, timedelta
 
 DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
 EXPECTED = ["j1.xlsx", "j.xlsx"]
-
 
 def get_access_token(token):
     data = urllib.parse.urlencode({
@@ -47,13 +33,11 @@ def drive_list(access_token, folder_id):
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {access_token}"})
     return json.loads(urllib.request.urlopen(req).read()).get("files", [])
 
-
 def drive_download(access_token, file_id, dest):
     url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {access_token}"})
     with urllib.request.urlopen(req) as resp, open(dest, "wb") as f:
         f.write(resp.read())
-
 
 def find_in_archive(access_token, controle_folder_id, subfolder, filename):
     """Cherche filename dans controle_folder_id/Archives/{subfolder}/. Retourne l'ID ou None."""
@@ -81,7 +65,6 @@ def find_in_archive(access_token, controle_folder_id, subfolder, filename):
     except Exception:
         return None
 
-
 def charger_config(access_token):
     """Charge config.json depuis DRIVE_CONFIG_FOLDER_ID via l'API Drive REST."""
     if not DRIVE_CONFIG_FOLDER_ID:
@@ -95,7 +78,6 @@ def charger_config(access_token):
     url = f"https://www.googleapis.com/drive/v3/files/{index['config.json']}?alt=media"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {access_token}"})
     return json.loads(urllib.request.urlopen(req).read())
-
 
 def main():
     token_json = os.environ.get("GOOGLE_TOKEN_JSON", "").strip()
@@ -127,7 +109,6 @@ def main():
 
     print("Stocks téléchargés.")
 
-    # Télécharger les fichiers pré-calculés de J-1 si disponibles
     work_dir   = os.environ.get("WORK_DIR", "v 4.0.0")
     dossier_j1 = (date.today() - timedelta(days=1)).strftime("%d_%m")
     os.makedirs(work_dir, exist_ok=True)
@@ -142,7 +123,6 @@ def main():
             print(f"  → {dest} ({os.path.getsize(dest):,} octets)")
         elif nom.startswith("theo_"):
             print(f"  {nom} absent — le théorique sera recalculé depuis les BDC.")
-
 
 if __name__ == "__main__":
     main()
