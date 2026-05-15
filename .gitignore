@@ -25,6 +25,13 @@ v 4.0.0/BonDeCommande_*.pdf
 v 4.0.0/tmp*
 v 4.0.0/temp*
 
+# Scripts CI — gérés sur Drive (scripts/)
+auto_prepa.py
+controle_stocks.py
+generer_ventes.py
+analyse_mensuelle.py
+download_stocks.py
+
 # Fichiers de config téléchargés depuis Drive
 v 4.0.0/chemin_prepa_mono.csv
 v 4.0.0/chemin_prepa_ramasse.csv

@@ -16,7 +16,7 @@ jobs:
       - name: Vérifier nouveaux emails Gmail
         id: check_pdfs
         env:
-          GOOGLE_TOKEN_JSON:     ${{ secrets.GOOGLE_TOKEN_JSON }}
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
           DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
         run: |
           python3 - <<'EOF'
@@ -41,7 +41,7 @@ jobs:
           access = resp["access_token"]
           headers = {"Authorization": f"Bearer {access}"}
 
-          # Charger les filtres depuis Drive (gmail_filters.json dans le dossier config)
+          # Charger les filtres depuis Drive (gmail_filters.json)
           cfg = None
           config_folder_id = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "").strip()
           if config_folder_id:
@@ -78,8 +78,7 @@ jobs:
           has_new = False
           for q in queries:
               url = "https://gmail.googleapis.com/gmail/v1/users/me/messages?" + urllib.parse.urlencode({
-                  "q": q,
-                  "maxResults": "1",
+                  "q": q, "maxResults": "1",
               })
               try:
                   res = json.loads(urllib.request.urlopen(
@@ -90,7 +89,7 @@ jobs:
                       break
               except Exception as e:
                   print(f"Erreur Gmail : {e}")
-                  has_new = True  # En cas d'erreur, lancer quand même
+                  has_new = True
                   break
 
           result = "true" if has_new else "false"
@@ -121,12 +120,13 @@ jobs:
         if: steps.check_pdfs.outputs.has_new == 'true'
         run: pip install -r requirements.txt
 
-      - name: Exécuter auto_prepa.py
+      - name: Exécuter auto_prepa
         if: steps.check_pdfs.outputs.has_new == 'true'
         env:
-          GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
           DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
-        run: python3 auto_prepa.py
+          WORK_DIR: "v 4.0.0"
+        run: python3 bootstrap.py auto_prepa.py
 
       - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
         if: steps.check_pdfs.outputs.has_new == 'true'
