@@ -26,7 +26,7 @@ import controle_stocks
 from controle_stocks import (
     WORK_DIR, TOKEN_FILE,
     _charger_config, _get_drive_service, _get_or_create_subfolder_drive,
-    telecharger_config_depuis_drive, upload_to_archive,
+    _lire_config_drive, upload_to_archive,
     charger_libelles_dict,
 )
 
@@ -72,37 +72,35 @@ def _lister_ventes_mois(svc, folder_id, mois_2d):
 # ─────────────────────────────────────────────────────────────────
 
 def _charger_adresses():
-    """Retourne {gencod: adresse} depuis gencod_adresses.csv (premier gencod wins)."""
-    chemin = os.path.join(WORK_DIR, "gencod_adresses.csv")
-    if not os.path.exists(chemin):
-        print("  ATTENTION : gencod_adresses.csv absent — adresses inconnues.")
+    """Retourne {gencod: adresse} depuis gencod_adresses.csv (Drive, premier gencod wins)."""
+    contenu = _lire_config_drive("gencod_adresses.csv")
+    if contenu is None:
+        print("  ATTENTION : gencod_adresses.csv indisponible — adresses inconnues.")
         return {}
     d = {}
-    with open(chemin, newline="", encoding="utf-8-sig") as f:
-        for row in csv.reader(f, delimiter=";"):
-            if len(row) >= 2:
-                g = row[0].strip()
-                if g.isdigit():
-                    g = g.lstrip("0").zfill(13)
-                if g not in d:
-                    d[g] = row[1].strip()
+    for row in csv.reader(io.StringIO(contenu), delimiter=";"):
+        if len(row) >= 2:
+            g = row[0].strip()
+            if g.isdigit():
+                g = g.lstrip("0").zfill(13)
+            if g not in d:
+                d[g] = row[1].strip()
     return d
 
 
 def _charger_nomenclatures():
-    """Retourne {gencod: code_nomenclature} depuis gencod_nomenclatures.csv."""
-    chemin = os.path.join(WORK_DIR, "gencod_nomenclatures.csv")
-    if not os.path.exists(chemin):
-        print("  ATTENTION : gencod_nomenclatures.csv absent.")
+    """Retourne {gencod: code_nomenclature} depuis gencod_nomenclatures.csv (Drive)."""
+    contenu = _lire_config_drive("gencod_nomenclatures.csv")
+    if contenu is None:
+        print("  ATTENTION : gencod_nomenclatures.csv indisponible.")
         return {}
     d = {}
-    with open(chemin, newline="", encoding="utf-8-sig") as f:
-        for row in csv.reader(f, delimiter=";"):
-            if len(row) >= 2:
-                g = row[0].strip()
-                if g.isdigit():
-                    g = g.lstrip("0").zfill(13)
-                d[g] = row[1].strip()
+    for row in csv.reader(io.StringIO(contenu), delimiter=";"):
+        if len(row) >= 2:
+            g = row[0].strip()
+            if g.isdigit():
+                g = g.lstrip("0").zfill(13)
+            d[g] = row[1].strip()
     return d
 
 
@@ -118,7 +116,6 @@ def main():
             f.write(token_json)
 
     _charger_config()
-    telecharger_config_depuis_drive()
 
     # Mois cible
     args = sys.argv[1:]

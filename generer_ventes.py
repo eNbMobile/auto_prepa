@@ -22,7 +22,7 @@ from controle_stocks import (
     _charger_config,
     telecharger_bdc_depuis_drive, extraire_ventes_pdf,
     charger_gencods_r1, charger_libelles_dict, lire_stock,
-    telecharger_fichier_controle, telecharger_config_depuis_drive,
+    telecharger_fichier_controle,
     upload_to_archive,
 )
 
@@ -36,7 +36,6 @@ def main():
 
     # Charger les IDs Drive depuis config.json, puis les CSVs de config
     _charger_config()
-    telecharger_config_depuis_drive()
 
     # Date cible (défaut : aujourd'hui)
     date_cible = date.today()

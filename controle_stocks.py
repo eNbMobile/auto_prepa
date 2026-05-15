@@ -21,6 +21,7 @@ Calcul :
 import sys
 import os
 import csv
+import io
 import json
 import re
 import shutil
@@ -56,7 +57,10 @@ DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
 # Chargés depuis config.json sur Drive au démarrage (_charger_config)
 DRIVE_CONTROLE_FOLDER_ID = ""
 DRIVE_BDC_FOLDER_ID      = ""
-_CONFIG_FILES            = ["gencod_adresses.csv", "libelles_dict.csv", "gencod_nomenclatures.csv"]
+
+# Cache mémoire pour les fichiers config Drive (évite les téléchargements répétés)
+_config_drive_index = None   # {nom: file_id}
+_config_drive_cache = {}     # {nom: contenu texte}
 
 TOKEN_FILE         = os.path.expanduser("~/.auto_prepa_token.json")
 SCOPES             = ["https://www.googleapis.com/auth/drive"]
@@ -201,19 +205,57 @@ def lire_stock(chemin):
 # Dictionnaire libellés coursesu.com (build_libelles.py)
 # ─────────────────────────────────────────────────────────────────
 
+def _lire_config_drive(nom):
+    """Retourne le contenu texte d'un fichier config Drive (cache mémoire par session)."""
+    global _config_drive_index
+    if nom in _config_drive_cache:
+        return _config_drive_cache[nom]
+    if not DRIVE_CONFIG_FOLDER_ID:
+        return None
+    try:
+        from googleapiclient.http import MediaIoBaseDownload
+        svc = _get_drive_service()
+        if not svc:
+            return None
+        if _config_drive_index is None:
+            res = svc.files().list(
+                q=f"'{DRIVE_CONFIG_FOLDER_ID}' in parents and trashed=false",
+                fields="files(id,name)",
+            ).execute()
+            _config_drive_index = {f["name"]: f["id"] for f in res.get("files", [])}
+        if nom not in _config_drive_index:
+            print(f"  {nom} absent du dossier config Drive.")
+            return None
+        req = svc.files().get_media(fileId=_config_drive_index[nom])
+        buf = io.BytesIO()
+        dl  = MediaIoBaseDownload(buf, req)
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        contenu = buf.getvalue().decode("utf-8-sig")
+        _config_drive_cache[nom] = contenu
+        return contenu
+    except Exception as e:
+        print(f"  _lire_config_drive({nom}) échoué : {e}")
+        return None
+
+
 def charger_libelles_dict():
-    """Charge libelles_dict.csv si disponible. Retourne {gencod: libelle}."""
-    chemin = os.path.join(WORK_DIR, "libelles_dict.csv")
-    if not os.path.exists(chemin):
-        return {}
+    """Charge libelles_dict.csv depuis Drive (mémoire) ou disque. Retourne {gencod: libelle}."""
+    contenu = _lire_config_drive("libelles_dict.csv")
+    if contenu is None:
+        chemin = os.path.join(WORK_DIR, "libelles_dict.csv")
+        if not os.path.exists(chemin):
+            return {}
+        with open(chemin, encoding='utf-8-sig') as f:
+            contenu = f.read()
     d = {}
-    with open(chemin, newline='', encoding='utf-8-sig') as f:
-        for row in csv.reader(f, delimiter=';'):
-            if len(row) >= 2 and row[1].strip():
-                g = row[0].strip()
-                if g.isdigit():
-                    g = g.lstrip('0').zfill(13)
-                d[g] = row[1].strip()
+    for row in csv.reader(io.StringIO(contenu), delimiter=';'):
+        if len(row) >= 2 and row[1].strip():
+            g = row[0].strip()
+            if g.isdigit():
+                g = g.lstrip('0').zfill(13)
+            d[g] = row[1].strip()
     print(f"  {len(d)} libellés chargés depuis libelles_dict.csv")
     return d
 
@@ -224,27 +266,30 @@ def charger_libelles_dict():
 
 def charger_gencods_r1():
     """
-    Lit gencod_adresses.csv (format gencod;adresse) et retourne l'ensemble
-    des gencods dont l'adresse commence par 'R1'.
+    Lit gencod_adresses.csv depuis Drive (mémoire) ou disque.
+    Retourne l'ensemble des gencods dont l'adresse commence par 'R1'.
     """
-    chemin = os.path.join(WORK_DIR, "gencod_adresses.csv")
-    if not os.path.exists(chemin):
-        print(f"  AVERTISSEMENT : {chemin} introuvable — aucun filtre R1 appliqué.")
-        return None  # None = pas de filtre
+    contenu = _lire_config_drive("gencod_adresses.csv")
+    if contenu is None:
+        chemin = os.path.join(WORK_DIR, "gencod_adresses.csv")
+        if not os.path.exists(chemin):
+            print("  AVERTISSEMENT : gencod_adresses.csv introuvable — aucun filtre R1 appliqué.")
+            return None
+        with open(chemin, encoding='utf-8-sig', errors='replace') as f:
+            contenu = f.read()
     gencods = set()
-    with open(chemin, newline='', encoding='utf-8-sig', errors='replace') as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split(';', 1)
-            if len(parts) < 2:
-                continue
-            gencod, adresse = parts[0].strip(), parts[1].strip()
-            if gencod.isdigit():
-                gencod = gencod.lstrip('0').zfill(13)
-            if adresse.startswith('R1'):
-                gencods.add(gencod)
+    for line in contenu.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(';', 1)
+        if len(parts) < 2:
+            continue
+        gencod, adresse = parts[0].strip(), parts[1].strip()
+        if gencod.isdigit():
+            gencod = gencod.lstrip('0').zfill(13)
+        if adresse.startswith('R1'):
+            gencods.add(gencod)
     print(f"  {len(gencods)} gencods R1 chargés depuis gencod_adresses.csv")
     return gencods
 
@@ -504,40 +549,6 @@ def telecharger_fichier_controle(nom, dest=None):
         return None
 
 
-def telecharger_config_depuis_drive():
-    """Télécharge gencod_adresses.csv et libelles_dict.csv depuis MobUDrive_config si absents."""
-    if all(os.path.exists(os.path.join(WORK_DIR, f)) for f in _CONFIG_FILES):
-        return  # déjà présents (exécution locale)
-    try:
-        import io
-        from googleapiclient.http import MediaIoBaseDownload
-        svc = _get_drive_service()
-        if not svc:
-            return
-        res = svc.files().list(
-            q=f"'{DRIVE_CONFIG_FOLDER_ID}' in parents and trashed=false",
-            fields="files(id,name)",
-        ).execute()
-        index = {f["name"]: f["id"] for f in res.get("files", [])}
-        os.makedirs(WORK_DIR, exist_ok=True)
-        for nom in _CONFIG_FILES:
-            dest = os.path.join(WORK_DIR, nom)
-            if os.path.exists(dest):
-                continue
-            if nom not in index:
-                print(f"  {nom} absent de MobUDrive_config.")
-                continue
-            req = svc.files().get_media(fileId=index[nom])
-            buf = io.BytesIO()
-            dl  = MediaIoBaseDownload(buf, req)
-            done = False
-            while not done:
-                _, done = dl.next_chunk()
-            with open(dest, "wb") as f:
-                f.write(buf.getvalue())
-            print(f"  Config : {nom} ({os.path.getsize(dest):,} octets)")
-    except Exception as e:
-        print(f"  telecharger_config_depuis_drive() échoué : {e}")
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -865,9 +876,6 @@ def main():
     for g, l in libelles_stock_j.items():
         if g not in libelles_stock:
             libelles_stock[g] = l
-
-    # Télécharger la config depuis Drive si absente (GH Actions)
-    telecharger_config_depuis_drive()
 
     # Charger le dictionnaire complet coursesu.com (priorité sur xlsx tronqué)
     print("\nChargement libellés coursesu ...")
