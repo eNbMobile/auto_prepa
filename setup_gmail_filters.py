@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""
-setup_gmail_filters.py — Upload gmail_filters_local.json vers le dossier config Drive.
-
-Crée gmail_filters_local.json (gitignore) avec les valeurs réelles, puis lance :
-  DRIVE_CONFIG_FOLDER_ID=<id> python3 setup_gmail_filters.py
-
-Le fichier est uploadé sur Drive sous le nom gmail_filters.json.
-"""
-
 import json
 import os
 import sys
@@ -18,7 +9,6 @@ sys.path.insert(0, _HERE)
 from controle_stocks import _get_drive_service
 
 LOCAL_FILE = os.path.join(_HERE, "gmail_filters_local.json")
-
 
 def main():
     if not os.path.exists(LOCAL_FILE):
@@ -66,7 +56,6 @@ def main():
             print("gmail_filters.json créé sur Drive.")
     finally:
         os.unlink(tmp_path)
-
 
 if __name__ == "__main__":
     main()
