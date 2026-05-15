@@ -6,7 +6,7 @@ Crée ou écrase le fichier gmail_filters.json dans le dossier de config Drive.
 À lancer UNE SEULE FOIS après avoir adapté les filtres ci-dessous.
 
 Usage :
-  python3 setup_gmail_filters.py
+  DRIVE_CONFIG_FOLDER_ID=<id_du_dossier> python3 setup_gmail_filters.py
 """
 
 import json
@@ -17,12 +17,7 @@ import tempfile
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 
-from controle_stocks import (
-    TOKEN_FILE, WORK_DIR,
-    _charger_config, _get_drive_service,
-    telecharger_config_depuis_drive,
-)
-import controle_stocks
+from controle_stocks import TOKEN_FILE, _get_drive_service
 
 # ── Adaptez ces filtres Gmail à votre convenance ────────────────────────────
 FILTERS = [
@@ -34,16 +29,15 @@ FILTERS = [
 
 
 def main():
-    _charger_config()
+    config_folder_id = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "").strip()
+    if not config_folder_id:
+        print("ERREUR : DRIVE_CONFIG_FOLDER_ID non défini.")
+        print("  Usage : DRIVE_CONFIG_FOLDER_ID=<id> python3 setup_gmail_filters.py")
+        sys.exit(1)
 
     svc = _get_drive_service()
     if not svc:
         print("ERREUR : service Drive indisponible.")
-        sys.exit(1)
-
-    config_folder_id = controle_stocks.DRIVE_CONFIG_FOLDER_ID
-    if not config_folder_id:
-        print("ERREUR : DRIVE_CONFIG_FOLDER_ID non configuré.")
         sys.exit(1)
 
     from googleapiclient.http import MediaFileUpload
@@ -61,10 +55,7 @@ def main():
 
         media = MediaFileUpload(tmp_path, mimetype="application/json")
         if existing:
-            svc.files().update(
-                fileId=existing[0]["id"],
-                media_body=media,
-            ).execute()
+            svc.files().update(fileId=existing[0]["id"], media_body=media).execute()
             print("gmail_filters.json mis à jour sur Drive.")
         else:
             svc.files().create(
