@@ -24,10 +24,11 @@ v 4.0.0/BonDeCommande_*.pdf
 v 4.0.0/tmp*
 v 4.0.0/temp*
 
-# Fichiers de config téléchargés depuis Drive (gencod_adresses.csv géré manuellement dans git)
+# Fichiers de config téléchargés depuis Drive
 v 4.0.0/chemin_prepa_mono.csv
 v 4.0.0/chemin_prepa_ramasse.csv
 v 4.0.0/gencod_nomenclatures.csv
+v 4.0.0/gencod_adresses.csv
 
 # Exports stock locaux
 *.xlsx
