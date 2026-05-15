@@ -106,10 +106,6 @@ jobs:
           key: pdf-cache-${{ github.run_id }}
           restore-keys: pdf-cache-
 
-      - name: Rendre le binaire exécutable
-        if: steps.check_pdfs.outputs.has_new == 'true'
-        run: chmod +x "v 4.0.0/prepa_drive_degrade"
-
       - name: Installer pdftotext (poppler-utils)
         if: steps.check_pdfs.outputs.has_new == 'true'
         run: sudo apt-get install -y poppler-utils

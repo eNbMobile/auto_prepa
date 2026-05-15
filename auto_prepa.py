@@ -374,8 +374,8 @@ def upload_bon(drive_svc, local_path):
         return False
 
 def telecharger_config_drive(drive_svc):
-    """Télécharge les CSV de config depuis Drive vers WORK_DIR."""
-    for filename in CONFIG_FILES:
+    """Télécharge les CSV de config et le binaire depuis Drive vers WORK_DIR."""
+    for filename in CONFIG_FILES + ["prepa_drive_degrade"]:
         dest = os.path.join(WORK_DIR, filename)
         try:
             res = drive_svc.files().list(
@@ -387,6 +387,8 @@ def telecharger_config_drive(drive_svc):
                 print(f"  ERREUR config : {filename} introuvable sur Drive")
                 continue
             download_pdf(drive_svc, files[0]["id"], dest)
+            if filename == "prepa_drive_degrade":
+                os.chmod(dest, 0o755)
         except Exception as e:
             print(f"  ERREUR config {filename} : {e}")
 
