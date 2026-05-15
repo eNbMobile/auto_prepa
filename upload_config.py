@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""
-upload_config.py — Upload un fichier vers le dossier config Drive.
-
-Usage :
-  DRIVE_CONFIG_FOLDER_ID=<id> python3 upload_config.py <fichier>
-
-Exemple :
-  DRIVE_CONFIG_FOLDER_ID=1AbC... python3 upload_config.py "v 4.0.0/gencod_adresses.csv"
-"""
-
 import os
 import sys
 
@@ -16,7 +6,6 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 
 from controle_stocks import _get_drive_service
-
 
 def main():
     config_folder_id = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "").strip()
@@ -66,7 +55,6 @@ def main():
             fields="id",
         ).execute()
         print(f"Drive config/{nom} — créé.")
-
 
 if __name__ == "__main__":
     main()
