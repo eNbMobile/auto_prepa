@@ -57,11 +57,12 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
 ]
 
-# Label Gmail pour archiver les confirmations de commande traitées
-GMAIL_LABEL_CONF = "BDC_Conf_Traites"
-
-# Label Gmail pour archiver les modifications/annulations traitées
-GMAIL_LABEL_NOM = "BDC_Modif_Traites"
+# Chargés depuis gmail_filters.json sur Drive (_charger_gmail_filters)
+GMAIL_CONF_FROM      = ""
+GMAIL_CONF_SUBJECT   = ""
+GMAIL_LABEL_CONF     = ""
+GMAIL_MODIF_SUBJECTS = []
+GMAIL_LABEL_NOM      = ""
 
 # ID du dossier config Drive — injecté via le secret GitHub DRIVE_CONFIG_FOLDER_ID
 DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
@@ -219,7 +220,7 @@ def telecharger_bons_email(gmail_svc, cache_dir, traites):
     Retourne {filename: dossier_jj_mm} pour les nouveaux PDFs téléchargés.
     """
     label_id = _get_or_create_gmail_label(gmail_svc, GMAIL_LABEL_CONF)
-    q = f'from:no-reply@systeme-u.fr subject:"Confirmation commande" -label:{GMAIL_LABEL_CONF}'
+    q = f'from:{GMAIL_CONF_FROM} subject:"{GMAIL_CONF_SUBJECT}" -label:{GMAIL_LABEL_CONF}'
 
     try:
         res = gmail_svc.users().messages().list(userId='me', q=q, maxResults=50).execute()
@@ -300,11 +301,9 @@ def traiter_modifications_clients(drive_svc, gmail_svc, traites):
     """Lit les mails de modification de commande, supprime les anciens bons, archive les mails."""
     try:
         label_id = _get_or_create_gmail_label(gmail_svc, GMAIL_LABEL_NOM)
-        q_modif  = f'subject:"Modification par le client de la commande" -label:{GMAIL_LABEL_NOM}'
-        q_annul  = f'subject:"Alerte annulation par le client commande" -label:{GMAIL_LABEL_NOM}'
-        q_annul2 = f'subject:"Alerte annulation commande" -label:{GMAIL_LABEL_NOM}'
         messages = []
-        for q in [q_modif, q_annul, q_annul2]:
+        for subj in GMAIL_MODIF_SUBJECTS:
+            q = f'subject:"{subj}" -label:{GMAIL_LABEL_NOM}'
             res = gmail_svc.users().messages().list(
                 userId='me', q=q, maxResults=50).execute()
             messages += res.get('messages', [])
@@ -724,6 +723,35 @@ def _charger_config(drive_svc):
         sys.exit(1)
 
 
+def _charger_gmail_filters(drive_svc):
+    """Charge gmail_filters.json depuis Drive et initialise les globals Gmail."""
+    global GMAIL_CONF_FROM, GMAIL_CONF_SUBJECT, GMAIL_LABEL_CONF
+    global GMAIL_MODIF_SUBJECTS, GMAIL_LABEL_NOM
+    try:
+        res = drive_svc.files().list(
+            q=f"name='gmail_filters.json' and '{DRIVE_CONFIG_FOLDER_ID}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        files = res.get("files", [])
+        if not files:
+            print("ERREUR : gmail_filters.json introuvable dans le dossier Drive config.")
+            sys.exit(1)
+        buf = io.BytesIO()
+        dl = MediaIoBaseDownload(buf, drive_svc.files().get_media(fileId=files[0]["id"]))
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        cfg = json.loads(buf.getvalue().decode("utf-8"))
+        GMAIL_CONF_FROM      = cfg["conf_from"]
+        GMAIL_CONF_SUBJECT   = cfg["conf_subject"]
+        GMAIL_LABEL_CONF     = cfg["conf_label"]
+        GMAIL_MODIF_SUBJECTS = cfg["modif_subjects"]
+        GMAIL_LABEL_NOM      = cfg["modif_label"]
+    except Exception as e:
+        print(f"ERREUR chargement gmail_filters.json : {e}")
+        sys.exit(1)
+
+
 def _main():
     os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -732,6 +760,7 @@ def _main():
     gmail_svc = build("gmail", "v1", credentials=creds)
 
     _charger_config(drive_svc)
+    _charger_gmail_filters(drive_svc)
 
     # Télécharger les fichiers de config depuis Drive
     telecharger_config_drive(drive_svc)

@@ -20,11 +20,17 @@ sys.path.insert(0, _HERE)
 from controle_stocks import TOKEN_FILE, _get_drive_service
 
 # ── Adaptez ces filtres Gmail à votre convenance ────────────────────────────
-FILTERS = [
-    'from:no-reply@systeme-u.fr subject:"Confirmation commande" -label:BDC_Conf_Traites',
-    'subject:"Modification par le client de la commande" -label:BDC_Modif_Traites',
-    'subject:"Alerte annulation" -label:BDC_Modif_Traites',
-]
+FILTERS = {
+    "conf_from":      "no-reply@systeme-u.fr",
+    "conf_subject":   "Confirmation commande",
+    "conf_label":     "BDC_Conf_Traites",
+    "modif_subjects": [
+        "Modification par le client de la commande",
+        "Alerte annulation par le client commande",
+        "Alerte annulation commande",
+    ],
+    "modif_label": "BDC_Modif_Traites",
+}
 # ────────────────────────────────────────────────────────────────────────────
 
 

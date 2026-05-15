@@ -42,7 +42,7 @@ jobs:
           headers = {"Authorization": f"Bearer {access}"}
 
           # Charger les filtres depuis Drive (gmail_filters.json dans le dossier config)
-          queries = []
+          cfg = None
           config_folder_id = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "").strip()
           if config_folder_id:
               try:
@@ -59,15 +59,21 @@ jobs:
                       dl_resp = urllib.request.urlopen(
                           urllib.request.Request(dl_url, headers=headers)
                       ).read()
-                      queries = json.loads(dl_resp.decode("utf-8"))
-                      print(f"  {len(queries)} filtre(s) Gmail chargé(s) depuis Drive")
+                      cfg = json.loads(dl_resp.decode("utf-8"))
+                      print("  gmail_filters.json chargé depuis Drive")
               except Exception as e:
                   print(f"Erreur chargement gmail_filters.json : {e}")
 
-          if not queries:
+          if not cfg:
               print("gmail_filters.json indisponible → lancement par précaution")
               with open(os.environ["GITHUB_OUTPUT"], "a") as f: f.write("has_new=true\n")
               sys.exit(0)
+
+          queries = [
+              f'from:{cfg["conf_from"]} subject:"{cfg["conf_subject"]}" -label:{cfg["conf_label"]}',
+          ] + [
+              f'subject:"{s}" -label:{cfg["modif_label"]}' for s in cfg["modif_subjects"]
+          ]
 
           has_new = False
           for q in queries:
