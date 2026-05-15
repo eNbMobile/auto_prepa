@@ -1,22 +1,4 @@
 #!/usr/bin/env python3
-"""
-build_libelles.py — Construit un dictionnaire gencod→libellé complet.
-
-PRÉREQUIS :
-  pip install curl-cffi browser-cookie3 beautifulsoup4
-
-AVANT DE LANCER :
-  Ouvre le site dans Firefox et navigue sur au moins une page produit
-  (pour avoir un cf_clearance valide), puis laisse Firefox ouvert.
-
-UTILISATION :
-  DRIVE_CONFIG_FOLDER_ID=<id> python3 build_libelles.py
-
-RÉSULTAT :
-  v 4.0.0/libelles_dict.csv  (gencod;libelle, reprise automatique si interrompu)
-  Uploadé automatiquement dans le dossier config Drive.
-"""
-
 import os
 import re
 import csv
@@ -39,18 +21,11 @@ from controle_stocks import (
     WORK_DIR, _charger_config, _lire_config_drive, _get_drive_service,
 )
 
-# ─────────────────────────────────────────────────────────────────
-# CONFIGURATION
-# ─────────────────────────────────────────────────────────────────
-
 OUTPUT_CSV = os.path.join(WORK_DIR, "libelles_dict.csv")
 
 DELAI_MIN  = 1.0   # secondes entre requêtes (min)
 DELAI_MAX  = 2.0   # secondes entre requêtes (max)
 SAVE_EVERY = 20    # sauvegarder toutes les N entrées
-
-# ─────────────────────────────────────────────────────────────────
-
 
 def _charger_scraper_config():
     """Charge scraper_config.json depuis Drive. Retourne le dict ou quitte."""
@@ -59,7 +34,6 @@ def _charger_scraper_config():
         print("ERREUR : scraper_config.json introuvable dans le dossier config Drive.")
         sys.exit(1)
     return json.loads(contenu)
-
 
 def lire_gencods_r1():
     contenu = _lire_config_drive("gencod_adresses.csv")
@@ -73,7 +47,6 @@ def lire_gencods_r1():
             gencods.append(p[0].strip())
     return gencods
 
-
 def get_cookies(domain):
     try:
         import browser_cookie3
@@ -82,7 +55,6 @@ def get_cookies(domain):
         print(f"  ERREUR cookies Firefox : {e}")
         print(f"  → Ouvre le site dans Firefox avant de relancer.")
         return {}
-
 
 def chercher_libelle(session, gencod, search_url, headers, tag, css_class):
     """Retourne le libellé via le moteur de recherche du site, ou '' si introuvable."""
@@ -101,7 +73,6 @@ def chercher_libelle(session, gencod, search_url, headers, tag, css_class):
         print(f"    ERREUR réseau {gencod}: {e}")
         return None
 
-
 def charger_dict_existant():
     if not os.path.exists(OUTPUT_CSV):
         return {}
@@ -112,14 +83,12 @@ def charger_dict_existant():
                 d[row[0]] = row[1]
     return d
 
-
 def sauvegarder(resultats):
     os.makedirs(os.path.dirname(OUTPUT_CSV), exist_ok=True)
     with open(OUTPUT_CSV, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f, delimiter=";")
         for g, lib in resultats.items():
             w.writerow([g, lib])
-
 
 def upload_libelles():
     """Uploade libelles_dict.csv dans le dossier config Drive."""
@@ -141,7 +110,6 @@ def upload_libelles():
             media_body=media, fields="id",
         ).execute()
     print(f"  libelles_dict.csv uploadé sur Drive.")
-
 
 def main():
     _charger_config()
@@ -215,7 +183,6 @@ def main():
     print(f"\nDictionnaire complet : {OUTPUT_CSV}")
     print(f"  {trouves} libellés trouvés / {len(resultats)} gencods")
     upload_libelles()
-
-
+  
 if __name__ == "__main__":
     main()
