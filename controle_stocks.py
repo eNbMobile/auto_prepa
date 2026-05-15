@@ -1,22 +1,4 @@
 #!/usr/bin/env python3
-"""
-controle_stocks.py — Comparaison stock théorique vs stock réel
-
-Usage :
-  python controle_stocks.py <stock_j1.csv> <stock_j.csv> [--date JJ/MM/AAAA] [--upload]
-
-Arguments :
-  stock_j1.csv   Export stock J-1 (multi-colonnes, colonnes "Gencod" et "Stock UC" requises)
-  stock_j.csv    Export stock J   (même format)
-
-Options :
-  --date JJ/MM/AAAA  Date de J-1 pour trouver les BDC (défaut : hier)
-  --upload           Upload le CSV résultat vers Google Drive
-
-Calcul :
-  stock_théo = stock_j1 - ventes_j1   (ventes extraites des BonDeCommande du jour J-1)
-  écart      = stock_j - stock_théo
-"""
 
 import sys
 import os
@@ -30,10 +12,6 @@ import zipfile
 import xml.etree.ElementTree as ET
 from datetime import date, timedelta
 
-# ─────────────────────────────────────────────────────────────────
-# CONFIGURATION
-# ─────────────────────────────────────────────────────────────────
-
 _BASE    = os.path.dirname(os.path.abspath(__file__))
 WORK_DIR = os.environ.get("WORK_DIR", os.path.join(_BASE, "v 4.0.0"))
 BDC_DIR  = os.environ.get("BDC_DIR",  os.path.join(_BASE, "BDC"))
@@ -44,21 +22,16 @@ TEMP_FILES = [
     "base_client.txt", "tri_cde.txt", "tri_heures.txt",
     "tmp", "tmp2", "tmp_NEW", "temp", "gentemp.txt", "temp_lib.txt",
 ]
-# Fichiers de sortie du C++ en mode mono (un PDF à la fois)
-# Tuple (nom, idx_libelle, idx_qty)
 _SORTIE_CANDIDATS = [
     ("bon_encaissement.csv", 1, 4),  # gencod;libellé;prix;remise;qty
     ("bon_prepa.txt",        1, 4),  # gencod;libellé;prix;remise;qty (toujours généré)
 ]
 
-# ID du dossier config Drive — injecté via le secret GitHub DRIVE_CONFIG_FOLDER_ID
 DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
 
-# Chargés depuis config.json sur Drive au démarrage (_charger_config)
 DRIVE_CONTROLE_FOLDER_ID = ""
 DRIVE_BDC_FOLDER_ID      = ""
 
-# Cache mémoire pour les fichiers config Drive (évite les téléchargements répétés)
 _config_drive_index = None   # {nom: file_id}
 _config_drive_cache = {}     # {nom: contenu texte}
 
@@ -66,18 +39,12 @@ TOKEN_FILE         = os.path.expanduser("~/.auto_prepa_token.json")
 SCOPES             = ["https://www.googleapis.com/auth/drive"]
 EMAIL_DESTINATAIRE = ""  # chargé depuis config.json
 
-
-# ─────────────────────────────────────────────────────────────────
-# Lecture fichier stock multi-colonnes
-# ─────────────────────────────────────────────────────────────────
-
 def _col_index(ref):
     """Convertit une référence Excel type 'AB' en index 0-based."""
     idx = 0
     for ch in ref:
         idx = idx * 26 + (ord(ch.upper()) - ord('A') + 1)
     return idx - 1
-
 
 def _rows_depuis_xlsx(chemin):
     """
@@ -91,14 +58,12 @@ def _rows_depuis_xlsx(chemin):
     with zipfile.ZipFile(chemin) as zf:
         names = zf.namelist()
 
-        # Chaînes partagées
         shared = []
         if 'xl/sharedStrings.xml' in names:
             with zf.open('xl/sharedStrings.xml') as f:
                 for si in ET.parse(f).findall(f'.//{{{NS}}}si'):
                     shared.append(''.join(e.text or '' for e in si.iter(f'{{{NS}}}t')))
 
-        # Première feuille via relations
         sheet_path = 'xl/worksheets/sheet1.xml'
         if 'xl/workbook.xml' in names and 'xl/_rels/workbook.xml.rels' in names:
             with zf.open('xl/workbook.xml') as f:
@@ -138,7 +103,6 @@ def _rows_depuis_xlsx(chemin):
                 row.append(str(val).strip())
             yield row
 
-
 def _rows_depuis_csv(chemin):
     """Itère les lignes d'un fichier CSV (détection auto du séparateur)."""
     with open(chemin, newline='', encoding='utf-8-sig') as f:
@@ -146,7 +110,6 @@ def _rows_depuis_csv(chemin):
     sep = ';' if sample.count(';') >= sample.count(',') else ','
     with open(chemin, newline='', encoding='utf-8-sig') as f:
         yield from csv.reader(f, delimiter=sep)
-
 
 def lire_stock(chemin):
     """
@@ -200,11 +163,6 @@ def lire_stock(chemin):
         raise ValueError(f"Colonne 'Gencod' introuvable dans {chemin}.")
     return data, libelles
 
-
-# ─────────────────────────────────────────────────────────────────
-# Dictionnaire libellés coursesu.com (build_libelles.py)
-# ─────────────────────────────────────────────────────────────────
-
 def _lire_config_drive(nom):
     """Retourne le contenu texte d'un fichier config Drive (cache mémoire par session)."""
     global _config_drive_index
@@ -239,7 +197,6 @@ def _lire_config_drive(nom):
         print(f"  _lire_config_drive({nom}) échoué : {e}")
         return None
 
-
 def charger_libelles_dict():
     """Charge libelles_dict.csv depuis Drive (mémoire) ou disque. Retourne {gencod: libelle}."""
     contenu = _lire_config_drive("libelles_dict.csv")
@@ -258,11 +215,6 @@ def charger_libelles_dict():
             d[g] = row[1].strip()
     print(f"  {len(d)} libellés chargés depuis libelles_dict.csv")
     return d
-
-
-# ─────────────────────────────────────────────────────────────────
-# Génération des ventes depuis les BonDeCommande de J-1
-# ─────────────────────────────────────────────────────────────────
 
 def charger_gencods_r1():
     """
@@ -294,9 +246,7 @@ def charger_gencods_r1():
     return gencods
 
 
-# Quantité en début de ligne + libellé (première ligne du bloc produit)
 _RE_QTY    = re.compile(r'^\s{0,8}(\d{1,3})\s{10,}(.+)')
-# Gencod EAN sur ligne fortement indentée — 8 à 13 chiffres (gencods courts sans zéros de tête)
 _RE_GENCOD = re.compile(r'^\s{8,}(\d{8,13})(?!\d)')
 
 
