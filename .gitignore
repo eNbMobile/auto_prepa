@@ -30,6 +30,9 @@ v 4.0.0/chemin_prepa_ramasse.csv
 v 4.0.0/gencod_nomenclatures.csv
 v 4.0.0/gencod_adresses.csv
 
+# Fichiers locaux avec valeurs sensibles (jamais committés)
+gmail_filters_local.json
+
 # Exports stock locaux
 *.xlsx
 

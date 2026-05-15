@@ -1,40 +1,34 @@
 #!/usr/bin/env python3
 """
-setup_gmail_filters.py — Upload gmail_filters.json vers le dossier config Drive.
+setup_gmail_filters.py — Upload gmail_filters_local.json vers le dossier config Drive.
 
-Crée ou écrase le fichier gmail_filters.json dans le dossier de config Drive.
-À lancer UNE SEULE FOIS après avoir adapté les filtres ci-dessous.
+Crée gmail_filters_local.json (gitignore) avec les valeurs réelles, puis lance :
+  DRIVE_CONFIG_FOLDER_ID=<id> python3 setup_gmail_filters.py
 
-Usage :
-  DRIVE_CONFIG_FOLDER_ID=<id_du_dossier> python3 setup_gmail_filters.py
+Le fichier est uploadé sur Drive sous le nom gmail_filters.json.
 """
 
 import json
 import os
 import sys
-import tempfile
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 
-from controle_stocks import TOKEN_FILE, _get_drive_service
+from controle_stocks import _get_drive_service
 
-# ── Adaptez ces filtres Gmail à votre convenance ────────────────────────────
-FILTERS = {
-    "conf_from":      "no-reply@systeme-u.fr",
-    "conf_subject":   "Confirmation commande",
-    "conf_label":     "BDC_Conf_Traites",
-    "modif_subjects": [
-        "Modification par le client de la commande",
-        "Alerte annulation par le client commande",
-        "Alerte annulation commande",
-    ],
-    "modif_label": "BDC_Modif_Traites",
-}
-# ────────────────────────────────────────────────────────────────────────────
+LOCAL_FILE = os.path.join(_HERE, "gmail_filters_local.json")
 
 
 def main():
+    if not os.path.exists(LOCAL_FILE):
+        print(f"ERREUR : {LOCAL_FILE} introuvable.")
+        print("  Créez ce fichier avec le contenu des filtres Gmail (voir gmail_filters_local.json.example).")
+        sys.exit(1)
+
+    with open(LOCAL_FILE, encoding="utf-8") as f:
+        filters = json.load(f)
+
     config_folder_id = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "").strip()
     if not config_folder_id:
         print("ERREUR : DRIVE_CONFIG_FOLDER_ID non défini.")
@@ -47,15 +41,16 @@ def main():
         sys.exit(1)
 
     from googleapiclient.http import MediaFileUpload
+    import tempfile
 
-    content = json.dumps(FILTERS, ensure_ascii=False, indent=2).encode("utf-8")
+    content = json.dumps(filters, ensure_ascii=False, indent=2).encode("utf-8")
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
 
     try:
         existing = svc.files().list(
-            q=(f"'{config_folder_id}' in parents and name='gmail_filters.json' and trashed=false"),
+            q=f"'{config_folder_id}' in parents and name='gmail_filters.json' and trashed=false",
             fields="files(id)",
         ).execute().get("files", [])
 
@@ -66,8 +61,7 @@ def main():
         else:
             svc.files().create(
                 body={"name": "gmail_filters.json", "parents": [config_folder_id]},
-                media_body=media,
-                fields="id",
+                media_body=media, fields="id",
             ).execute()
             print("gmail_filters.json créé sur Drive.")
     finally:

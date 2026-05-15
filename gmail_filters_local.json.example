@@ -1,0 +1,11 @@
+{
+  "conf_from": "expediteur@domaine.fr",
+  "conf_subject": "Sujet confirmation",
+  "conf_label": "Label_Gmail_Conf",
+  "modif_subjects": [
+    "Sujet modification 1",
+    "Sujet modification 2",
+    "Sujet annulation"
+  ],
+  "modif_label": "Label_Gmail_Modif"
+}
