@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""
-bootstrap.py — Télécharge les scripts depuis Drive et exécute la cible.
-
-Usage : python3 bootstrap.py <script.py> [args...]
-"""
 import json
 import os
 import subprocess
@@ -14,7 +9,6 @@ import urllib.request
 _HERE          = os.path.dirname(os.path.abspath(__file__))
 _SCRIPTS_DIR   = "scripts"
 _TOKEN_FILE    = os.path.expanduser("~/.auto_prepa_token.json")
-
 
 def _access_token():
     token_json = os.environ.get("GOOGLE_TOKEN_JSON", "").strip()
@@ -31,7 +25,6 @@ def _access_token():
     resp = json.loads(urllib.request.urlopen(
         urllib.request.Request("https://oauth2.googleapis.com/token", data=data)
     ).read())
-    # Sauvegarder le token rafraîchi pour les scripts téléchargés
     token["access_token"] = resp["access_token"]
     with open(_TOKEN_FILE, "w") as f:
         json.dump(token, f)
@@ -66,7 +59,6 @@ def main():
 
     access = _access_token()
 
-    # Trouver le sous-dossier scripts/
     q = urllib.parse.quote(
         f"name='{_SCRIPTS_DIR}' and '{config_folder_id}' in parents "
         f"and mimeType='application/vnd.google-apps.folder' and trashed=false"
@@ -78,7 +70,6 @@ def main():
         sys.exit(1)
     scripts_id = folders[0]["id"]
 
-    # Lister et télécharger tous les scripts Python
     q2 = urllib.parse.quote(f"'{scripts_id}' in parents and trashed=false")
     files = _drive_get(access,
         f"https://www.googleapis.com/drive/v3/files?q={q2}&fields=files(id,name)&pageSize=50")["files"]
@@ -98,7 +89,6 @@ def main():
 
     result = subprocess.run([sys.executable, target_path] + args)
     sys.exit(result.returncode)
-
 
 if __name__ == "__main__":
     main()
