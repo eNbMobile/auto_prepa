@@ -1,4 +1,4 @@
-name: Auto Prépa Drive
+name: aut_prep
 
 on:
   schedule:
