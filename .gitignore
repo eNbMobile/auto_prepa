@@ -5,22 +5,17 @@ __pycache__/
 *.log
 *.lock
 
-# Binaires v 4.0.0 (téléchargés depuis Drive au runtime)
 v 4.0.0/obtain_gencod
 v 4.0.0/prepa_drive_degrade
 
-# Scripts CI — gérés sur Drive (scripts/)
 auto_prepa.py
 controle_stocks.py
 generer_ventes.py
 analyse_mensuelle.py
 download_stocks.py
 
-# Fichiers locaux avec valeurs sensibles (jamais committés)
 gmail_filters_local.json
 
-# Exports stock locaux
 *.xlsx
 
-# CSV de résultat contrôle stocks
 controle_stocks_*.csv
