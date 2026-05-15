@@ -16,7 +16,8 @@ jobs:
       - name: Vérifier nouveaux emails Gmail
         id: check_pdfs
         env:
-          GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
+          GOOGLE_TOKEN_JSON:     ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
         run: |
           python3 - <<'EOF'
           import json, os, sys, urllib.request, urllib.parse
@@ -40,12 +41,34 @@ jobs:
           access = resp["access_token"]
           headers = {"Authorization": f"Bearer {access}"}
 
-          # Vérifier s'il y a des emails non traités (confirmations ou modifications)
-          queries = [
-              'from:no-reply@systeme-u.fr subject:"Confirmation commande" -label:BDC_Conf_Traites',
-              'subject:"Modification par le client de la commande" -label:BDC_Modif_Traites',
-              'subject:"Alerte annulation" -label:BDC_Modif_Traites',
-          ]
+          # Charger les filtres depuis Drive (gmail_filters.json dans le dossier config)
+          queries = []
+          config_folder_id = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "").strip()
+          if config_folder_id:
+              try:
+                  list_url = "https://www.googleapis.com/drive/v3/files?" + urllib.parse.urlencode({
+                      "q": f"'{config_folder_id}' in parents and name='gmail_filters.json' and trashed=false",
+                      "fields": "files(id)",
+                  })
+                  list_resp = json.loads(urllib.request.urlopen(
+                      urllib.request.Request(list_url, headers=headers)
+                  ).read())
+                  files = list_resp.get("files", [])
+                  if files:
+                      dl_url = f"https://www.googleapis.com/drive/v3/files/{files[0]['id']}?alt=media"
+                      dl_resp = urllib.request.urlopen(
+                          urllib.request.Request(dl_url, headers=headers)
+                      ).read()
+                      queries = json.loads(dl_resp.decode("utf-8"))
+                      print(f"  {len(queries)} filtre(s) Gmail chargé(s) depuis Drive")
+              except Exception as e:
+                  print(f"Erreur chargement gmail_filters.json : {e}")
+
+          if not queries:
+              print("gmail_filters.json indisponible → lancement par précaution")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f: f.write("has_new=true\n")
+              sys.exit(0)
+
           has_new = False
           for q in queries:
               url = "https://gmail.googleapis.com/gmail/v1/users/me/messages?" + urllib.parse.urlencode({
