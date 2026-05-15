@@ -5,15 +5,9 @@ __pycache__/
 *.log
 *.lock
 
-# Binaires et fichiers temporaires v 4.0.0
+# Binaires v 4.0.0 (téléchargés depuis Drive au runtime)
 v 4.0.0/obtain_gencod
 v 4.0.0/prepa_drive_degrade
-v 4.0.0/bon_prepa.txt
-v 4.0.0/bon_prepa_*.txt
-v 4.0.0/bon_anticipation*.txt
-v 4.0.0/BonDeCommande_*.pdf
-v 4.0.0/tmp*
-v 4.0.0/temp*
 
 # Scripts CI — gérés sur Drive (scripts/)
 auto_prepa.py
