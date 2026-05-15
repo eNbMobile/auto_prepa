@@ -1,20 +1,4 @@
 #!/usr/bin/env python3
-"""
-build_libelles.py — Construit un dictionnaire gencod→libellé complet via coursesu.com
-=======================================================================================
-PRÉREQUIS :
-  pip install curl-cffi browser-cookie3 beautifulsoup4
-
-AVANT DE LANCER :
-  Ouvre coursesu.com dans Firefox et navigue sur au moins une page produit
-  (pour avoir un cf_clearance valide), puis laisse Firefox ouvert.
-
-UTILISATION :
-  python3 build_libelles.py
-
-RÉSULTAT :
-  v 4.0.0/libelles_dict.csv  (gencod;libelle, reprise automatique si interrompu)
-"""
 
 import os
 import re
@@ -24,10 +8,6 @@ import random
 
 from curl_cffi.requests import Session as CurlSession
 from bs4 import BeautifulSoup
-
-# ─────────────────────────────────────────────────────────────────
-# CONFIGURATION
-# ─────────────────────────────────────────────────────────────────
 
 _BASE    = os.path.dirname(os.path.abspath(__file__))
 WORK_DIR = os.path.join(_BASE, "v 4.0.0")
@@ -46,8 +26,6 @@ HEADERS = {
     "Referer": "https://www.coursesu.com/",
 }
 
-# ─────────────────────────────────────────────────────────────────
-
 def lire_gencods_r1():
     gencods = []
     with open(ADRESSES_CSV, encoding="utf-8-sig", errors="replace") as f:
@@ -57,19 +35,15 @@ def lire_gencods_r1():
                 gencods.append(p[0].strip())
     return gencods
 
-
 def get_cookies():
     try:
         import browser_cookie3
         return {c.name: c.value for c in browser_cookie3.firefox(domain_name="coursesu.com")}
     except Exception as e:
         print(f"  ERREUR cookies Firefox : {e}")
-        print("  → Ouvre coursesu.com dans Firefox avant de relancer.")
         return {}
 
-
 def chercher_libelle(session, gencod):
-    """Retourne le libellé depuis coursesu.com, ou '' si introuvable."""
     url = f"https://www.coursesu.com/recherche?q={gencod}"
     try:
         r = session.get(url, headers=HEADERS, timeout=15)
@@ -78,16 +52,12 @@ def chercher_libelle(session, gencod):
         soup = BeautifulSoup(r.text, "html.parser")
         el = soup.find("h2", class_="product-name")
         if el:
-            # get_text avec séparateur pour ajouter un espace entre marque et nom
             txt = el.get_text(separator=" ", strip=True)
-            # Supprimer les espaces multiples
             return re.sub(r'\s+', ' ', txt).strip()
-        # Aucun résultat sur coursesu
         return ""
     except Exception as e:
         print(f"    ERREUR réseau {gencod}: {e}")
         return None
-
 
 def charger_dict_existant():
     if not os.path.exists(OUTPUT_CSV):
@@ -99,13 +69,11 @@ def charger_dict_existant():
                 d[row[0]] = row[1]
     return d
 
-
 def sauvegarder(resultats):
     with open(OUTPUT_CSV, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f, delimiter=";")
         for g, lib in resultats.items():
             w.writerow([g, lib])
-
 
 def main():
     gencods = lire_gencods_r1()
@@ -136,7 +104,6 @@ def main():
         libelle = chercher_libelle(session, gencod)
 
         if libelle is None:
-            # Erreur réseau — on réessaie avec un délai plus long
             erreurs_consec += 1
             print(f"  [{i}/{len(manquants)}] {gencod} → ERREUR (réessai dans 5s)")
             time.sleep(5)
@@ -162,7 +129,6 @@ def main():
     trouves = sum(1 for v in resultats.values() if v)
     print(f"\nDictionnaire complet : {OUTPUT_CSV}")
     print(f"  {trouves} libellés trouvés / {len(resultats)} gencods")
-
 
 if __name__ == "__main__":
     main()
