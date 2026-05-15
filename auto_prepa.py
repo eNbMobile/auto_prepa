@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""
-auto_prepa.py - Automatisation préparation Drive supermarché
-Lit les emails de confirmation de commande (no-reply@systeme-u.fr),
-télécharge bon_encaissement.pdf → renomme en BonDeCommande_XXX.pdf,
-génère bon_prepa_XXX.txt via le binaire C++ et le pousse sur Drive.
-"""
 
 import os
 import sys
@@ -24,30 +18,13 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 
-# ─────────────────────────────────────────────────────────────────
-# CONFIGURATION — à remplir une seule fois
-# ─────────────────────────────────────────────────────────────────
-
-# Répertoire de base : dossier contenant ce script
 _BASE = os.path.dirname(os.path.abspath(__file__))
-
-# Dossier de travail du programme C++
 WORK_DIR  = os.environ.get("WORK_DIR",  os.path.join(_BASE, "v 4.0.0"))
-
-# Dossier cache : PDFs téléchargés une fois, conservés ici
 CACHE_DIR = os.environ.get("CACHE_DIR", os.path.join(_BASE, "pdf_cache"))
-
-# Archive des PDFs d'origine, un sous-dossier par jour (JJ_MM)
 BDC_DIR   = os.environ.get("BDC_DIR",   os.path.join(_BASE, "BDC"))
-
-# Fichiers internes
 TOKEN_FILE = os.path.expanduser("~/.auto_prepa_token.json")
 CREDS_FILE = os.path.expanduser("~/.auto_prepa_credentials.json")
-
-# Nom du fichier d'état stocké dans DRIVE_BONS_FOLDER_ID
 STATE_DRIVE_FILENAME = "auto_prepa_state.json"
-
-# Fichier de log des écarts articles/produits
 LOG_CONTROLE_FILENAME = "controle_articles.log"
 
 
@@ -57,17 +34,14 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
 ]
 
-# Chargés depuis gmail_filters.json sur Drive (_charger_gmail_filters)
 GMAIL_CONF_FROM      = ""
 GMAIL_CONF_SUBJECT   = ""
 GMAIL_LABEL_CONF     = ""
 GMAIL_MODIF_SUBJECTS = []
 GMAIL_LABEL_NOM      = ""
 
-# ID du dossier config Drive — injecté via le secret GitHub DRIVE_CONFIG_FOLDER_ID
 DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
 
-# Chargés depuis config.json sur Drive au démarrage (_charger_config)
 DRIVE_BONS_FOLDER_ID = ""
 DRIVE_BDC_FOLDER_ID  = ""
 EMAIL_ANTICIPATION   = ""
@@ -78,9 +52,6 @@ CONFIG_FILES = [
     "gencod_adresses.csv",
     "gencod_nomenclatures.csv",
 ]
-
-
-# ── Auth ───────────────────────────────────────────────────────────
 
 def get_credentials():
     token_json = os.environ.get("GOOGLE_TOKEN_JSON", "").strip()
@@ -110,9 +81,6 @@ def get_credentials():
             f.write(creds.to_json())
     return creds
 
-
-# ── État (liste plate des bons traités, stockée dans Drive) ──────
-
 def charger_traites(drive_svc):
     """Retourne l'ensemble des BonDeCommande_*.pdf déjà traités."""
     try:
@@ -130,7 +98,6 @@ def charger_traites(drive_svc):
         while not done:
             _, done = dl.next_chunk()
         data = json.loads(buf.getvalue().decode())
-        # Compatibilité ascendante : ancien format {"DD/MM/YYYY": [...]}
         if isinstance(data, dict):
             flat = set()
             for v in data.values():
@@ -171,9 +138,6 @@ def sauvegarder_traites(drive_svc, traites):
     except Exception as e:
         print(f"  Sauvegarde historique Drive échouée : {e}")
 
-
-# ── Gmail — helpers ───────────────────────────────────────────────
-
 def _get_or_create_gmail_label(gmail_svc, nom):
     try:
         labels = gmail_svc.users().labels().list(userId='me').execute().get('labels', [])
@@ -210,9 +174,6 @@ def _marquer_email(gmail_svc, msg_id, label_id):
     except Exception as e:
         print(f"    Marquage email échoué : {e}")
 
-
-# ── Gmail — confirmations de commande ────────────────────────────
-
 def telecharger_bons_email(gmail_svc, cache_dir, traites):
     """
     Lit les emails de confirmation (no-reply@systeme-u.fr),
@@ -245,7 +206,6 @@ def telecharger_bons_email(gmail_svc, cache_dir, traites):
                        for h in msg['payload'].get('headers', [])}
             subject = headers.get('Subject', '')
 
-            # Extraire le numéro de commande depuis l'objet du mail
             match_num = re.search(r'N°\s*cde\s*[:\s]+(\d+)', subject)
             if not match_num:
                 print(f"    Sujet non reconnu : {subject[:80]}")
@@ -253,18 +213,15 @@ def telecharger_bons_email(gmail_svc, cache_dir, traites):
             numero = match_num.group(1)
             filename = f"BonDeCommande_{numero}.pdf"
 
-            # Extraire la date du créneau (DD/MM/YYYY) depuis l'objet pour le classement
             match_date = re.search(r'(\d{2}/\d{2}/\d{4})', subject)
             dossier_jj_mm = ""
             if match_date:
                 dossier_jj_mm = match_date.group(1)[:5].replace('/', '_')  # DD_MM
 
-            # Déjà traité : marquer quand même et ignorer
             if filename in traites:
                 _marquer_email(gmail_svc, m['id'], label_id)
                 continue
 
-            # Chercher l'attachement bon_encaissement.pdf
             attachment_id = None
             for part in _iter_parts(msg['payload']):
                 if part.get('filename', '').lower() == 'bon_encaissement.pdf':
@@ -275,7 +232,6 @@ def telecharger_bons_email(gmail_svc, cache_dir, traites):
                 print(f"    Aucun bon_encaissement.pdf dans l'email pour cde {numero}")
                 continue
 
-            # Télécharger l'attachement
             cache_path = os.path.join(cache_dir, filename)
             if not os.path.exists(cache_path):
                 att = gmail_svc.users().messages().attachments().get(
@@ -293,9 +249,6 @@ def telecharger_bons_email(gmail_svc, cache_dir, traites):
             print(f"    Erreur traitement email : {e}")
 
     return nouveaux
-
-
-# ── Gmail — modifications / annulations client ───────────────────
 
 def traiter_modifications_clients(drive_svc, gmail_svc, traites):
     """Lit les mails de modification de commande, supprime les anciens bons, archive les mails."""
@@ -366,9 +319,6 @@ def traiter_modifications_clients(drive_svc, gmail_svc, traites):
         except Exception as e:
             print(f"    Erreur traitement mail : {e}")
 
-
-# ── Google Drive ───────────────────────────────────────────────────
-
 def download_pdf(drive_svc, file_id, dest_path):
     req = drive_svc.files().get_media(
         fileId=file_id,
@@ -423,9 +373,6 @@ def upload_bon(drive_svc, local_path):
         print(f"    {filename} → Drive ÉCHEC : {e}")
         return False
 
-
-# ── Fichiers de configuration (CSV) ──────────────────────────────
-
 def telecharger_config_drive(drive_svc):
     """Télécharge les CSV de config depuis Drive vers WORK_DIR."""
     for filename in CONFIG_FILES:
@@ -442,9 +389,6 @@ def telecharger_config_drive(drive_svc):
             download_pdf(drive_svc, files[0]["id"], dest)
         except Exception as e:
             print(f"  ERREUR config {filename} : {e}")
-
-
-# ── Archivage BDC sur Drive ───────────────────────────────────────
 
 def _get_or_create_subfolder(drive_svc, parent_id, name):
     """Retourne l'ID d'un sous-dossier, le crée si nécessaire."""
@@ -467,7 +411,6 @@ def _get_or_create_subfolder(drive_svc, parent_id, name):
     except Exception as e:
         print(f"    Création dossier Drive '{name}' échouée : {e}")
         return None
-
 
 def archiver_pdf_drive(drive_svc, pdf_path, dossier_jj_mm):
     """Archive un PDF dans DRIVE_BDC_FOLDER_ID/JJ_MM/ sur Drive."""
@@ -494,9 +437,6 @@ def archiver_pdf_drive(drive_svc, pdf_path, dossier_jj_mm):
     except Exception as e:
         print(f"    Archivage Drive BDC/{dossier_jj_mm}/ échoué : {e}")
 
-
-# ── Modifications client (Drive) ──────────────────────────────────
-
 def _supprimer_bdc_drive(drive_svc, numero):
     """Supprime BonDeCommande_NUMERO.pdf du dossier Drive BDC (tous sous-dossiers)."""
     if not DRIVE_BDC_FOLDER_ID or not drive_svc:
@@ -513,7 +453,6 @@ def _supprimer_bdc_drive(drive_svc, numero):
     except Exception as e:
         print(f"    Suppression Drive BDC {nom} échouée : {e}")
 
-
 def _supprimer_bons_drive(drive_svc, numero):
     """Supprime bon_prepa_ et bon_anticipation_ d'un numéro donné dans DRIVE_BONS_FOLDER_ID."""
     for nom_fichier in [f"bon_prepa_{numero}.txt", f"bon_anticipation_{numero}.txt"]:
@@ -527,7 +466,6 @@ def _supprimer_bons_drive(drive_svc, numero):
                 print(f"    Supprimé Drive : {nom_fichier}")
         except Exception as e:
             print(f"    Suppression {nom_fichier} échouée : {e}")
-
 
 def _uploader_annulation_drive(drive_svc, numero):
     """Dépose annuler_NUMERO.txt dans DRIVE_BONS_FOLDER_ID pour déclencher la suppression sur le téléphone."""
@@ -557,9 +495,6 @@ def _uploader_annulation_drive(drive_svc, numero):
         print(f"    Upload annulation {nom_fichier} échoué : {e}")
         raise
 
-
-# ── Email anticipation (modification commande jour J) ────────────
-
 def _get_heure_email_original(gmail_svc, numero):
     """Retourne le datetime local de réception de l'email de confirmation original."""
     q = f'label:{GMAIL_LABEL_CONF} "{numero}"'
@@ -574,7 +509,6 @@ def _get_heure_email_original(gmail_svc, numero):
     except Exception as e:
         print(f"    Horodatage email original {numero} introuvable : {e}")
         return None
-
 
 def _telecharger_anticipation_drive(drive_svc, numero):
     """Télécharge et retourne le contenu de bon_anticipation_NUMERO.txt depuis Drive."""
@@ -597,7 +531,6 @@ def _telecharger_anticipation_drive(drive_svc, numero):
         print(f"    Téléchargement anticipation {numero} échoué : {e}")
         return ""
 
-
 def _envoyer_email_anticipation(gmail_svc, numero, contenu):
     """Envoie le contenu du bon d'anticipation supprimé par email."""
     from email.mime.text import MIMEText
@@ -612,9 +545,6 @@ def _envoyer_email_anticipation(gmail_svc, numero, contenu):
         print(f"    Email anticipation envoyé pour cde {numero} → {destinataire}")
     except Exception as e:
         print(f"    Envoi email anticipation {numero} échoué : {e}")
-
-
-# ── Contrôle articles/produits ────────────────────────────────────
 
 def extraire_articles_produits_pdf(texte):
     """Extrait (nb_articles, nb_produits) depuis les premières lignes du PDF."""
@@ -631,7 +561,6 @@ def extraire_articles_produits_pdf(texte):
         if articles is not None and produits is not None:
             break
     return articles, produits
-
 
 def log_ecart_drive(drive_svc, numero, articles_pdf, produits_pdf, articles_gen, produits_gen):
     from datetime import datetime
@@ -673,11 +602,7 @@ def log_ecart_drive(drive_svc, numero, articles_pdf, produits_pdf, articles_gen,
     except Exception as e:
         print(f"    Log écart Drive échoué : {e}")
 
-
-# ── Pipeline principal ────────────────────────────────────────────
-
 LOCK_FILE = os.path.expanduser("~/.auto_prepa.lock")
-
 
 def main():
     lock_f = open(LOCK_FILE, 'w')
@@ -692,7 +617,6 @@ def main():
     finally:
         fcntl.flock(lock_f, fcntl.LOCK_UN)
         lock_f.close()
-
 
 def _charger_config(drive_svc):
     """Charge config.json depuis DRIVE_CONFIG_FOLDER_ID et initialise les globals."""
@@ -722,7 +646,6 @@ def _charger_config(drive_svc):
         print(f"ERREUR chargement config Drive : {e}")
         sys.exit(1)
 
-
 def _charger_gmail_filters(drive_svc):
     """Charge gmail_filters.json depuis Drive et initialise les globals Gmail."""
     global GMAIL_CONF_FROM, GMAIL_CONF_SUBJECT, GMAIL_LABEL_CONF
@@ -751,7 +674,6 @@ def _charger_gmail_filters(drive_svc):
         print(f"ERREUR chargement gmail_filters.json : {e}")
         sys.exit(1)
 
-
 def _main():
     os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -761,24 +683,14 @@ def _main():
 
     _charger_config(drive_svc)
     _charger_gmail_filters(drive_svc)
-
-    # Télécharger les fichiers de config depuis Drive
     telecharger_config_drive(drive_svc)
-
-    # Mettre à jour chemin_prepa_ramasse.csv sur Drive (pour le téléphone)
     chemin_csv = os.path.join(WORK_DIR, "chemin_prepa_ramasse.csv")
     if os.path.exists(chemin_csv):
         upload_bon(drive_svc, chemin_csv)
 
-    # 1. Charger la liste des bons déjà traités
     traites = charger_traites(drive_svc)
-
-    # 1b. Traiter les modifications/annulations client reçues par mail
     traiter_modifications_clients(drive_svc, gmail_svc, traites)
-
-    # 2. Télécharger les bons depuis les emails de confirmation Gmail
     nouveaux = telecharger_bons_email(gmail_svc, CACHE_DIR, traites)
-    # nouveaux = {filename: dossier_jj_mm}
 
     if not nouveaux:
         print(f"Pas de nouvelle commande ({len(traites)} déjà traitée(s)).")
@@ -788,14 +700,12 @@ def _main():
     for pdf in sorted(nouveaux):
         print(f"  • {pdf}")
 
-    # 3. Traiter chaque nouveau PDF → bon_prepa_XXXXXXXX.txt
     os.makedirs(BDC_DIR, exist_ok=True)
     processed = set()
 
     for pdf, dossier_jj_mm in sorted(nouveaux.items()):
         order_num = pdf.removeprefix("BonDeCommande_").removesuffix(".pdf")
 
-        # Archiver le PDF d'origine dans BDC/JJ_MM/ (local + Drive)
         bdc_subdir = os.path.join(BDC_DIR, dossier_jj_mm) if dossier_jj_mm else BDC_DIR
         os.makedirs(bdc_subdir, exist_ok=True)
         bdc_dst = os.path.join(bdc_subdir, pdf)
@@ -805,7 +715,6 @@ def _main():
         if dossier_jj_mm:
             archiver_pdf_drive(drive_svc, cache_path, dossier_jj_mm)
 
-        # Nettoyer tous les fichiers temporaires du C++ avant génération
         for fname in [
             "bon_prepa.txt", "bon_anticipation.txt",
             "bon_prepa_NEW.txt", "bon_prepa_dlc.txt",
@@ -819,7 +728,6 @@ def _main():
 
         shutil.copy2(cache_path, os.path.join(WORK_DIR, pdf))
 
-        # Vérifier que les bases C++ sont présentes et non vides
         _bases_ok = True
         for csv_requis in ["gencod_adresses.csv", "gencod_nomenclatures.csv"]:
             fpath = os.path.join(WORK_DIR, csv_requis)
@@ -830,7 +738,6 @@ def _main():
         if not _bases_ok:
             break
 
-        # Vérifier que pdftotext arrive à lire le PDF
         pdf_path = os.path.join(WORK_DIR, pdf)
         pt = subprocess.run(["pdftotext", "-layout", pdf_path, "-"],
                             capture_output=True, text=True)
@@ -840,10 +747,8 @@ def _main():
             processed.add(pdf)
             continue
 
-        # Extraire articles et produits depuis le PDF pour contrôle ultérieur
         articles_pdf, produits_pdf = extraire_articles_produits_pdf(pt.stdout)
 
-        # Extraire le montant depuis le texte du PDF
         montant_pdf = ""
         for _ligne in pt.stdout.splitlines():
             if "Montant initial" in _ligne:
@@ -864,7 +769,6 @@ def _main():
                 os.remove(p)
             continue
 
-        # Vérifier que le bon_prepa généré est non vide
         bon_prepa_path = os.path.join(WORK_DIR, "bon_prepa.txt")
         if not os.path.exists(bon_prepa_path) or os.path.getsize(bon_prepa_path) == 0:
             print(f" VIDE — bon_prepa.txt absent ou vide")
@@ -873,7 +777,6 @@ def _main():
             continue
         print(" OK")
 
-        # Injecter le montant et nettoyer les préfixes "-N;" parasites du C++
         with open(bon_prepa_path, 'r', encoding='utf-8') as f:
             lignes = f.readlines()
         if lignes:
@@ -883,7 +786,6 @@ def _main():
         with open(bon_prepa_path, 'w', encoding='utf-8') as f:
             f.writelines(lignes)
 
-        # Contrôle articles/produits : PDF vs généré
         if articles_pdf is not None and produits_pdf is not None:
             with open(bon_prepa_path, 'r', encoding='utf-8') as _f:
                 _entete = _f.readline().rstrip('\n')
@@ -898,7 +800,6 @@ def _main():
             except (IndexError, ValueError):
                 pass
 
-        # Renommer les sorties avec le numéro de commande
         for src_name, dst_name in [
             ("bon_prepa.txt",        f"bon_prepa_{order_num}.txt"),
             ("bon_anticipation.txt", f"bon_anticipation_{order_num}.txt"),
@@ -908,7 +809,6 @@ def _main():
             if os.path.exists(src_f):
                 os.rename(src_f, dst_f)
 
-        # Upload vers Drive puis suppression locale
         for fname in [f"bon_prepa_{order_num}.txt",
                       f"bon_anticipation_{order_num}.txt"]:
             fpath = os.path.join(WORK_DIR, fname)
@@ -916,16 +816,13 @@ def _main():
                 if upload_bon(drive_svc, fpath):
                     os.remove(fpath)
 
-        # Nettoyer le PDF de travail (déjà dans le cache)
         pdf_work = os.path.join(WORK_DIR, pdf)
         if os.path.exists(pdf_work):
             os.remove(pdf_work)
 
         processed.add(pdf)
 
-    # 4. Sauvegarder l'état dans Drive
     sauvegarder_traites(drive_svc, traites | processed)
-
 
 if __name__ == "__main__":
     main()
