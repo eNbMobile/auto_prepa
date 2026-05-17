@@ -1,0 +1,44 @@
+name: Manquants Drive → PDF
+
+on:
+  workflow_dispatch:
+
+jobs:
+  generer-pdf:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Installer les dépendances
+        run: |
+          pip install \
+            pdfplumber \
+            reportlab \
+            python-barcode[images] \
+            Pillow \
+            google-api-python-client \
+            google-auth-oauthlib
+
+      - name: Générer le PDF
+        env:
+          GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
+        run: python manquants/gen_rupture_sbs.py
+
+      - name: Commit et push du PDF
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add manquants/ruptures_substitutions.pdf
+          git diff --cached --quiet || git commit -m "chore: mise à jour ruptures_substitutions.pdf"
+          git push
