@@ -29,8 +29,8 @@ jobs:
 
       - name: Télécharger gen_rupture_sbs.py depuis Drive
         env:
-          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
-          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
+          PROGRAMMES_ID: "1HFohMtdKeDfpn-b1s3NUf1UUTyxj4YY4"
         run: |
           python3 - <<'EOF'
           import json, os, sys, urllib.parse, urllib.request
@@ -48,23 +48,7 @@ jobs:
           access = resp["access_token"]
           headers = {"Authorization": f"Bearer {access}"}
 
-          github_folder = os.environ["DRIVE_CONFIG_FOLDER_ID"]
-
-          # Trouver le dossier Programmes
-          q = urllib.parse.quote(
-              f"name='Programmes' and '{github_folder}' in parents "
-              f"and mimeType='application/vnd.google-apps.folder' and trashed=false"
-          )
-          folders = json.loads(urllib.request.urlopen(
-              urllib.request.Request(
-                  f"https://www.googleapis.com/drive/v3/files?q={q}&fields=files(id)",
-                  headers=headers
-              )
-          ).read())["files"]
-          if not folders:
-              print("ERREUR : dossier Programmes introuvable sur Drive.")
-              sys.exit(1)
-          prog_id = folders[0]["id"]
+          prog_id = os.environ["PROGRAMMES_ID"]
 
           # Trouver gen_rupture_sbs.py
           q2 = urllib.parse.quote(
