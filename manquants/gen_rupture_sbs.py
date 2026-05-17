@@ -1,8 +1,8 @@
 """
 Workflow complet :
   1. Télécharge manquants.pdf depuis Drive (GITHUB/Manquants)
-  2. Archive l'original dans le sous-dossier archives (Manquants_JJMMYYYY.pdf)
-  3. Génère manquants/ruptures_substitutions.pdf et le commit dans le repo
+  2. Archive l'original dans archives/ (Manquants_JJMMAAAA.pdf)
+  3. Génère le PDF de sortie et l'uploade dans archives/ (Manquants_2_JJMMAAAA.pdf)
 """
 
 import io, re, os, json, tempfile
@@ -18,7 +18,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 from datetime import date
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -26,7 +26,6 @@ from datetime import date
 FOLDER_ID      = "14m48VX6jTus5l3qNuHxBdc4eRTjZqz9w"   # GITHUB/Manquants
 ARCHIVES_ID    = "1WyJ7BVEd485l7tGoURJ3tJZoPb8KeurU"   # GITHUB/Manquants/archives
 INPUT_FILENAME = "manquants.pdf"
-OUTPUT_PDF     = os.path.join(os.path.dirname(__file__), "ruptures_substitutions.pdf")
 
 # ── Google Drive ───────────────────────────────────────────────────────────────
 
@@ -62,6 +61,11 @@ def download_file(service, file_id, dest_path):
 def copy_to_archives(service, file_id, archive_name):
     body = {"name": archive_name, "parents": [ARCHIVES_ID]}
     service.files().copy(fileId=file_id, body=body).execute()
+
+def upload_to_archives(service, local_path, archive_name):
+    body = {"name": archive_name, "parents": [ARCHIVES_ID]}
+    media = MediaFileUpload(local_path, mimetype="application/pdf")
+    service.files().create(body=body, media_body=media).execute()
 
 # ── Parseur PDF ────────────────────────────────────────────────────────────────
 
@@ -243,5 +247,10 @@ if __name__ == "__main__":
     produits = aggregate(parse_rows(tmp_path))
     print(f"  {len(produits)} produits uniques trouvés.")
 
-    build_pdf(produits, OUTPUT_PDF)
-    print(f"PDF généré : {OUTPUT_PDF}")
+    out_path     = os.path.join(tempfile.gettempdir(), "ruptures_substitutions.pdf")
+    out_name     = f"Manquants_2_{doc_date}.pdf"
+    build_pdf(produits, out_path)
+    print(f"PDF généré : {out_path}")
+
+    upload_to_archives(service, out_path, out_name)
+    print(f"Uploadé sur Drive : archives/{out_name}")
