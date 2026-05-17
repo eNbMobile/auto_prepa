@@ -1,10 +1,3 @@
-"""
-Workflow complet :
-  1. Télécharge manquants.pdf depuis Drive (GITHUB/Manquants)
-  2. Archive l'original dans archives/ (Manquants_JJMMAAAA.pdf)
-  3. Génère le PDF de sortie et l'uploade dans archives/ (Manquants_2_JJMMAAAA.pdf)
-"""
-
 import io, re, os, json, tempfile
 import pdfplumber
 import barcode
@@ -21,17 +14,11 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 from datetime import date
 
-# ── Config ─────────────────────────────────────────────────────────────────────
-
-FOLDER_ID      = "14m48VX6jTus5l3qNuHxBdc4eRTjZqz9w"   # GITHUB/Manquants
-ARCHIVES_ID    = "1WyJ7BVEd485l7tGoURJ3tJZoPb8KeurU"   # GITHUB/Manquants/archives
+FOLDER_ID      = "14m48VX6jTus5l3qNuHxBdc4eRTjZqz9w"
+ARCHIVES_ID    = "1WyJ7BVEd485l7tGoURJ3tJZoPb8KeurU"
 INPUT_FILENAME = "manquants.pdf"
 
-# ── Google Drive ───────────────────────────────────────────────────────────────
-
 def get_drive_service():
-    # En CI : token JSON dans la variable d'env GOOGLE_TOKEN_JSON
-    # En local : fichier token habituel
     token_json = os.environ.get("GOOGLE_TOKEN_JSON")
     if token_json:
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
@@ -66,8 +53,6 @@ def upload_to_archives(service, local_path, archive_name):
     body = {"name": archive_name, "parents": [ARCHIVES_ID]}
     media = MediaFileUpload(local_path, mimetype="application/pdf")
     service.files().create(body=body, media_body=media).execute()
-
-# ── Parseur PDF ────────────────────────────────────────────────────────────────
 
 def parse_price(text, key):
     m = re.search(re.escape(key) + r'\s*:?\s*([\d,]+)\s*€', text)
@@ -148,8 +133,6 @@ def aggregate(rows):
             merged[ean]["ca_perdu"]     += calc_ca_perdu(p)
     return list(merged.values())
 
-# ── Barcode ────────────────────────────────────────────────────────────────────
-
 def make_barcode_image(ean_str, width_cm=2.9):
     ean_cls = barcode.get_barcode_class("ean13")
     buf = io.BytesIO()
@@ -166,9 +149,6 @@ def make_barcode_image(ean_str, width_cm=2.9):
     img.save(buf2, format="PNG")
     buf2.seek(0)
     return Image(buf2, width=target_w, height=target_h)
-
-# ── Styles ─────────────────────────────────────────────────────────────────────
-
 cell_style     = ParagraphStyle("cell",     fontSize=8, fontName="Helvetica",      leading=11)
 cell_bold      = ParagraphStyle("cellbold", fontSize=8, fontName="Helvetica-Bold", leading=11)
 ean_text_style = ParagraphStyle("ean_text", fontSize=7, fontName="Helvetica",
@@ -178,8 +158,6 @@ def ean_cell(ean_str):
     bc = make_barcode_image(ean_str, width_cm=2.9)
     bc.hAlign = "CENTER"
     return [bc, Paragraph(ean_str, ean_text_style)]
-
-# ── Build PDF ──────────────────────────────────────────────────────────────────
 
 def build_pdf(produits, output_path):
     data = [["EAN", "Libellé", "Quantité", "Type", "CA perdu"]]
@@ -215,42 +193,33 @@ def build_pdf(produits, output_path):
         color = colors.HexColor("#C0392B") if p["type"] == "Rupture" else colors.HexColor("#2980B9")
         style.append(("TEXTCOLOR", (3, i), (3, i), color))
     table.setStyle(TableStyle(style))
-
     doc = SimpleDocTemplate(output_path, pagesize=A4,
                             leftMargin=0.7*cm, rightMargin=0.7*cm,
                             topMargin=0.7*cm, bottomMargin=0.7*cm)
     doc.build([table])
 
-# ── Main ───────────────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
     service = get_drive_service()
-
     print(f"Recherche de '{INPUT_FILENAME}' dans Drive...")
     file_meta = find_file(service, INPUT_FILENAME, FOLDER_ID)
     if not file_meta:
         raise FileNotFoundError(f"'{INPUT_FILENAME}' introuvable dans le dossier Drive.")
     file_id = file_meta["id"]
     print(f"  Trouvé : id={file_id}")
-
     tmp_path = os.path.join(tempfile.gettempdir(), INPUT_FILENAME)
     print(f"Téléchargement vers {tmp_path}...")
     download_file(service, file_id, tmp_path)
-
     doc_date     = extract_doc_date(tmp_path)
     archive_name = f"Manquants_{doc_date}.pdf"
     print(f"Archivage sous : {archive_name}")
     copy_to_archives(service, file_id, archive_name)
     print("  Archivé dans le dossier archives.")
-
     print("Analyse du PDF...")
     produits = aggregate(parse_rows(tmp_path))
     print(f"  {len(produits)} produits uniques trouvés.")
-
     out_path     = os.path.join(tempfile.gettempdir(), "ruptures_substitutions.pdf")
     out_name     = f"Manquants_2_{doc_date}.pdf"
     build_pdf(produits, out_path)
     print(f"PDF généré : {out_path}")
-
     upload_to_archives(service, out_path, out_name)
     print(f"Uploadé sur Drive : archives/{out_name}")
