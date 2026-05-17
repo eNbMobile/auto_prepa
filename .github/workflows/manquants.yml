@@ -1,4 +1,4 @@
-name: Manquants Drive → PDF
+name: Manquants
 
 on:
   workflow_dispatch:
