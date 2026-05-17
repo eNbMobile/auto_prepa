@@ -30,7 +30,7 @@ jobs:
       - name: Télécharger gen_rupture_sbs.py depuis Drive
         env:
           GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
-          PROGRAMMES_ID: "1HFohMtdKeDfpn-b1s3NUf1UUTyxj4YY4"
+          PROGRAMMES_ID: "1chp8Erz7_wpdXsMJYRa5bGeyjAA2Md7W"
         run: |
           python3 - <<'EOF'
           import json, os, sys, urllib.parse, urllib.request
