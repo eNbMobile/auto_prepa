@@ -22,12 +22,76 @@ jobs:
           pip install \
             pdfplumber \
             reportlab \
-            python-barcode[images] \
+            "python-barcode[images]" \
             Pillow \
             google-api-python-client \
             google-auth-oauthlib
 
+      - name: Télécharger gen_rupture_sbs.py depuis Drive
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys, urllib.parse, urllib.request
+
+          token = json.loads(os.environ["GOOGLE_TOKEN_JSON"])
+          data = urllib.parse.urlencode({
+              "client_id":     token["client_id"],
+              "client_secret": token["client_secret"],
+              "refresh_token": token["refresh_token"],
+              "grant_type":    "refresh_token",
+          }).encode()
+          resp = json.loads(urllib.request.urlopen(
+              urllib.request.Request("https://oauth2.googleapis.com/token", data=data)
+          ).read())
+          access = resp["access_token"]
+          headers = {"Authorization": f"Bearer {access}"}
+
+          github_folder = os.environ["DRIVE_CONFIG_FOLDER_ID"]
+
+          # Trouver le dossier Programmes
+          q = urllib.parse.quote(
+              f"name='Programmes' and '{github_folder}' in parents "
+              f"and mimeType='application/vnd.google-apps.folder' and trashed=false"
+          )
+          folders = json.loads(urllib.request.urlopen(
+              urllib.request.Request(
+                  f"https://www.googleapis.com/drive/v3/files?q={q}&fields=files(id)",
+                  headers=headers
+              )
+          ).read())["files"]
+          if not folders:
+              print("ERREUR : dossier Programmes introuvable sur Drive.")
+              sys.exit(1)
+          prog_id = folders[0]["id"]
+
+          # Trouver gen_rupture_sbs.py
+          q2 = urllib.parse.quote(
+              f"name='gen_rupture_sbs.py' and '{prog_id}' in parents and trashed=false"
+          )
+          files = json.loads(urllib.request.urlopen(
+              urllib.request.Request(
+                  f"https://www.googleapis.com/drive/v3/files?q={q2}&fields=files(id,name)",
+                  headers=headers
+              )
+          ).read())["files"]
+          if not files:
+              print("ERREUR : gen_rupture_sbs.py introuvable dans Programmes/.")
+              sys.exit(1)
+
+          content = urllib.request.urlopen(
+              urllib.request.Request(
+                  f"https://www.googleapis.com/drive/v3/files/{files[0]['id']}?alt=media",
+                  headers=headers
+              )
+          ).read()
+          with open("gen_rupture_sbs.py", "wb") as f:
+              f.write(content)
+          print("gen_rupture_sbs.py téléchargé depuis Drive/Programmes/")
+          EOF
+
       - name: Générer et déposer le PDF sur Drive
         env:
           GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
-        run: python manquants/gen_rupture_sbs.py
+        run: python3 gen_rupture_sbs.py
