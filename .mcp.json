@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "phone-filesystem": {
+      "type": "sse",
+      "url": "https://enters-springfield-yea-auction.trycloudflare.com/sse"
+    }
+  }
+}
