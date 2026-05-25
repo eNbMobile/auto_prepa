@@ -1,0 +1,192 @@
+name: Surveillance Quotidienne aut_prep
+
+on:
+  schedule:
+    - cron: '0 7 * * *'   # Chaque jour à 7h UTC (9h Paris heure d'été)
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  issues: write
+  contents: read
+
+jobs:
+  surveillance:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Analyser les exécutions aut_prep (24h)
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          SINCE=$(date -u -d '24 hours ago' '+%Y-%m-%dT%H:%M:%SZ')
+          echo "Période analysée : $SINCE → maintenant"
+
+          # Récupérer les 200 derniers runs du workflow auto_prepa.yml
+          RUNS=$(gh api \
+            "repos/${REPO}/actions/workflows/auto_prepa.yml/runs?per_page=200" \
+            --jq ".workflow_runs | map(select(.created_at >= \"$SINCE\"))")
+
+          TOTAL=$(echo "$RUNS"        | jq 'length')
+          SUCCESS_COUNT=$(echo "$RUNS" | jq '[.[] | select(.conclusion == "success")]  | length')
+          FAILURE_COUNT=$(echo "$RUNS" | jq '[.[] | select(.conclusion == "failure" or .conclusion == "timed_out")] | length')
+          SKIPPED_COUNT=$(echo "$RUNS" | jq '[.[] | select(.conclusion == "skipped")]  | length')
+
+          echo "total=$TOTAL"           >> "$GITHUB_OUTPUT"
+          echo "success=$SUCCESS_COUNT" >> "$GITHUB_OUTPUT"
+          echo "failures=$FAILURE_COUNT" >> "$GITHUB_OUTPUT"
+
+          echo "=== Surveillance aut_prep (24h) ==="
+          echo "Total: $TOTAL | ✅ Succès: $SUCCESS_COUNT | ❌ Échecs: $FAILURE_COUNT | ⏭️ Ignorés: $SKIPPED_COUNT"
+
+          if [ "$FAILURE_COUNT" -eq 0 ]; then
+            echo "✅ Aucun échec sur les dernières 24h."
+            echo "has_failures=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "has_failures=true" >> "$GITHUB_OUTPUT"
+
+          REPORT_FILE="/tmp/rapport.md"
+          TODAY=$(date -u '+%Y-%m-%d')
+
+          # ── En-tête du rapport ───────────────────────────────────────────────
+          cat > "$REPORT_FILE" <<HEADER
+          # ⚠️ Surveillance aut_prep — Échecs détectés
+
+          **Date :** $(date -u '+%Y-%m-%d %H:%M UTC')
+
+          ## Résumé (dernières 24h)
+
+          | Métrique | Valeur |
+          |---|---|
+          | Total exécutions | $TOTAL |
+          | ✅ Succès | $SUCCESS_COUNT |
+          | ❌ Échecs | $FAILURE_COUNT |
+          | ⏭️ Ignorés (pas de nouveaux emails) | $SKIPPED_COUNT |
+
+          ## Détail des échecs
+          HEADER
+
+          # ── Analyser jusqu'à 5 runs en échec ────────────────────────────────
+          FAILED_IDS=$(echo "$RUNS" | jq -r \
+            '[.[] | select(.conclusion == "failure" or .conclusion == "timed_out")] | .[:5] | .[].id')
+
+          for RUN_ID in $FAILED_IDS; do
+            RUN_INFO=$(echo "$RUNS" | jq ".[] | select(.id == $RUN_ID)")
+            RUN_URL=$(echo    "$RUN_INFO" | jq -r '.html_url')
+            CREATED=$(echo    "$RUN_INFO" | jq -r '.created_at')
+            CONCLUSION=$(echo "$RUN_INFO" | jq -r '.conclusion')
+
+            echo "" >> "$REPORT_FILE"
+            echo "### Run \`#$RUN_ID\` — $CREATED" >> "$REPORT_FILE"
+            echo "- **Résultat :** \`$CONCLUSION\`" >> "$REPORT_FILE"
+            echo "- **Lien :** $RUN_URL"            >> "$REPORT_FILE"
+            echo ""                                  >> "$REPORT_FILE"
+
+            # Récupérer les logs du job en échec (50 premières lignes significatives)
+            LOGS=$(gh run view "$RUN_ID" --repo "$REPO" --log-failed 2>&1 | head -80 || echo "Logs non disponibles")
+
+            # ── Catégorisation automatique de l'erreur ───────────────────────
+            CATEGORY="Erreur inconnue"
+            RECOMMANDATION=""
+
+            if echo "$LOGS" | grep -qi "token\|oauth\|access_token\|refresh_token\|401\|credentials"; then
+              CATEGORY="🔐 Problème d'authentification Google (OAuth)"
+              RECOMMANDATION="Le token Google est probablement expiré ou invalide. Vérifier/régénérer le secret \`GOOGLE_TOKEN_JSON\` dans les paramètres du dépôt."
+            elif echo "$LOGS" | grep -qi "DRIVE_CONFIG_FOLDER_ID\|dossier.*introuvable\|folder.*not found"; then
+              CATEGORY="📁 Problème d'accès Google Drive"
+              RECOMMANDATION="Le dossier Drive référencé par \`DRIVE_CONFIG_FOLDER_ID\` est introuvable ou inaccessible. Vérifier le secret et les permissions Drive."
+            elif echo "$LOGS" | grep -qi "quota\|429\|rate.limit\|rateLimitExceeded"; then
+              CATEGORY="🚦 Quota API dépassé (Rate Limiting)"
+              RECOMMANDATION="Les quotas de l'API Gmail ou Drive sont dépassés. Vérifier la Google Cloud Console et les limites d'utilisation."
+            elif echo "$LOGS" | grep -qi "gmail\|403.*mail\|message.*list\|thread"; then
+              CATEGORY="📧 Erreur API Gmail"
+              RECOMMANDATION="Problème d'accès à l'API Gmail. Vérifier les scopes OAuth et que l'accès Gmail est activé dans Google Cloud."
+            elif echo "$LOGS" | grep -qi "Traceback\|ImportError\|ModuleNotFoundError\|SyntaxError\|NameError\|KeyError\|ValueError"; then
+              CATEGORY="🐍 Erreur Python dans le script"
+              RECOMMANDATION="Une exception Python a été levée dans auto_prepa.py ou bootstrap.py. Consulter la trace complète dans les logs GitHub Actions."
+            elif echo "$LOGS" | grep -qi "timeout\|timed.out\|connection.*reset\|network"; then
+              CATEGORY="🌐 Timeout / Erreur réseau"
+              RECOMMANDATION="Problème de connectivité réseau transitoire. Une re-tentative automatique devrait suffire."
+            elif echo "$LOGS" | grep -qi "apt-get\|poppler\|pip install\|setup-python"; then
+              CATEGORY="📦 Erreur d'installation des dépendances"
+              RECOMMANDATION="Échec lors de l'installation des paquets système ou pip. Peut être un problème transitoire de l'infrastructure GitHub."
+            fi
+
+            {
+              echo "**Catégorie d'erreur :** $CATEGORY"
+              if [ -n "$RECOMMANDATION" ]; then
+                echo ""
+                echo "**Recommandation :** $RECOMMANDATION"
+              fi
+              echo ""
+              echo "<details><summary>Logs d'erreur (cliquer pour développer)</summary>"
+              echo ""
+              echo '```'
+              echo "$LOGS"
+              echo '```'
+              echo ""
+              echo "</details>"
+              echo ""
+            } >> "$REPORT_FILE"
+          done
+
+          # ── Afficher le rapport dans les logs du workflow ────────────────────
+          cat "$REPORT_FILE"
+
+      # ── Créer le label si absent ─────────────────────────────────────────────
+      - name: Créer label surveillance (si absent)
+        if: steps.check.outputs.has_failures == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh label create "surveillance" \
+            --color "e11d48" \
+            --description "Rapport de surveillance automatique aut_prep" \
+            --repo "$REPO" 2>/dev/null || true
+
+      # ── Créer une issue GitHub avec le rapport ───────────────────────────────
+      - name: Créer issue GitHub avec le rapport
+        if: steps.check.outputs.has_failures == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          TODAY=$(date -u '+%Y-%m-%d')
+          TITLE="⚠️ Surveillance aut_prep — Échecs détectés ($TODAY)"
+
+          # Vérifier si une issue existe déjà pour aujourd'hui
+          EXISTING=$(gh issue list \
+            --repo "$REPO" \
+            --state open \
+            --search "\"Surveillance aut_prep\" \"$TODAY\"" \
+            --json number \
+            --jq 'length' 2>/dev/null || echo "0")
+
+          if [ "$EXISTING" -gt "0" ]; then
+            echo "Une issue de surveillance existe déjà pour $TODAY — pas de doublon créé."
+            exit 0
+          fi
+
+          gh issue create \
+            --repo "$REPO" \
+            --title "$TITLE" \
+            --body "$(cat /tmp/rapport.md)" \
+            --label "surveillance" 2>/dev/null || \
+          gh issue create \
+            --repo "$REPO" \
+            --title "$TITLE" \
+            --body "$(cat /tmp/rapport.md)"
+
+      # ── Rapport OK si aucun échec ────────────────────────────────────────────
+      - name: Rapport OK (aucun échec)
+        if: steps.check.outputs.has_failures == 'false'
+        run: |
+          echo "✅ Surveillance du $(date -u '+%Y-%m-%d') : OK"
+          echo "   - ${{ steps.check.outputs.success }} exécutions réussies"
+          echo "   - ${{ steps.check.outputs.total }} exécutions totales analysées"
