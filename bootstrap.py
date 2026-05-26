@@ -71,16 +71,25 @@ def main():
     scripts_id = folders[0]["id"]
 
     q2 = urllib.parse.quote(f"'{scripts_id}' in parents and trashed=false")
-    files = _drive_get(access,
-        f"https://www.googleapis.com/drive/v3/files?q={q2}&fields=files(id,name)&pageSize=50")["files"]
+    order = urllib.parse.quote("modifiedTime desc")
+    all_files = _drive_get(access,
+        f"https://www.googleapis.com/drive/v3/files?q={q2}"
+        f"&fields=files(id,name,modifiedTime)&pageSize=50&orderBy={order}")["files"]
 
-    print(f"Bootstrap : {len(files)} script(s) depuis Drive {_SCRIPTS_DIR}/")
+    # Keep only the newest version of each script name
+    seen, files = set(), []
+    for f in all_files:
+        if f["name"] not in seen:
+            seen.add(f["name"])
+            files.append(f)
+
+    print(f"Bootstrap : {len(files)} script(s) depuis Drive {_SCRIPTS_DIR}/ ({len(all_files)} fichier(s) total)")
     for f in files:
         content = _drive_download(access, f["id"])
         dest = os.path.join(_HERE, f["name"])
         with open(dest, "wb") as fp:
             fp.write(content)
-        print(f"  ✓ {f['name']}")
+        print(f"  ✓ {f['name']} ({f.get('modifiedTime', '?')})")
 
     target_path = os.path.join(_HERE, target)
     if not os.path.exists(target_path):
