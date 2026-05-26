@@ -8,6 +8,10 @@ on:
         required: false
         type: string
 
+concurrency:
+  group: controle_stocks
+  cancel-in-progress: false
+
 jobs:
   controle:
     runs-on: ubuntu-latest
