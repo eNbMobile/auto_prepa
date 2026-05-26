@@ -8,7 +8,7 @@
 collecte_ean.yml                  agent2_telechargement.py
   ↓ toutes les 30 min               ↓ chaque nuit
   Scan Drive BDC/MM_AAAA/JJ_MM      Lit visuels_ean.json sur Drive
-  Extrait EAN-13 des PDFs           Télécharge images coursesu.com
+  Extrait EAN-13 des PDFs           Télécharge images
   → Drive: data/visuels_ean.json    via cookies Firefox
   → Drive: data/fichiers_traites.json
 
@@ -47,7 +47,7 @@ BDC_FOLDER_ID = <ID Drive du dossier BDC racine>
 
 ## Agent 2 (Local) — `agent2_telechargement.py`
 
-Lit `data/visuels_ean.json` depuis Drive, télécharge les images coursesu.com.
+Lit `data/visuels_ean.json` depuis Drive, télécharge les images
 
 ```bash
 pip install -r agents/requirements_agents.txt
