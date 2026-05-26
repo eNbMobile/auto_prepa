@@ -10,6 +10,10 @@ on:
         required: false
         type: string
 
+concurrency:
+  group: analyse_mensuelle
+  cancel-in-progress: false
+
 jobs:
   analyse:
     runs-on: ubuntu-latest

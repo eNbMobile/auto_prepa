@@ -3,6 +3,10 @@ name: Manquants
 on:
   workflow_dispatch:
 
+concurrency:
+  group: manquants
+  cancel-in-progress: false
+
 jobs:
   generer-pdf:
     runs-on: ubuntu-latest

@@ -8,6 +8,10 @@ on:
         required: false
         type: string
 
+concurrency:
+  group: generer_ventes
+  cancel-in-progress: false
+
 jobs:
   ventes:
     runs-on: ubuntu-latest
