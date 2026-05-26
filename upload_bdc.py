@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Upload les fichiers BDC traités vers Google Drive : GITHUB/BDC/MM_AAAA/JJ_MM/"""
+"""Upload les fichiers BDC traités vers Google Drive : GITHUB/BDC/MM_AAAA/JJ_MM/
+
+auto_prepa.py stocke les fichiers dans BDC/JJ_MM/ (sous-répertoires nommés DD_MM)
+et en archive la majorité directement via archiver_pdf_drive.  Ce script sert de
+filet de sécurité : il remonte TOUS les fichiers présents (à plat ou en sous-dossier)
+vers Drive, en ignorant ceux qui y sont déjà.
+"""
 
 import json
 import os
@@ -120,50 +126,84 @@ def _upload_file(access, file_path, parent_id):
         content_type=f"multipart/related; boundary={boundary}")
 
 
+def _collect_bdc_files(bdc_dir, default_date):
+    """Retourne [(file_path, jj_mm, mm_aaaa)] en parcourant BDC/ et BDC/JJ_MM/.
+
+    auto_prepa.py crée BDC/JJ_MM/BonDeCommande_X.pdf quand la date est trouvée
+    dans le sujet de l'email, et BDC/BonDeCommande_X.pdf sinon.
+    Les sous-dossiers nommés JJ_MM (ex. 26_05) fournissent directement la date.
+    """
+    default_jj_mm   = default_date.strftime("%d_%m")
+    default_mm_aaaa = default_date.strftime("%m_%Y")
+    results = []
+
+    if not os.path.isdir(bdc_dir):
+        return results
+
+    for entry in sorted(os.listdir(bdc_dir)):
+        full_path = os.path.join(bdc_dir, entry)
+
+        if os.path.isfile(full_path):
+            results.append((full_path, default_jj_mm, default_mm_aaaa))
+
+        elif os.path.isdir(full_path):
+            jj_mm = entry
+            try:
+                dd, mm = jj_mm.split("_")
+                mm_aaaa = f"{int(mm):02d}_{default_date.year}"
+            except (ValueError, AttributeError):
+                mm_aaaa = default_mm_aaaa
+
+            for fname in sorted(os.listdir(full_path)):
+                fpath = os.path.join(full_path, fname)
+                if os.path.isfile(fpath):
+                    results.append((fpath, jj_mm, mm_aaaa))
+
+    return results
+
+
 def main():
     args = sys.argv[1:]
     date_str = args[args.index("--date") + 1] if "--date" in args else None
 
     if date_str:
         try:
-            date = datetime.strptime(date_str, "%d/%m/%Y")
+            default_date = datetime.strptime(date_str, "%d/%m/%Y")
         except ValueError:
             print(f"Format de date invalide : {date_str}  →  attendu JJ/MM/AAAA")
             sys.exit(1)
     else:
-        date = datetime.today()
+        default_date = datetime.today()
 
-    mm_aaaa = date.strftime("%m_%Y")
-    jj_mm   = date.strftime("%d_%m")
-
-    if not os.path.isdir(_BDC_DIR):
-        print(f"Dossier BDC introuvable ({_BDC_DIR}) — rien à uploader.")
-        sys.exit(0)
-
-    bdc_files = sorted(
-        f for f in os.listdir(_BDC_DIR)
-        if os.path.isfile(os.path.join(_BDC_DIR, f))
-    )
-    if not bdc_files:
+    items = _collect_bdc_files(_BDC_DIR, default_date)
+    if not items:
         print("Aucun fichier BDC à uploader.")
         sys.exit(0)
 
-    print(f"Upload BDC → GITHUB/BDC/{mm_aaaa}/{jj_mm}/  ({len(bdc_files)} fichier(s))")
+    print(f"Upload BDC : {len(items)} fichier(s) trouvé(s) dans {_BDC_DIR}")
 
-    access   = _access_token()
+    access    = _access_token()
     github_id = _find_root_folder(access, "GITHUB")
-    bdc_id    = _find_or_create_folder(access, "BDC",   github_id)
-    month_id  = _find_or_create_folder(access, mm_aaaa, bdc_id)
-    day_id    = _find_or_create_folder(access, jj_mm,   month_id)
+    bdc_id    = _find_or_create_folder(access, "BDC", github_id)
 
+    folder_cache = {}
     uploaded = skipped = 0
-    for filename in bdc_files:
+
+    for file_path, jj_mm, mm_aaaa in items:
+        key = (mm_aaaa, jj_mm)
+        if key not in folder_cache:
+            month_id = _find_or_create_folder(access, mm_aaaa, bdc_id)
+            day_id   = _find_or_create_folder(access, jj_mm,   month_id)
+            folder_cache[key] = day_id
+        day_id   = folder_cache[key]
+        filename = os.path.basename(file_path)
+
         if _file_exists(access, filename, day_id):
-            print(f"  → {filename} (déjà présent, ignoré)")
+            print(f"  → BDC/{mm_aaaa}/{jj_mm}/{filename} (déjà présent, ignoré)")
             skipped += 1
         else:
-            _upload_file(access, os.path.join(_BDC_DIR, filename), day_id)
-            print(f"  ✓ {filename}")
+            _upload_file(access, file_path, day_id)
+            print(f"  ✓ BDC/{mm_aaaa}/{jj_mm}/{filename}")
             uploaded += 1
 
     print(f"Terminé : {uploaded} uploadé(s), {skipped} ignoré(s).")
