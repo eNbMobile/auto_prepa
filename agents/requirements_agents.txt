@@ -1,13 +1,10 @@
-# Agent 1 - Collecte EAN
+# Agent 2 - Téléchargement visuels (local)
 google-auth>=2.0
 google-auth-oauthlib>=1.0
 google-api-python-client>=2.0
 google-auth-httplib2>=0.2
-pdfplumber>=0.10
-
-# Agent 2 - Téléchargement visuels
 browser_cookie3>=0.19
 requests>=2.31
 
-# Agent 3 - GitHub Watcher
+# Agent 3 - GitHub Watcher (local)
 anthropic>=0.40
