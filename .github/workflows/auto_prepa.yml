@@ -130,6 +130,12 @@ jobs:
           WORK_DIR: "v 4.0.0"
         run: python3 bootstrap.py auto_prepa.py
 
+      - name: Ranger les BDC dans Google Drive
+        if: steps.check_pdfs.outputs.has_new == 'true'
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+        run: python3 upload_bdc.py
+
       - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
         if: steps.check_pdfs.outputs.has_new == 'true'
         env:
