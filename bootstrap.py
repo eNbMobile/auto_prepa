@@ -44,6 +44,15 @@ def _drive_download(access, file_id):
     ).read()
 
 
+def _drive_delete(access, file_id):
+    req = urllib.request.Request(
+        f"https://www.googleapis.com/drive/v3/files/{file_id}",
+        headers={"Authorization": f"Bearer {access}"},
+        method="DELETE",
+    )
+    urllib.request.urlopen(req)
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage : python3 bootstrap.py <script.py> [args...]")
@@ -76,12 +85,15 @@ def main():
         f"https://www.googleapis.com/drive/v3/files?q={q2}"
         f"&fields=files(id,name,modifiedTime)&pageSize=50&orderBy={order}")["files"]
 
-    # Keep only the newest version of each script name
-    seen, files = set(), []
+    # Deduplicate: newest first (already sorted by modifiedTime desc).
+    # Download the newest version of each name; delete older duplicates from Drive.
+    seen, files, duplicates = set(), [], []
     for f in all_files:
         if f["name"] not in seen:
             seen.add(f["name"])
             files.append(f)
+        else:
+            duplicates.append(f)
 
     print(f"Bootstrap : {len(files)} script(s) depuis Drive {_SCRIPTS_DIR}/ ({len(all_files)} fichier(s) total)")
     for f in files:
@@ -90,6 +102,13 @@ def main():
         with open(dest, "wb") as fp:
             fp.write(content)
         print(f"  ✓ {f['name']} ({f.get('modifiedTime', '?')})")
+
+    for f in duplicates:
+        try:
+            _drive_delete(access, f["id"])
+            print(f"  🗑 doublon supprimé : {f['name']} ({f.get('modifiedTime', '?')})")
+        except Exception as e:
+            print(f"  Avertissement : impossible de supprimer le doublon {f['name']} : {e}")
 
     target_path = os.path.join(_HERE, target)
     if not os.path.exists(target_path):
