@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""
-Agent 2 - Téléchargement des visuels depuis coursesu.com
-Lit la liste des EAN depuis Google Drive (data/visuels_ean.json),
-télécharge les images via les cookies Firefox, marque les EAN traités
-dans un fichier local de cache pour éviter les re-téléchargements.
-Tourne la nuit (cron ou boucle interne).
-"""
-
 import json
 import os
 import pickle
