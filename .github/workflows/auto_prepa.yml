@@ -1,6 +1,8 @@
 name: aut_prep
 
 on:
+  schedule:
+    - cron: '*/5 * * * *'   # toutes les 5 min (minimum GitHub Actions)
   workflow_dispatch:
 
 concurrency:
