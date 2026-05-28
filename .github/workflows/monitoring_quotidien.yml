@@ -1,0 +1,266 @@
+name: Monitoring Quotidien aut_prep
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # Chaque jour à 6h UTC (8h Paris été, 7h hiver)
+  workflow_dispatch:
+
+concurrency:
+  group: monitoring_quotidien
+  cancel-in-progress: false
+
+jobs:
+  monitoring:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Installer anthropic
+        run: pip install anthropic
+
+      - name: Analyser les runs aut_prep des dernières 24h
+        id: analyse
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PYEOF'
+          import io, json, os, re, sys, zipfile, urllib.parse, urllib.request
+          from datetime import datetime, timedelta
+
+          REPO            = os.environ.get("GITHUB_REPO", "eNbMobile/auto_prepa")
+          WORKFLOW_NAME   = "aut_prep"
+          GH_TOKEN        = os.environ.get("GH_TOKEN", "")
+          ANTHROPIC_KEY   = os.environ.get("ANTHROPIC_API_KEY", "")
+          GITHUB_OUTPUT   = os.environ.get("GITHUB_OUTPUT", "/dev/null")
+
+          # ── Helpers GitHub API ──────────────────────────────────────────────
+          def gh(path, method="GET", params=None, data=None):
+              url = f"https://api.github.com{path}"
+              if params:
+                  url += "?" + urllib.parse.urlencode(params)
+              headers = {
+                  "Authorization": f"token {GH_TOKEN}",
+                  "Accept": "application/vnd.github.v3+json",
+                  "Content-Type": "application/json",
+              }
+              body = json.dumps(data).encode() if data else None
+              req = urllib.request.Request(url, data=body, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as r:
+                      return json.loads(r.read())
+              except urllib.error.HTTPError as e:
+                  raise RuntimeError(f"GitHub {method} {path} → {e.code}: {e.read().decode()[:300]}")
+
+          def get_logs(run_id):
+              try:
+                  req = urllib.request.Request(
+                      f"https://api.github.com/repos/{REPO}/actions/runs/{run_id}/logs",
+                      headers={"Authorization": f"token {GH_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+                  )
+                  with urllib.request.urlopen(req, timeout=30) as r:
+                      raw = r.read()
+                  with zipfile.ZipFile(io.BytesIO(raw)) as z:
+                      parts = [
+                          f"=== {name} ===\n" + z.read(name).decode("utf-8", errors="replace")
+                          for name in sorted(z.namelist())
+                      ]
+                  text = "\n".join(parts)
+                  return text[-12000:] if len(text) > 12000 else text
+              except Exception as e:
+                  return f"(Logs indisponibles : {e})"
+
+          # ── Analyse via Claude ──────────────────────────────────────────────
+          def analyse_claude(run, logs, workflow_content):
+              if not ANTHROPIC_KEY:
+                  return False, None, "ANTHROPIC_API_KEY non configuré — analyse manuelle requise"
+              import anthropic
+              client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+              prompt = f"""Tu es un expert GitHub Actions. Analyse cet échec du workflow '{WORKFLOW_NAME}'.
+
+Run #{run['id']} — {run.get('created_at', '')}
+URL : {run.get('html_url', '')}
+
+## Contenu actuel du workflow (auto_prepa.yml)
+```yaml
+{workflow_content}
+```
+
+## Logs d'erreur (extrait)
+```
+{logs}
+```
+
+Réponds UNIQUEMENT avec un objet JSON strict :
+{{
+  "peut_corriger": true,
+  "cause": "description courte de la cause",
+  "correction": "description de la correction appliquée",
+  "workflow_corrige": "contenu YAML complet corrigé (ou null si pas modifiable)"
+}}"""
+              try:
+                  resp = client.messages.create(
+                      model="claude-opus-4-7",
+                      max_tokens=4096,
+                      messages=[{"role": "user", "content": prompt}]
+                  )
+                  raw = next((b.text for b in resp.content if b.type == "text"), "{}")
+                  m = re.search(r"\{.*\}", raw, re.DOTALL)
+                  if not m:
+                      return False, None, f"Réponse Claude non parseable : {raw[:200]}"
+                  result = json.loads(m.group())
+                  peut_corriger = result.get("peut_corriger", False)
+                  explication = f"{result.get('cause', '')} → {result.get('correction', '')}".strip(" →")
+                  return peut_corriger, result.get("workflow_corrige"), explication
+              except Exception as e:
+                  return False, None, f"Erreur Claude API : {e}"
+
+          # ── Récupérer les runs des dernières 24h ────────────────────────────
+          since = (datetime.utcnow() - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+          data = gh(f"/repos/{REPO}/actions/runs", params={"per_page": "100", "created": f">={since}"})
+          all_runs = data.get("workflow_runs", [])
+
+          runs = [r for r in all_runs
+                  if r.get("name") == WORKFLOW_NAME or r.get("workflow_name") == WORKFLOW_NAME]
+
+          successes = [r for r in runs if r.get("conclusion") == "success"]
+          failures  = [r for r in runs if r.get("conclusion") == "failure"]
+          cancelled = [r for r in runs if r.get("conclusion") in ("cancelled", "skipped")]
+          pending   = [r for r in runs if r.get("status") in ("in_progress", "queued", "waiting")]
+
+          now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+          print(f"\n{'='*60}")
+          print(f"Monitoring {WORKFLOW_NAME} — {now_str}")
+          print(f"{'='*60}")
+          print(f"Période  : {since} → maintenant")
+          print(f"Runs     : {len(runs)} total")
+          print(f"  ✓ Succès   : {len(successes)}")
+          print(f"  ✗ Échecs   : {len(failures)}")
+          print(f"  ○ Annulés  : {len(cancelled)}")
+          print(f"  ⟳ En cours : {len(pending)}")
+
+          corrections = []   # run IDs corrigés
+          analyses    = []   # résultats d'analyse
+
+          if failures:
+              print(f"\n{'─'*40}")
+              print(f"Analyse de {len(failures)} échec(s)...")
+
+              try:
+                  with open(".github/workflows/auto_prepa.yml", encoding="utf-8") as f:
+                      workflow_content = f.read()
+              except Exception as e:
+                  workflow_content = f"(fichier introuvable : {e})"
+
+              for run in failures:
+                  rid = run["id"]
+                  print(f"\n  → Run #{rid} ({run.get('created_at', '')})")
+                  logs = get_logs(rid)
+                  peut_corriger, workflow_corrige, explication = analyse_claude(run, logs, workflow_content)
+                  print(f"     Cause : {explication[:200]}")
+
+                  analyses.append({
+                      "run_id": rid,
+                      "url": run.get("html_url", ""),
+                      "created_at": run.get("created_at", ""),
+                      "explication": explication,
+                      "peut_corriger": peut_corriger,
+                  })
+
+                  if peut_corriger and workflow_corrige:
+                      with open(".github/workflows/auto_prepa.yml", "w", encoding="utf-8") as f:
+                          f.write(workflow_corrige)
+                      workflow_content = workflow_corrige
+                      corrections.append(str(rid))
+                      print(f"     ✓ Correction appliquée au workflow")
+
+          # ── Construire le corps du rapport ──────────────────────────────────
+          lines = [
+              f"## Rapport Monitoring `aut_prep` — {now_str}",
+              "",
+              "| Statut | Runs |",
+              "|--------|------|",
+              f"| ✅ Succès | {len(successes)} |",
+              f"| ❌ Échecs | {len(failures)} |",
+              f"| ⚪ Annulés | {len(cancelled)} |",
+              f"| **Total 24h** | **{len(runs)}** |",
+              "",
+          ]
+
+          if analyses:
+              lines += ["## Détail des échecs", ""]
+              for a in analyses:
+                  icon = "🔧" if a["peut_corriger"] else "⚠️"
+                  lines.append(f"### {icon} Run #{a['run_id']} — {a['created_at']}")
+                  lines.append(f"[→ Voir le run]({a['url']})")
+                  lines.append("")
+                  lines.append(f"**Analyse :** {a['explication']}")
+                  if a["peut_corriger"]:
+                      lines.append("")
+                      lines.append("✅ **Correction automatique appliquée** au fichier `auto_prepa.yml`.")
+                  lines.append("")
+
+          if corrections:
+              lines += [
+                  "## Corrections appliquées",
+                  "",
+                  f"Le workflow `auto_prepa.yml` a été corrigé automatiquement suite aux runs : {', '.join('#' + r for r in corrections)}.",
+                  "Un commit a été effectué sur la branche principale.",
+                  "",
+              ]
+
+          if not failures:
+              lines += ["✅ Tous les runs des dernières 24h ont réussi. Aucune action requise.", ""]
+
+          lines.append("---")
+          lines.append("*Généré automatiquement par [monitoring_quotidien.yml](/.github/workflows/monitoring_quotidien.yml)*")
+
+          report_body = "\n".join(lines)
+
+          # ── Créer une issue GitHub si des échecs ont été détectés ───────────
+          if failures:
+              title = f"[Monitoring {datetime.utcnow().strftime('%Y-%m-%d')}] {len(failures)} échec(s) aut_prep"
+              issue = gh(f"/repos/{REPO}/issues", method="POST", data={
+                  "title": title,
+                  "body": report_body,
+                  "labels": ["monitoring", "bug"],
+              })
+              print(f"\n→ Issue créée : #{issue.get('number')} — {issue.get('html_url', '')}")
+          else:
+              print(f"\n✅ Aucun échec — pas d'issue créée.")
+
+          # ── Outputs pour les steps suivantes ────────────────────────────────
+          has_fix = "true" if corrections else "false"
+          with open(GITHUB_OUTPUT, "a") as f:
+              f.write(f"has_fix={has_fix}\n")
+
+          print(f"\n{'='*60}\n")
+          PYEOF
+
+      - name: Commiter la correction du workflow si nécessaire
+        if: steps.analyse.outputs.has_fix == 'true'
+        run: |
+          git config user.name "monitoring-bot"
+          git config user.email "actions@github.com"
+          if ! git diff --quiet .github/workflows/auto_prepa.yml; then
+            git add .github/workflows/auto_prepa.yml
+            git commit -m "fix(workflow): correction automatique aut_prep [monitoring quotidien $(date -u +%Y-%m-%d)]"
+            git push origin HEAD:main
+            echo "✓ Correction committée sur main."
+          else
+            echo "Aucun changement à commiter."
+          fi
