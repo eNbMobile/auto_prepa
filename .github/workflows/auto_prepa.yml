@@ -2,6 +2,8 @@ name: aut_prep
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '*/5 * * * *'
 
 concurrency:
   group: aut_prep

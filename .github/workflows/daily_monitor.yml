@@ -1,0 +1,59 @@
+name: daily_monitor
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # Tous les jours à 6h UTC
+  workflow_dispatch:
+    inputs:
+      since_hours:
+        description: 'Nombre d heures à analyser (défaut: 24)'
+        required: false
+        default: '24'
+      auto_fix:
+        description: 'Appliquer les corrections automatiquement (true/false)'
+        required: false
+        default: 'true'
+
+concurrency:
+  group: daily-monitor
+  cancel-in-progress: true
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      actions: read
+      contents: write
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT || github.token }}
+          fetch-depth: 0
+
+      - name: Configurer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Surveiller et corriger
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          REPO: ${{ github.repository }}
+          AUTO_FIX: ${{ github.event.inputs.auto_fix || 'true' }}
+        run: python3 .github/scripts/daily_monitor.py
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi par une correction
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ] && [ -n "$GH_TOKEN" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}" || true
+          fi
