@@ -24,6 +24,8 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 REPO_PATH = Path(os.environ.get("REPO_PATH", Path(__file__).parent.parent))
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "120"))
 MAX_FIXES_PER_RUN = int(os.environ.get("MAX_FIXES_PER_RUN", "3"))
+SINCE_MINUTES = int(os.environ.get("SINCE_MINUTES", "30"))
+RUN_ONCE = os.environ.get("RUN_ONCE", "0") == "1"
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -49,16 +51,25 @@ def _gh_request(path, method="GET", data=None):
 
 
 def get_recent_failed_runs(since_minutes=30):
-    """Récupère les runs échoués du workflow cible dans les dernières N minutes."""
-    since = (datetime.utcnow() - timedelta(minutes=since_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    params = urllib.parse.urlencode({
-        "status": "failure",
-        "created": f">={since}",
-        "per_page": "10",
-    })
-    data = _gh_request(f"/repos/{REPO}/actions/runs?{params}")
-    runs = data.get("workflow_runs", [])
-    return [r for r in runs if r.get("name") == WORKFLOW_NAME or r.get("workflow_name") == WORKFLOW_NAME]
+    """Récupère les runs échoués du workflow cible dans les dernières N minutes (avec pagination)."""
+    since_str = (datetime.utcnow() - timedelta(minutes=since_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    all_runs = []
+    page = 1
+    while page <= 15:
+        params = urllib.parse.urlencode({"status": "failure", "per_page": "100", "page": str(page)})
+        data = _gh_request(f"/repos/{REPO}/actions/runs?{params}")
+        runs = data.get("workflow_runs", [])
+        if not runs:
+            break
+        for r in runs:
+            if r.get("created_at", "") < since_str:
+                return all_runs
+            if r.get("name") == WORKFLOW_NAME or r.get("workflow_name") == WORKFLOW_NAME:
+                all_runs.append(r)
+        if runs[-1].get("created_at", "") < since_str or len(runs) < 100:
+            break
+        page += 1
+    return all_runs
 
 
 def get_run_logs(run_id):
@@ -112,13 +123,30 @@ def get_workflow_file_content(workflow_name):
     return None, None
 
 
-def create_github_issue(title, body):
+def _ensure_label(name, color="d93f0b", description=""):
+    """Crée le label s'il n'existe pas déjà."""
+    try:
+        _gh_request(f"/repos/{REPO}/labels/{urllib.parse.quote(name)}")
+    except RuntimeError:
+        try:
+            _gh_request(f"/repos/{REPO}/labels", method="POST",
+                        data={"name": name, "color": color, "description": description})
+        except RuntimeError:
+            pass
+
+
+def create_github_issue(title, body, labels=None):
     """Crée une issue GitHub pour signaler une correction."""
-    return _gh_request(f"/repos/{REPO}/issues", method="POST", data={
-        "title": title,
-        "body": body,
-        "labels": ["bug", "auto-fix"],
-    })
+    if labels is None:
+        labels = ["bug", "auto-fix"]
+    for lbl in labels:
+        _ensure_label(lbl)
+    try:
+        return _gh_request(f"/repos/{REPO}/issues", method="POST",
+                           data={"title": title, "body": body, "labels": labels})
+    except RuntimeError:
+        return _gh_request(f"/repos/{REPO}/issues", method="POST",
+                           data={"title": title, "body": body})
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -167,9 +195,8 @@ Réponds UNIQUEMENT avec un objet JSON de cette forme exacte :
 
     try:
         response = client.messages.create(
-            model="claude-opus-4-7",
+            model="claude-opus-4-8",
             max_tokens=4096,
-            thinking={"type": "adaptive"},
             messages=[{"role": "user", "content": prompt}],
         )
         raw = next((b.text for b in response.content if b.type == "text"), "{}")
@@ -253,7 +280,7 @@ def _verifier_config():
 def scan_et_corriger():
     """Un cycle de surveillance et correction."""
     runs_traites = _charger_traites()
-    runs_echoues = get_recent_failed_runs()
+    runs_echoues = get_recent_failed_runs(since_minutes=SINCE_MINUTES)
 
     nouveaux = [r for r in runs_echoues if str(r["id"]) not in runs_traites]
     if not nouveaux:
@@ -263,6 +290,8 @@ def scan_et_corriger():
     workflow_content, yml_path = get_workflow_file_content(WORKFLOW_NAME)
 
     corrections = 0
+    rapport_lignes = []
+
     for run in nouveaux[:MAX_FIXES_PER_RUN]:
         run_id = str(run["id"])
         print(f"\n  → Run #{run_id} ({run.get('created_at', '')})")
@@ -280,29 +309,75 @@ def scan_et_corriger():
             ok = appliquer_correction(yml_path, contenu_corrige, run, explication)
             if ok:
                 corrections += 1
-                # Mettre à jour pour les itérations suivantes
                 workflow_content = contenu_corrige
-        else:
-            # Créer une issue si correction impossible
-            try:
-                issue = create_github_issue(
-                    f"[aut_prep] Échec non corrigeable – run #{run_id}",
-                    f"**Cause :** {explication}\n\n**Run :** {run.get('html_url', run_id)}\n\n"
-                    f"*Généré automatiquement par agent3_github_watcher*",
+                rapport_lignes.append(
+                    f"- **Run #{run_id}** ({run.get('created_at', '')}) : correction appliquée\n"
+                    f"  - {explication}\n"
+                    f"  - URL : {run.get('html_url', '')}"
                 )
-                print(f"    Issue créée : #{issue.get('number')}")
-            except Exception as e:
-                print(f"    (Impossible de créer l'issue : {e})")
+            else:
+                rapport_lignes.append(
+                    f"- **Run #{run_id}** : correction échouée\n  - {explication}"
+                )
+        else:
+            rapport_lignes.append(
+                f"- **Run #{run_id}** ({run.get('created_at', '')}) : non corrigeable\n"
+                f"  - {explication}\n"
+                f"  - URL : {run.get('html_url', '')}"
+            )
+            if not RUN_ONCE:
+                try:
+                    issue = create_github_issue(
+                        f"[aut_prep] Échec non corrigeable – run #{run_id}",
+                        f"**Cause :** {explication}\n\n**Run :** {run.get('html_url', run_id)}\n\n"
+                        f"*Généré automatiquement par agent3_github_watcher*",
+                    )
+                    print(f"    Issue créée : #{issue.get('number')}")
+                except Exception as e:
+                    print(f"    (Impossible de créer l'issue : {e})")
 
         runs_traites.add(run_id)
 
     _sauvegarder_traites(runs_traites)
+
+    if RUN_ONCE and rapport_lignes:
+        _publier_rapport_quotidien(nouveaux, corrections, rapport_lignes)
+
     return corrections
 
 
+def _publier_rapport_quotidien(runs_en_echec, nb_corrections, rapport_lignes):
+    """Publie un rapport quotidien sous forme d'issue GitHub."""
+    date_str = datetime.utcnow().strftime("%Y-%m-%d")
+    total = len(runs_en_echec)
+    fenetre_h = SINCE_MINUTES // 60
+
+    body = (
+        f"## Rapport de surveillance — {date_str}\n\n"
+        f"**Fenêtre analysée :** {fenetre_h}h | "
+        f"**Runs en échec :** {total} | "
+        f"**Corrections appliquées :** {nb_corrections}\n\n"
+        f"### Détail des échecs\n\n"
+        + "\n".join(rapport_lignes) +
+        f"\n\n---\n*Généré automatiquement par `surveillance_quotidienne` — {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}*"
+    )
+
+    try:
+        issue = create_github_issue(
+            f"[Surveillance] Rapport quotidien aut_prep — {date_str} ({total} échec(s))",
+            body,
+            labels=["surveillance", "rapport"],
+        )
+        print(f"\n  Rapport publié : issue #{issue.get('number')} → {issue.get('html_url', '')}")
+    except Exception as e:
+        print(f"\n  (Impossible de publier le rapport : {e})\n\nRapport :\n{body}")
+
+
 def main():
+    mode = "one-shot" if RUN_ONCE else "continu"
     print(f"=== Agent 3 - GitHub Watcher ({datetime.now().strftime('%Y-%m-%d %H:%M')}) ===")
-    print(f"  Dépôt : {REPO}  |  Workflow : {WORKFLOW_NAME}  |  Intervalle : {POLL_INTERVAL}s")
+    print(f"  Dépôt : {REPO}  |  Workflow : {WORKFLOW_NAME}  |  Mode : {mode}")
+    print(f"  Fenêtre : {SINCE_MINUTES} min ({SINCE_MINUTES // 60}h)  |  Intervalle : {POLL_INTERVAL}s")
 
     try:
         _verifier_config()
@@ -312,6 +387,18 @@ def main():
         print("  GITHUB_TOKEN=<token>")
         print("  ANTHROPIC_API_KEY=<clé>")
         print("  REPO_PATH=<chemin vers le dépôt local>  (optionnel)")
+        return
+
+    if RUN_ONCE:
+        try:
+            n = scan_et_corriger()
+            if n:
+                print(f"\n  {n} correction(s) appliquée(s).")
+            else:
+                print(f"\n  Aucun nouveau problème détecté sur les {SINCE_MINUTES // 60}h.")
+        except Exception as e:
+            print(f"  Erreur scan : {e}")
+            raise
         return
 
     try:
