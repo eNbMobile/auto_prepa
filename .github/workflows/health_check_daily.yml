@@ -1,0 +1,537 @@
+name: health-check-daily
+
+on:
+  schedule:
+    - cron: '0 7 * * *'   # Tous les jours à 7h UTC
+  workflow_dispatch:
+    inputs:
+      heures:
+        description: 'Nombre d''heures à analyser (défaut: 24)'
+        default: '24'
+        required: false
+
+permissions:
+  issues: write
+  actions: read
+  contents: write
+
+concurrency:
+  group: health-check
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Analyser les workflows et générer le rapport
+        id: analyse
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          HEURES: ${{ inputs.heures || '24' }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys, urllib.request, urllib.parse, urllib.error
+          import datetime, zipfile, io, time
+
+          TOKEN    = os.environ["GH_TOKEN"]
+          REPO     = os.environ.get("GITHUB_REPOSITORY", "enbmobile/auto_prepa")
+          HEURES   = int(os.environ.get("HEURES", "24"))
+          ANT_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
+          OUT_FILE = os.environ.get("GITHUB_OUTPUT", "/dev/null")
+
+          # Workflows critiques avec leur fréquence planifiée (None = manuel)
+          WORKFLOWS_CONFIG = {
+              "collecte_ean":      {"schedule_min": 30, "critical": True},
+              "aut_prep":          {"schedule_min": None, "critical": True},
+              "analyse_mensuelle": {"schedule_min": None, "critical": False},
+              "controle_stocks":   {"schedule_min": None, "critical": False},
+              "generer_ventes":    {"schedule_min": None, "critical": False},
+              "manquants":         {"schedule_min": None, "critical": False},
+          }
+
+          H = {
+              "Authorization": f"Bearer {TOKEN}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "User-Agent": "auto_prepa-health-check/1.0",
+          }
+
+          def gh(method, path, data=None, timeout=30):
+              url = path if path.startswith("http") else f"https://api.github.com{path}"
+              body = json.dumps(data).encode() if data else None
+              hdrs = dict(H)
+              if body:
+                  hdrs["Content-Type"] = "application/json"
+              req = urllib.request.Request(url, data=body, headers=hdrs, method=method)
+              try:
+                  r = urllib.request.urlopen(req, timeout=timeout)
+                  return json.loads(r.read()), r.getcode()
+              except urllib.error.HTTPError as e:
+                  print(f"  HTTP {e.code} {method} {url}")
+                  return ({} if e.code != 200 else []), e.code
+              except Exception as e:
+                  print(f"  ERR {method} {url}: {e}")
+                  return {}, 0
+
+          def get_logs(run_id):
+              url = f"https://api.github.com/repos/{REPO}/actions/runs/{run_id}/logs"
+              req = urllib.request.Request(url, headers=H)
+              try:
+                  data = urllib.request.urlopen(req, timeout=30).read()
+                  with zipfile.ZipFile(io.BytesIO(data)) as z:
+                      parts = []
+                      for name in sorted(z.namelist()):
+                          try:
+                              text = z.read(name).decode("utf-8", errors="replace")
+                              lines = text.split("\n")
+                              err_lines = [l for l in lines if any(
+                                  k in l.lower() for k in
+                                  ["error", "failed", "exception", "traceback", "critical", "fatal", "erreur"]
+                              )]
+                              relevant = err_lines[-40:] if err_lines else lines[-20:]
+                              if relevant:
+                                  parts.append(f"--- {name} ---\n" + "\n".join(relevant))
+                          except:
+                              pass
+                      return "\n".join(parts)[-6000:]
+              except Exception as e:
+                  return f"Logs indisponibles: {e}"
+
+          def claude_analyze(echecs):
+              if not ANT_KEY or not echecs:
+                  return None
+              failures_str = json.dumps(
+                  [{**e, "logs_extrait": e.get("logs_extrait", "")[:2000]} for e in echecs],
+                  indent=2, ensure_ascii=False
+              )[:12000]
+              payload = {
+                  "model": "claude-sonnet-4-6",
+                  "max_tokens": 2048,
+                  "messages": [{
+                      "role": "user",
+                      "content": f"""Tu es expert DevOps analysant les échecs des workflows GitHub Actions du projet auto_prepa
+(automatisation e-commerce: lecture emails, extraction EAN depuis PDFs BDC, contrôle stocks, images produits).
+
+Échecs des dernières {HEURES}h:
+{failures_str}
+
+Pour chaque échec, identifie la cause probable et la correction. Réponds en JSON strict:
+{{
+  "resume": "2-3 phrases de synthèse en français",
+  "gravite": "critique|attention|ok",
+  "echecs_analyses": [
+    {{
+      "workflow": "nom exact du workflow",
+      "cause_probable": "description concise",
+      "correction_recommandee": "action concrète",
+      "urgence": "haute|moyenne|basse",
+      "auto_fixable": true/false
+    }}
+  ]
+}}"""
+                  }]
+              }
+              req = urllib.request.Request(
+                  "https://api.anthropic.com/v1/messages",
+                  data=json.dumps(payload).encode(),
+                  headers={
+                      "anthropic-version": "2023-06-01",
+                      "content-type": "application/json",
+                      "x-api-key": ANT_KEY,
+                  }
+              )
+              try:
+                  resp = urllib.request.urlopen(req, timeout=60)
+                  text = json.loads(resp.read())["content"][0]["text"]
+                  s = text.find("{"); e = text.rfind("}") + 1
+                  if s >= 0 and e > s:
+                      return json.loads(text[s:e])
+              except Exception as ex:
+                  print(f"  Erreur Claude: {ex}")
+              return None
+
+          def ensure_label(name, color, desc=""):
+              gh("POST", f"/repos/{REPO}/labels", {"name": name, "color": color, "description": desc})
+
+          # ── Collecte ────────────────────────────────────────────────────────
+          now_utc  = datetime.datetime.utcnow()
+          since_dt = now_utc - datetime.timedelta(hours=HEURES)
+          since    = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+          print(f"🔍 Analyse des runs depuis {since} ({HEURES}h)\n")
+
+          wf_data, _ = gh("GET", f"/repos/{REPO}/actions/workflows?per_page=50")
+          all_wfs = wf_data.get("workflows", [])
+          print(f"Workflows trouvés : {len(all_wfs)}")
+
+          rapport_wf  = []
+          echecs_list = []
+
+          for wf in all_wfs:
+              wf_name = wf["name"]
+              wf_id   = wf["id"]
+              cfg     = WORKFLOWS_CONFIG.get(wf_name, {"schedule_min": None, "critical": False})
+
+              runs_data, _ = gh("GET",
+                  f"/repos/{REPO}/actions/workflows/{wf_id}/runs?created=>={since}&per_page=100")
+              runs = runs_data.get("workflow_runs", [])
+
+              ok_runs     = [r for r in runs if r["conclusion"] == "success"]
+              failed_runs = [r for r in runs if r["conclusion"] in ("failure", "timed_out")]
+              skipped     = [r for r in runs if r["conclusion"] == "skipped"]
+              running     = [r for r in runs if r["status"] in ("in_progress", "queued")]
+
+              freq_ok   = True
+              freq_note = ""
+              sched = cfg.get("schedule_min")
+              if sched:
+                  expected = max(1, int(HEURES * 60 / sched))
+                  actual   = len(ok_runs) + len(failed_runs)
+                  if actual < expected * 0.6:
+                      freq_ok   = False
+                      freq_note = f"(seulement {actual}/{expected} runs attendus)"
+
+              if failed_runs:
+                  icon = "❌"
+              elif not freq_ok:
+                  icon = "⚠️"
+              elif not runs and cfg.get("critical"):
+                  icon = "❓"
+              else:
+                  icon = "✅" if runs else "—"
+
+              rapport_wf.append({
+                  "name": wf_name, "icon": icon,
+                  "critical": cfg.get("critical", False),
+                  "total": len(runs), "ok": len(ok_runs),
+                  "failed": len(failed_runs), "skipped": len(skipped),
+                  "running": len(running), "freq_ok": freq_ok, "freq_note": freq_note,
+              })
+
+              print(f"  {icon} {wf_name}: {len(runs)} runs ({len(ok_runs)} OK, {len(failed_runs)} échecs) {freq_note}")
+
+              for run in failed_runs[:3]:
+                  print(f"     📋 Récupération logs: #{run['run_number']}…")
+                  logs = get_logs(run["id"])
+                  echecs_list.append({
+                      "workflow": wf_name,
+                      "run_id": run["id"],
+                      "run_number": run["run_number"],
+                      "conclusion": run["conclusion"],
+                      "started": run.get("run_started_at", ""),
+                      "url": run["html_url"],
+                      "logs_extrait": logs,
+                  })
+                  time.sleep(0.5)
+
+          nb_echecs    = sum(w["failed"] for w in rapport_wf)
+          total_runs   = sum(w["total"]  for w in rapport_wf)
+          has_critical = any(w["failed"] > 0 and w["critical"] for w in rapport_wf)
+          freq_issues  = [w for w in rapport_wf if not w["freq_ok"]]
+
+          print(f"\n📊 Total: {total_runs} runs | ❌ Échecs: {nb_echecs} | ⚠️ Freq.: {len(freq_issues)}\n")
+
+          # ── Analyse Claude ───────────────────────────────────────────────────
+          analyse = None
+          if echecs_list:
+              print("🤖 Analyse Claude…")
+              analyse = claude_analyze(echecs_list)
+              if analyse:
+                  print(f"  Gravité: {analyse.get('gravite')} — {analyse.get('resume','')[:80]}")
+
+          # ── Rapport Markdown ─────────────────────────────────────────────────
+          date_str = now_utc.strftime("%d/%m/%Y %H:%M UTC")
+          global_status = "✅ Tout fonctionne" if nb_echecs == 0 and not freq_issues else f"❌ {nb_echecs} échec(s)"
+
+          lines = [
+              f"# 🏥 Rapport de santé — {date_str}",
+              "",
+              f"> **Période:** {HEURES}h | **Runs analysés:** {total_runs} | **Statut:** {global_status}",
+              "",
+          ]
+
+          if analyse:
+              icons = {"critique": "🔴", "attention": "🟡", "ok": "🟢"}
+              g = analyse.get("gravite", "")
+              lines += [
+                  f"## {icons.get(g,'🔵')} Analyse IA",
+                  "",
+                  analyse.get("resume", ""),
+                  "",
+              ]
+
+          lines += [
+              "## 📊 Tableau de bord",
+              "",
+              "| Workflow | Statut | Runs | ✅ OK | ❌ Échecs | ⏭️ Skip | 🔄 En cours | Note |",
+              "|----------|--------|------|-------|-----------|---------|------------|------|",
+          ]
+          for w in sorted(rapport_wf, key=lambda x: (-x["failed"], -int(x["critical"]), x["name"])):
+              note = w["freq_note"] if w["freq_note"] else ("critique" if w["critical"] else "")
+              lines.append(
+                  f"| `{w['name']}` | {w['icon']} | {w['total']} | {w['ok']} | {w['failed']}"
+                  f" | {w['skipped']} | {w['running']} | {note} |"
+              )
+
+          if echecs_list:
+              lines += ["", "## 🔴 Détail des échecs", ""]
+              analyse_map = {}
+              if analyse:
+                  for ea in analyse.get("echecs_analyses", []):
+                      analyse_map.setdefault(ea.get("workflow",""), []).append(ea)
+
+              for e in echecs_list:
+                  lines += [
+                      f"### `{e['workflow']}` — Run #{e['run_number']} (`{e['conclusion']}`)",
+                      f"- 🕐 **Démarré:** `{e['started']}`",
+                      f"- 🔗 **Lien:** {e['url']}",
+                  ]
+                  for ea in analyse_map.get(e["workflow"], []):
+                      lines += [
+                          f"- 🔍 **Cause probable:** {ea.get('cause_probable','N/A')}",
+                          f"- 🔧 **Correction:** {ea.get('correction_recommandee','N/A')}",
+                          f"- ⚡ **Urgence:** {ea.get('urgence','N/A')}",
+                      ]
+                  if e.get("logs_extrait"):
+                      lines += [
+                          "",
+                          "<details>",
+                          "<summary>📜 Logs (extrait)</summary>",
+                          "",
+                          "```",
+                          e["logs_extrait"][-3000:],
+                          "```",
+                          "</details>",
+                          "",
+                      ]
+
+          if freq_issues:
+              lines += ["", "## ⚠️ Problèmes de fréquence d'exécution", ""]
+              for w in freq_issues:
+                  lines.append(f"- **`{w['name']}`** : {w['freq_note']}")
+
+          lines += [
+              "",
+              "---",
+              f"*Rapport automatique généré le {date_str} par `health-check-daily` · "
+              f"[Voir les runs]"
+              f"(https://github.com/{REPO}/actions)*",
+          ]
+
+          body = "\n".join(lines)
+
+          # Sauvegarder
+          with open("/tmp/rapport_sante.md", "w") as f:
+              f.write(body)
+          with open(OUT_FILE, "a") as f:
+              f.write(f"has_failures={'true' if nb_echecs > 0 or freq_issues else 'false'}\n")
+              f.write(f"nb_echecs={nb_echecs}\n")
+              f.write(f"nb_freq_issues={len(freq_issues)}\n")
+
+          # ── Créer l'issue si nécessaire ──────────────────────────────────────
+          if nb_echecs > 0 or freq_issues:
+              ensure_label("health-check", "0075ca", "Rapport de santé quotidien")
+              if has_critical:
+                  ensure_label("bug", "d73a4a", "Quelque chose ne fonctionne pas")
+
+              title = f"🚨 Rapport santé {now_utc.strftime('%d/%m/%Y')} — {nb_echecs} échec(s)"
+              labels = ["health-check"] + (["bug"] if has_critical else [])
+
+              result, code = gh("POST", f"/repos/{REPO}/issues", {
+                  "title": title, "body": body, "labels": labels
+              })
+              issue_url = result.get("html_url", "")
+              print(f"✅ Issue créée: {issue_url}")
+              with open(OUT_FILE, "a") as f:
+                  f.write(f"issue_url={issue_url}\n")
+          else:
+              print("✅ Aucun problème détecté — pas d'issue créée.")
+              print("\n" + body[:3000])
+
+          PYEOF
+
+      - name: Auto-correction des problèmes détectés
+        if: steps.analyse.outputs.has_failures == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ISSUE_URL: ${{ steps.analyse.outputs.issue_url }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys, urllib.request, urllib.parse, urllib.error
+          import subprocess, datetime
+
+          RAPPORT = open("/tmp/rapport_sante.md").read()
+          ANT_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+          REPO    = os.environ.get("GITHUB_REPOSITORY", "enbmobile/auto_prepa")
+          TOKEN   = os.environ["GH_TOKEN"]
+
+          if not ANT_KEY:
+              print("ANTHROPIC_API_KEY absent — auto-correction désactivée")
+              sys.exit(0)
+
+          print("🔧 Tentative d'auto-correction…")
+
+          # Lister les fichiers de workflows modifiables
+          import pathlib
+          wf_dir = pathlib.Path(".github/workflows")
+          wf_files = {f.stem: f.read_text() for f in wf_dir.glob("*.yml")}
+
+          payload = {
+              "model": "claude-sonnet-4-6",
+              "max_tokens": 4096,
+              "messages": [{
+                  "role": "user",
+                  "content": f"""Tu es un expert DevOps chargé de corriger automatiquement les workflows GitHub Actions du projet auto_prepa.
+
+Rapport de santé actuel:
+{RAPPORT[:6000]}
+
+Workflows disponibles (nom: contenu YAML):
+{json.dumps({k: v[:3000] for k, v in wf_files.items()}, ensure_ascii=False, indent=2)[:8000]}
+
+Si tu identifies des corrections simples et sûres à appliquer (ex: version d'action obsolète, dépendance manquante,
+variable d'env manquante, cron schedule incorrect), fournis-les.
+
+Réponds en JSON strict:
+{{
+  "corrections": [
+    {{
+      "fichier": "nom_du_fichier.yml",
+      "description": "description de la correction",
+      "contenu_complet": "contenu YAML complet du fichier corrigé"
+    }}
+  ],
+  "raison_pas_de_correction": "si aucune correction automatique n'est possible, explique pourquoi"
+}}
+
+IMPORTANT: Ne propose des corrections QUE si tu es certain qu'elles sont correctes et nécessaires.
+Si le problème nécessite une intervention humaine (token expiré, secret manquant, etc.), ne propose rien."""
+              }]
+          }
+
+          req = urllib.request.Request(
+              "https://api.anthropic.com/v1/messages",
+              data=json.dumps(payload).encode(),
+              headers={
+                  "anthropic-version": "2023-06-01",
+                  "content-type": "application/json",
+                  "x-api-key": ANT_KEY,
+              }
+          )
+
+          try:
+              resp = urllib.request.urlopen(req, timeout=90)
+              text = json.loads(resp.read())["content"][0]["text"]
+              s = text.find("{"); e = text.rfind("}") + 1
+              if s < 0 or e <= s:
+                  print("Pas de JSON dans la réponse Claude")
+                  sys.exit(0)
+              result = json.loads(text[s:e])
+          except Exception as ex:
+              print(f"Erreur Claude auto-correction: {ex}")
+              sys.exit(0)
+
+          corrections = result.get("corrections", [])
+          raison_non  = result.get("raison_pas_de_correction", "")
+
+          if not corrections:
+              print(f"ℹ️  Pas de correction automatique possible: {raison_non}")
+              sys.exit(0)
+
+          print(f"📝 {len(corrections)} correction(s) à appliquer")
+
+          branch = f"fix/health-check-{datetime.datetime.utcnow().strftime('%Y%m%d-%H%M')}"
+          subprocess.run(["git", "config", "user.email", "health-check@auto_prepa"], check=True)
+          subprocess.run(["git", "config", "user.name", "Health Check Bot"], check=True)
+          subprocess.run(["git", "checkout", "-b", branch], check=True)
+
+          applied = []
+          for c in corrections:
+              fname = c.get("fichier", "")
+              content = c.get("contenu_complet", "")
+              desc = c.get("description", "")
+              if not fname or not content:
+                  continue
+              fpath = pathlib.Path(".github/workflows") / fname
+              if not fpath.exists():
+                  print(f"  ⚠️  Fichier {fname} introuvable, skip")
+                  continue
+              fpath.write_text(content)
+              subprocess.run(["git", "add", str(fpath)], check=True)
+              applied.append(f"- {fname}: {desc}")
+              print(f"  ✅ {fname}: {desc}")
+
+          if not applied:
+              print("Aucune correction appliquée")
+              sys.exit(0)
+
+          msg = "fix(workflows): corrections automatiques health-check\n\n" + "\n".join(applied)
+          subprocess.run(["git", "commit", "-m", msg], check=True)
+
+          remote_url = f"https://x-access-token:{TOKEN}@github.com/{REPO}.git"
+          r = subprocess.run(["git", "push", remote_url, f"HEAD:{branch}"], capture_output=True, text=True)
+          if r.returncode != 0:
+              print(f"Erreur push: {r.stderr}")
+              sys.exit(1)
+
+          print(f"✅ Branch poussée: {branch}")
+
+          # Créer la PR
+          H = {
+              "Authorization": f"Bearer {TOKEN}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "Content-Type": "application/json",
+          }
+          pr_body = f"""Corrections automatiques appliquées par le health-check quotidien.
+
+## Corrections
+{chr(10).join(applied)}
+
+## Rapport
+Voir: {os.environ.get('ISSUE_URL', 'N/A')}
+
+---
+*Créé automatiquement par `health-check-daily`*"""
+
+          req = urllib.request.Request(
+              f"https://api.github.com/repos/{REPO}/pulls",
+              data=json.dumps({
+                  "title": f"fix: corrections auto health-check {datetime.datetime.utcnow().strftime('%d/%m/%Y')}",
+                  "body": pr_body,
+                  "head": branch,
+                  "base": "main",
+                  "draft": False,
+              }).encode(),
+              headers=H, method="POST"
+          )
+          try:
+              pr = json.loads(urllib.request.urlopen(req, timeout=30).read())
+              print(f"✅ PR créée: {pr.get('html_url')}")
+          except Exception as ex:
+              print(f"PR non créée: {ex}")
+
+          PYEOF
+
+      - name: Résumé
+        if: always()
+        run: |
+          echo "=== Résumé ==="
+          echo "Échecs: ${{ steps.analyse.outputs.nb_echecs }}"
+          echo "Problèmes fréquence: ${{ steps.analyse.outputs.nb_freq_issues }}"
+          echo "Issue: ${{ steps.analyse.outputs.issue_url }}"
+          if [ -f /tmp/rapport_sante.md ]; then
+            echo ""
+            head -50 /tmp/rapport_sante.md
+          fi
