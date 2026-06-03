@@ -13,6 +13,7 @@ controle_stocks.py
 generer_ventes.py
 analyse_mensuelle.py
 download_stocks.py
+fix_anomalies.py
 
 gmail_filters_local.json
 
