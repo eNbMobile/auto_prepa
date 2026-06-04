@@ -1,0 +1,43 @@
+name: Surveillance quotidienne aut_prep
+
+on:
+  schedule:
+    - cron: '0 7 * * *'   # 07:00 UTC = 09:00 Paris (CEST) / 08:00 (CET)
+  workflow_dispatch:
+
+concurrency:
+  group: surveillance_quotidienne
+  cancel-in-progress: false
+
+jobs:
+  surveillance:
+    name: Vérification 24h — aut_prep
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Installer Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer les dépendances
+        run: pip install anthropic
+
+      - name: Exécuter la surveillance quotidienne
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          REPO: ${{ github.repository }}
+          REPO_PATH: ${{ github.workspace }}
+        run: python3 agents/daily_monitor.py
