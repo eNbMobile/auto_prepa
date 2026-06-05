@@ -1,0 +1,160 @@
+name: Monitoring Quotidien aut_prep
+
+on:
+  schedule:
+    - cron: '0 7 * * *'   # Tous les jours à 07h00 UTC (09h00 Paris)
+  workflow_dispatch:
+    inputs:
+      heures:
+        description: 'Fenêtre d analyse en heures (défaut: 24)'
+        required: false
+        default: '24'
+
+jobs:
+  verif-aut-prep:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Vérifier les exécutions aut_prep des dernières 24h
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          HEURES: ${{ github.event.inputs.heures || '24' }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys, urllib.request, urllib.parse
+          from datetime import datetime, timezone, timedelta
+
+          TOKEN    = os.environ["GH_TOKEN"]
+          REPO     = "enbmobile/auto_prepa"
+          WORKFLOW = "auto_prepa.yml"
+          HEURES   = int(os.environ.get("HEURES", "24"))
+
+          H = {"Authorization": f"Bearer {TOKEN}", "Accept": "application/vnd.github+json",
+               "X-GitHub-Api-Version": "2022-11-28"}
+
+          def gh_get(path, params=None):
+              url = f"https://api.github.com{path}"
+              if params:
+                  url += "?" + urllib.parse.urlencode(params)
+              return json.loads(urllib.request.urlopen(
+                  urllib.request.Request(url, headers=H)).read())
+
+          def gh_post(path, body):
+              data = json.dumps(body).encode()
+              req = urllib.request.Request(
+                  f"https://api.github.com{path}", data=data, headers={
+                      **H, "Content-Type": "application/json"},
+                  method="POST")
+              return json.loads(urllib.request.urlopen(req).read())
+
+          # ── Fenêtre d'analyse ───────────────────────────────────────────
+          maintenant = datetime.now(timezone.utc)
+          debut      = maintenant - timedelta(hours=HEURES)
+          debut_iso  = debut.strftime("%Y-%m-%dT%H:%M:%SZ")
+          print(f"Fenêtre : {debut_iso} → {maintenant.strftime('%Y-%m-%dT%H:%M:%SZ')}")
+
+          # ── Récupérer les runs ─────────────────────────────────────────
+          tous_runs   = []
+          page        = 1
+          continuer   = True
+
+          while continuer:
+              data = gh_get(
+                  f"/repos/{REPO}/actions/workflows/{WORKFLOW}/runs",
+                  {"per_page": 100, "page": page, "status": "completed"})
+              batch = data.get("workflow_runs", [])
+              if not batch:
+                  break
+              for r in batch:
+                  created = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00"))
+                  if created < debut:
+                      continuer = False
+                      break
+                  tous_runs.append(r)
+              page += 1
+              if page > 50:   # garde-fou : ne pas boucler indéfiniment
+                  break
+
+          print(f"Runs récupérés sur les {HEURES}h : {len(tous_runs)}")
+
+          # ── Analyser ───────────────────────────────────────────────────
+          succes   = [r for r in tous_runs if r["conclusion"] == "success"]
+          echecs   = [r for r in tous_runs if r["conclusion"] in
+                      ("failure", "timed_out", "startup_failure")]
+          annules  = [r for r in tous_runs if r["conclusion"] == "cancelled"]
+
+          taux = (len(succes) / len(tous_runs) * 100) if tous_runs else 0
+
+          print(f"Succès   : {len(succes)}")
+          print(f"Échecs   : {len(echecs)}")
+          print(f"Annulés  : {len(annules)}")
+          print(f"Taux ok  : {taux:.1f}%")
+
+          # ── Détecter les trous (gap > 3 min entre 2 runs consécutifs) ──
+          trous = []
+          if len(tous_runs) >= 2:
+              tries = sorted(tous_runs, key=lambda r: r["created_at"])
+              for i in range(1, len(tries)):
+                  t0 = datetime.fromisoformat(tries[i-1]["created_at"].replace("Z","+00:00"))
+                  t1 = datetime.fromisoformat(tries[i]["created_at"].replace("Z","+00:00"))
+                  gap = (t1 - t0).total_seconds()
+                  if gap > 180:   # > 3 minutes = suspect
+                      trous.append((tries[i-1]["created_at"], tries[i]["created_at"],
+                                    int(gap // 60)))
+
+          if trous:
+              print(f"\nTrous détectés : {len(trous)}")
+              for t in trous[:5]:
+                  print(f"  {t[0]} → {t[1]} ({t[2]} min de silence)")
+
+          # ── Ouvrir une issue si problèmes ──────────────────────────────
+          problemes = echecs or trous
+          if not problemes and len(tous_runs) < HEURES * 30:
+              # Trop peu de runs = le déclencheur externe est peut-être tombé
+              problemes = True
+              print(f"\nALERTE : seulement {len(tous_runs)} runs en {HEURES}h (attendu ≥ {HEURES*30})")
+
+          if problemes:
+              titre = f"[MONITORING] aut_prep – anomalies détectées {maintenant.strftime('%d/%m/%Y')}"
+
+              lignes = [
+                  f"## Rapport de monitoring – {maintenant.strftime('%d/%m/%Y %H:%M')} UTC",
+                  f"**Fenêtre analysée :** {debut_iso} → {maintenant.strftime('%Y-%m-%dT%H:%M:%SZ')}",
+                  f"**Runs totaux :** {len(tous_runs)}",
+                  f"**Succès :** {len(succes)}  |  **Échecs :** {len(echecs)}  |  **Annulés :** {len(annules)}",
+                  f"**Taux de succès :** {taux:.1f}%",
+                  "",
+              ]
+
+              if echecs:
+                  lignes.append("### ❌ Runs en échec")
+                  for r in echecs[:10]:
+                      lignes.append(
+                          f"- [{r['id']}]({r['html_url']}) — {r['created_at']} — `{r['conclusion']}`")
+                  lignes.append("")
+
+              if trous:
+                  lignes.append("### ⚠️ Trous d'exécution (> 3 min)")
+                  for t in trous[:10]:
+                      lignes.append(f"- De `{t[0]}` à `{t[1]}` : **{t[2]} minutes** de silence")
+                  lignes.append("")
+
+              if len(tous_runs) < HEURES * 30:
+                  lignes.append(
+                      f"### ⚠️ Volume insuffisant\n"
+                      f"Seulement **{len(tous_runs)}** runs en {HEURES}h "
+                      f"(seuil minimum : {HEURES*30}). Le déclencheur externe est peut-être tombé.")
+                  lignes.append("")
+
+              lignes.append("---")
+              lignes.append("*Issue créée automatiquement par le workflow `monitoring_quotidien`*")
+
+              body = "\n".join(lignes)
+              iss = gh_post(f"/repos/{REPO}/issues",
+                            {"title": titre, "body": body,
+                             "labels": ["monitoring", "bug"]})
+              print(f"\nIssue créée : {iss['html_url']}")
+              sys.exit(1)   # marquer le workflow en échec pour visibilité
+          else:
+              print("\n✅ Tout est nominal — aucune issue créée.")
+          EOF
