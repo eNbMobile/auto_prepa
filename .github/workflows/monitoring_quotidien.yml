@@ -1,0 +1,411 @@
+name: Monitoring Quotidien aut_prep
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # 8h Paris (été) / 7h (hiver)
+  workflow_dispatch:
+
+concurrency:
+  group: monitoring-quotidien
+  cancel-in-progress: false
+
+jobs:
+  monitoring:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Analyser les runs aut_prep des dernières 24h
+        id: analyse
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys, urllib.request, urllib.parse, urllib.error
+          from datetime import datetime, timedelta
+
+          REPO          = os.environ.get("GITHUB_REPOSITORY", "enbmobile/auto_prepa")
+          GH_TOKEN      = os.environ.get("GH_TOKEN", "")
+          ANT_KEY       = os.environ.get("ANTHROPIC_API_KEY", "")
+          OUT_FILE      = os.environ.get("GITHUB_OUTPUT", "/dev/null")
+          WORKFLOW_NAME = "aut_prep"
+          HEURES        = 24
+          # Intervalle attendu entre deux runs (en secondes). L'externe dispatcher tourne ~60s.
+          MAX_GAP_SEC   = 300   # alerte si trou > 5 min
+
+          H = {
+              "Authorization": f"Bearer {GH_TOKEN}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "User-Agent": "auto_prepa-monitoring/2.0",
+          }
+
+          # ── Helpers ────────────────────────────────────────────────────────
+          def gh_get(path, params=None):
+              url = f"https://api.github.com{path}"
+              if params:
+                  url += "?" + urllib.parse.urlencode(params)
+              req = urllib.request.Request(url, headers=H)
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as r:
+                      return json.loads(r.read()), r.getcode()
+              except urllib.error.HTTPError as e:
+                  body = e.read().decode("utf-8", errors="replace")[:300]
+                  print(f"  HTTP {e.code} GET {path}: {body}")
+                  return {}, e.code
+
+          def gh_post(path, data):
+              url = f"https://api.github.com{path}"
+              body = json.dumps(data).encode()
+              hdrs = dict(H)
+              hdrs["Content-Type"] = "application/json"
+              req = urllib.request.Request(url, data=body, headers=hdrs, method="POST")
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as r:
+                      return json.loads(r.read()), r.getcode()
+              except urllib.error.HTTPError as e:
+                  body = e.read().decode("utf-8", errors="replace")[:300]
+                  print(f"  HTTP {e.code} POST {path}: {body}")
+                  return {}, e.code
+
+          def get_logs_text(run_id):
+              import io, zipfile
+              url = f"https://api.github.com/repos/{REPO}/actions/runs/{run_id}/logs"
+              req = urllib.request.Request(url, headers=H)
+              try:
+                  data = urllib.request.urlopen(req, timeout=30).read()
+                  with zipfile.ZipFile(io.BytesIO(data)) as z:
+                      parts = []
+                      for name in sorted(z.namelist()):
+                          try:
+                              text = z.read(name).decode("utf-8", errors="replace")
+                              # Garder seulement les lignes d'erreur
+                              err = [l for l in text.split("\n") if any(
+                                  k in l.lower() for k in
+                                  ["error", "failed", "exception", "traceback", "erreur", "fatal"]
+                              )]
+                              if err:
+                                  parts.append(f"--- {name} ---\n" + "\n".join(err[-30:]))
+                              elif text.strip():
+                                  parts.append(f"--- {name} ---\n" + "\n".join(text.split("\n")[-15:]))
+                          except Exception:
+                              pass
+                      return "\n".join(parts)[-5000:]
+              except Exception as e:
+                  return f"(Logs indisponibles : {e})"
+
+          # ── Collecte tous les runs des 24 dernières heures ─────────────────
+          now_utc   = datetime.utcnow()
+          since_dt  = now_utc - timedelta(hours=HEURES)
+          since_str = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+          print(f"\n{'='*60}")
+          print(f"Monitoring {WORKFLOW_NAME} — {now_utc.strftime('%Y-%m-%d %H:%M UTC')}")
+          print(f"Période: {since_str} → maintenant")
+          print(f"{'='*60}\n")
+
+          # Récupérer l'ID du workflow aut_prep
+          wf_data, _ = gh_get(f"/repos/{REPO}/actions/workflows", {"per_page": "50"})
+          wf_id = None
+          for wf in wf_data.get("workflows", []):
+              if wf.get("name") == WORKFLOW_NAME or wf.get("path", "").endswith("auto_prepa.yml"):
+                  wf_id = wf["id"]
+                  break
+
+          if not wf_id:
+              print("ERREUR: workflow aut_prep introuvable")
+              sys.exit(1)
+          print(f"Workflow ID: {wf_id}")
+
+          # Pagination : on arrête dès qu'on dépasse la fenêtre de 24h
+          all_runs = []
+          page = 1
+          stopped_early = False
+          while True:
+              data, code = gh_get(
+                  f"/repos/{REPO}/actions/workflows/{wf_id}/runs",
+                  {"per_page": "100", "page": str(page), "branch": "main"}
+              )
+              if code != 200:
+                  print(f"Erreur API page {page}: {code}")
+                  break
+              batch = data.get("workflow_runs", [])
+              if not batch:
+                  break
+
+              in_window = []
+              for r in batch:
+                  created = r.get("created_at", "")
+                  if created >= since_str:
+                      in_window.append(r)
+                  else:
+                      stopped_early = True
+
+              all_runs.extend(in_window)
+              print(f"  Page {page}: {len(batch)} runs, {len(in_window)} dans la fenêtre")
+
+              if stopped_early or len(batch) < 100:
+                  break
+              page += 1
+
+          print(f"\nTotal runs dans les {HEURES}h: {len(all_runs)}")
+
+          # ── Catégorisation ─────────────────────────────────────────────────
+          runs_sorted   = sorted(all_runs, key=lambda r: r.get("created_at",""))
+          successes     = [r for r in runs_sorted if r.get("conclusion") == "success"]
+          failures      = [r for r in runs_sorted if r.get("conclusion") == "failure"]
+          cancelled     = [r for r in runs_sorted if r.get("conclusion") in ("cancelled","skipped")]
+          in_progress   = [r for r in runs_sorted if r.get("status") in ("in_progress","queued","waiting")]
+
+          print(f"  ✅ Succès   : {len(successes)}")
+          print(f"  ❌ Échecs   : {len(failures)}")
+          print(f"  ⚪ Annulés  : {len(cancelled)}")
+          print(f"  🔄 En cours : {len(in_progress)}")
+
+          # ── Détection des trous d'exécution ───────────────────────────────
+          gaps = []
+          if len(runs_sorted) >= 2:
+              for i in range(1, len(runs_sorted)):
+                  prev = runs_sorted[i-1]
+                  curr = runs_sorted[i]
+                  t0 = datetime.fromisoformat(prev["created_at"].replace("Z","+00:00"))
+                  t1 = datetime.fromisoformat(curr["created_at"].replace("Z","+00:00"))
+                  diff = (t1 - t0).total_seconds()
+                  if diff > MAX_GAP_SEC:
+                      gaps.append({
+                          "de": prev["created_at"],
+                          "a": curr["created_at"],
+                          "duree_min": round(diff / 60, 1),
+                          "run_avant": prev["run_number"],
+                          "run_apres": curr["run_number"],
+                      })
+              # Vérifier aussi le trou depuis le dernier run jusqu'à maintenant
+              if runs_sorted:
+                  last_run_time = datetime.fromisoformat(
+                      runs_sorted[-1]["created_at"].replace("Z","+00:00")
+                  ).replace(tzinfo=None)
+                  diff_now = (now_utc - last_run_time).total_seconds()
+                  if diff_now > MAX_GAP_SEC:
+                      gaps.append({
+                          "de": runs_sorted[-1]["created_at"],
+                          "a": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                          "duree_min": round(diff_now / 60, 1),
+                          "run_avant": runs_sorted[-1]["run_number"],
+                          "run_apres": "(maintenant)",
+                      })
+
+          if gaps:
+              print(f"\n⚠️  {len(gaps)} trou(s) d'exécution détecté(s):")
+              for g in gaps:
+                  print(f"   {g['de']} → {g['a']} ({g['duree_min']} min)")
+          else:
+              print(f"\n✅ Pas de trou d'exécution (max gap < {MAX_GAP_SEC}s)")
+
+          # ── Analyse des échecs ────────────────────────────────────────────
+          echec_details = []
+          if failures:
+              print(f"\n{'─'*40}")
+              print(f"Analyse de {len(failures)} échec(s) (max 5):")
+              for run in failures[:5]:
+                  rid = run["id"]
+                  print(f"  → Run #{run['run_number']} ({run['created_at']})")
+                  logs = get_logs_text(rid)
+                  echec_details.append({
+                      "run_number": run["run_number"],
+                      "run_id": rid,
+                      "created_at": run["created_at"],
+                      "url": run.get("html_url",""),
+                      "logs": logs,
+                  })
+
+          # ── Analyse Claude (optionnel) ────────────────────────────────────
+          claude_analyse = None
+          if ANT_KEY and (failures or gaps):
+              print("\n🤖 Analyse Claude en cours...")
+              failures_summary = json.dumps([
+                  {k: v for k, v in e.items() if k != "logs"}
+                  | {"logs_extrait": e["logs"][:1500]}
+                  for e in echec_details
+              ], ensure_ascii=False, indent=2)[:8000]
+              gaps_summary = json.dumps(gaps[:10], ensure_ascii=False, indent=2)
+
+              payload = {
+                  "model": "claude-sonnet-4-6",
+                  "max_tokens": 1024,
+                  "messages": [{
+                      "role": "user",
+                      "content": (
+                          f"Analyse les problèmes suivants du workflow GitHub Actions '{WORKFLOW_NAME}' "
+                          f"(automatisation e-commerce: vérification emails Gmail toutes les minutes).\n\n"
+                          f"Échecs ({len(failures)}):\n{failures_summary}\n\n"
+                          f"Trous d'exécution ({len(gaps)}):\n{gaps_summary}\n\n"
+                          "Réponds en JSON strict:\n"
+                          '{"resume": "2-3 phrases", "cause_probable": "...", '
+                          '"action_recommandee": "...", "urgence": "haute|moyenne|basse"}'
+                      )
+                  }]
+              }
+              req = urllib.request.Request(
+                  "https://api.anthropic.com/v1/messages",
+                  data=json.dumps(payload).encode(),
+                  headers={
+                      "anthropic-version": "2023-06-01",
+                      "content-type": "application/json",
+                      "x-api-key": ANT_KEY,
+                  }
+              )
+              try:
+                  resp = urllib.request.urlopen(req, timeout=60)
+                  text = json.loads(resp.read())["content"][0]["text"]
+                  s = text.find("{"); e = text.rfind("}") + 1
+                  if s >= 0 and e > s:
+                      claude_analyse = json.loads(text[s:e])
+                      print(f"  Urgence: {claude_analyse.get('urgence')} — {claude_analyse.get('resume','')[:80]}")
+              except Exception as ex:
+                  print(f"  Erreur Claude: {ex}")
+
+          # ── Construction du rapport ───────────────────────────────────────
+          date_str     = now_utc.strftime("%d/%m/%Y %H:%M UTC")
+          has_problems = bool(failures or gaps)
+          status_icon  = "❌" if failures else ("⚠️" if gaps else "✅")
+          status_label = f"{len(failures)} échec(s)" if failures else ("trous d'exécution" if gaps else "Tout OK")
+
+          lines = [
+              f"# {status_icon} Rapport Monitoring `aut_prep` — {date_str}",
+              "",
+              f"> **Période analysée:** {since_str} → maintenant  ",
+              f"> **Runs traités:** {len(all_runs)} | **Statut:** {status_label}",
+              "",
+              "## Résumé",
+              "",
+              "| Indicateur | Valeur |",
+              "|------------|--------|",
+              f"| ✅ Succès | {len(successes)} |",
+              f"| ❌ Échecs | {len(failures)} |",
+              f"| ⚪ Annulés | {len(cancelled)} |",
+              f"| 🔄 En cours | {len(in_progress)} |",
+              f"| ⚠️ Trous d'exécution | {len(gaps)} |",
+              f"| **Total 24h** | **{len(all_runs)}** |",
+              "",
+          ]
+
+          if claude_analyse:
+              lines += [
+                  "## 🤖 Analyse",
+                  "",
+                  claude_analyse.get("resume", ""),
+                  "",
+                  f"**Cause probable:** {claude_analyse.get('cause_probable', 'N/A')}",
+                  "",
+                  f"**Action recommandée:** {claude_analyse.get('action_recommandee', 'N/A')}",
+                  "",
+                  f"**Urgence:** `{claude_analyse.get('urgence', 'N/A')}`",
+                  "",
+              ]
+
+          if gaps:
+              lines += ["## ⚠️ Trous d'exécution", ""]
+              for g in gaps:
+                  lines.append(f"- **{g['duree_min']} min** entre run #{g['run_avant']} "
+                               f"({g['de']}) et run #{g['run_apres']} ({g['a']})")
+              lines.append("")
+              lines.append("> Un trou > 5 min peut indiquer que le dispatcher externe "
+                           "(cron qui déclenche `workflow_dispatch`) est tombé.")
+              lines.append("")
+
+          if echec_details:
+              lines += ["## ❌ Détail des échecs", ""]
+              for e in echec_details:
+                  lines += [
+                      f"### Run #{e['run_number']} — {e['created_at']}",
+                      f"[→ Voir le run sur GitHub]({e['url']})",
+                      "",
+                  ]
+                  if e["logs"].strip():
+                      lines += [
+                          "<details>",
+                          "<summary>📜 Logs (extrait des erreurs)</summary>",
+                          "",
+                          "```",
+                          e["logs"][-3000:],
+                          "```",
+                          "</details>",
+                          "",
+                      ]
+
+          if not has_problems:
+              lines += [
+                  "## ✅ Tout fonctionne correctement",
+                  "",
+                  f"Les {len(all_runs)} exécutions des dernières 24h se sont toutes déroulées sans erreur.",
+                  "Aucune action requise.",
+                  "",
+              ]
+
+          lines += [
+              "---",
+              f"*Rapport généré automatiquement le {date_str} par "
+              f"[monitoring_quotidien.yml]"
+              f"(https://github.com/{REPO}/blob/main/.github/workflows/monitoring_quotidien.yml)*",
+          ]
+
+          report = "\n".join(lines)
+
+          # Sauvegarder pour affichage dans les logs
+          with open("/tmp/rapport.md", "w") as f:
+              f.write(report)
+
+          # ── Créer une issue GitHub si problèmes détectés ──────────────────
+          if has_problems:
+              title = (
+                  f"[Monitoring {now_utc.strftime('%Y-%m-%d')}] "
+                  f"{len(failures)} échec(s), {len(gaps)} trou(s) — aut_prep"
+              )
+              # Créer le label monitoring si absent
+              gh_post(f"/repos/{REPO}/labels", {
+                  "name": "monitoring", "color": "0075ca",
+                  "description": "Rapport de monitoring quotidien"
+              })
+              labels = ["monitoring"]
+              if failures:
+                  gh_post(f"/repos/{REPO}/labels", {
+                      "name": "bug", "color": "d73a4a",
+                      "description": "Something isn't working"
+                  })
+                  labels.append("bug")
+
+              issue, code = gh_post(f"/repos/{REPO}/issues", {
+                  "title": title,
+                  "body": report,
+                  "labels": labels,
+              })
+              issue_url = issue.get("html_url", "")
+              print(f"\n📌 Issue créée : {issue_url}")
+
+              with open(OUT_FILE, "a") as f:
+                  f.write(f"has_problems=true\n")
+                  f.write(f"issue_url={issue_url}\n")
+          else:
+              print("\n✅ Aucun problème détecté — pas d'issue créée.")
+              with open(OUT_FILE, "a") as f:
+                  f.write("has_problems=false\n")
+
+          # Afficher le rapport dans les logs
+          print("\n" + "="*60)
+          print(report[:4000])
+          PYEOF
+
+      - name: Afficher le rapport
+        if: always()
+        run: |
+          if [ -f /tmp/rapport.md ]; then
+            echo "=== RAPPORT MONITORING ==="
+            cat /tmp/rapport.md
+          fi
