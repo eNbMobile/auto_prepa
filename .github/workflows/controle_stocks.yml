@@ -45,6 +45,9 @@ jobs:
           DATE_ARG=""
           if [ -n "${{ inputs.date }}" ]; then
             DATE_ARG="--date ${{ inputs.date }}"
+          elif [ "$(date +%u)" -eq 1 ]; then
+            # Lundi : on prend samedi (J-2) car le dimanche n'a pas de ventes
+            DATE_ARG="--date $(date -d '2 days ago' +%d/%m/%Y)"
           fi
           python3 controle_stocks.py j1.xlsx j.xlsx $DATE_ARG --upload
 
