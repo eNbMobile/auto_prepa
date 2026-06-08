@@ -1,0 +1,338 @@
+name: Monitoring Quotidien aut_prep
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # Chaque jour à 6h UTC (8h Paris été, 7h hiver)
+  workflow_dispatch:
+
+concurrency:
+  group: monitoring_quotidien
+  cancel-in-progress: false
+
+jobs:
+  monitoring:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 0
+
+      - name: Installer anthropic (optionnel)
+        run: pip install anthropic 2>/dev/null || true
+
+      - name: Analyser les runs des dernières 24h
+        id: analyse
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PYEOF'
+          import io, json, os, re, sys, zipfile, urllib.parse, urllib.request
+          from datetime import datetime, timedelta, timezone
+
+          REPO          = os.environ.get("GITHUB_REPO", "eNbMobile/auto_prepa")
+          GH_TOKEN      = os.environ.get("GH_TOKEN", "")
+          ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+          GITHUB_OUTPUT = os.environ.get("GITHUB_OUTPUT", "/dev/null")
+
+          WORKFLOWS_TO_CHECK = [
+              {"name": "aut_prep",     "file": "auto_prepa.yml",  "expected_per_day": 30},
+              {"name": "collecte_ean", "file": "collecte_ean.yml", "expected_per_day": 48},
+              {"name": "fix_anomalies","file": "fix_anomalies.yml","expected_per_day": 1},
+          ]
+
+          def gh(path, method="GET", params=None, data=None):
+              url = f"https://api.github.com{path}"
+              if params:
+                  url += "?" + urllib.parse.urlencode(params)
+              headers = {
+                  "Authorization": f"token {GH_TOKEN}",
+                  "Accept": "application/vnd.github.v3+json",
+                  "Content-Type": "application/json",
+              }
+              body = json.dumps(data).encode() if data else None
+              req = urllib.request.Request(url, data=body, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as r:
+                      return json.loads(r.read())
+              except urllib.error.HTTPError as e:
+                  print(f"  GitHub {method} {path} → HTTP {e.code}: {e.read().decode()[:200]}")
+                  return {}
+
+          def ensure_labels():
+              for label in [
+                  {"name": "monitoring", "color": "0075ca", "description": "Monitoring quotidien"},
+                  {"name": "bug",        "color": "d73a4a", "description": "Something isn't working"},
+              ]:
+                  try:
+                      gh(f"/repos/{REPO}/labels", method="POST", data=label)
+                  except Exception:
+                      pass  # Label existe déjà
+
+          def get_workflow_runs(workflow_file, since_dt):
+              """Récupère tous les runs depuis since_dt (pagination automatique)."""
+              all_runs = []
+              page = 1
+              while page <= 10:
+                  data = gh(f"/repos/{REPO}/actions/workflows/{workflow_file}/runs",
+                            params={"per_page": 100, "page": page})
+                  runs = data.get("workflow_runs", [])
+                  if not runs:
+                      break
+                  stop = False
+                  for r in runs:
+                      try:
+                          dt = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00"))
+                          if dt >= since_dt:
+                              all_runs.append(r)
+                          else:
+                              stop = True
+                              break
+                      except Exception:
+                          pass
+                  if stop or len(runs) < 100:
+                      break
+                  page += 1
+              return all_runs
+
+          def get_logs(run_id):
+              try:
+                  req = urllib.request.Request(
+                      f"https://api.github.com/repos/{REPO}/actions/runs/{run_id}/logs",
+                      headers={"Authorization": f"token {GH_TOKEN}",
+                               "Accept": "application/vnd.github.v3+json"}
+                  )
+                  with urllib.request.urlopen(req, timeout=30) as r:
+                      raw = r.read()
+                  with zipfile.ZipFile(io.BytesIO(raw)) as z:
+                      parts = [
+                          f"=== {name} ===\n" + z.read(name).decode("utf-8", errors="replace")
+                          for name in sorted(z.namelist())
+                      ]
+                  text = "\n".join(parts)
+                  return text[-12000:] if len(text) > 12000 else text
+              except Exception as e:
+                  return f"(Logs indisponibles : {e})"
+
+          def analyse_with_claude(run, logs, workflow_content):
+              if not ANTHROPIC_KEY:
+                  return False, None, "ANTHROPIC_API_KEY non configuré — analyse manuelle requise"
+              try:
+                  import anthropic
+                  client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+                  prompt = f"""Tu es un expert GitHub Actions. Analyse cet échec de workflow.
+
+          Run #{run['id']} — {run.get('created_at', '')}
+          URL : {run.get('html_url', '')}
+
+          ## Contenu actuel du workflow
+          ```yaml
+          {workflow_content[:3000]}
+          ```
+
+          ## Logs d'erreur
+          ```
+          {logs[:8000]}
+          ```
+
+          Réponds UNIQUEMENT avec un objet JSON strict (sans markdown autour) :
+          {{
+            "peut_corriger": true,
+            "cause": "description courte de la cause racine",
+            "correction": "description de la correction à appliquer",
+            "workflow_corrige": "contenu YAML complet corrigé (null si impossible)"
+          }}"""
+                  resp = client.messages.create(
+                      model="claude-sonnet-4-6",
+                      max_tokens=4096,
+                      messages=[{"role": "user", "content": prompt}]
+                  )
+                  raw = next((b.text for b in resp.content if b.type == "text"), "{}")
+                  m = re.search(r"\{.*\}", raw, re.DOTALL)
+                  if not m:
+                      return False, None, "Réponse Claude non parseable"
+                  result = json.loads(m.group())
+                  peut_corriger = result.get("peut_corriger", False)
+                  explication = f"{result.get('cause', '')} → {result.get('correction', '')}".strip(" →")
+                  return peut_corriger, result.get("workflow_corrige"), explication
+              except Exception as e:
+                  return False, None, f"Erreur Claude API : {e}"
+
+          # ── Main ─────────────────────────────────────────────────────────────
+          since_dt  = datetime.now(timezone.utc) - timedelta(hours=24)
+          since_str = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+          now_str   = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+          print(f"\n{'='*60}")
+          print(f"Monitoring Quotidien — {now_str}")
+          print(f"Période : {since_str} → maintenant")
+          print(f"{'='*60}")
+
+          ensure_labels()
+
+          report_sections = [
+              f"## 📊 Rapport Monitoring Quotidien — {now_str}",
+              "",
+              f"Période analysée : dernières 24h (`{since_str}` → maintenant)",
+              "",
+          ]
+
+          all_failures = []
+          corrections  = []
+
+          for wf in WORKFLOWS_TO_CHECK:
+              wf_name  = wf["name"]
+              wf_file  = wf["file"]
+              expected = wf["expected_per_day"]
+
+              runs      = get_workflow_runs(wf_file, since_dt)
+              successes = [r for r in runs if r.get("conclusion") == "success"]
+              failures  = [r for r in runs if r.get("conclusion") == "failure"]
+              cancelled = [r for r in runs if r.get("conclusion") in ("cancelled", "skipped")]
+              pending   = [r for r in runs if r.get("status") in ("in_progress", "queued", "waiting")]
+
+              completion_pct = len(successes) / expected * 100 if expected > 0 else 100
+              if failures:
+                  status_icon = "❌"
+              elif completion_pct < 40:
+                  status_icon = "⚠️"
+              else:
+                  status_icon = "✅"
+
+              print(f"\n{status_icon} {wf_name}")
+              print(f"  Runs 24h : {len(runs)} (attendu ~{expected})")
+              print(f"  Succès   : {len(successes)} | Échecs : {len(failures)} | "
+                    f"Annulés : {len(cancelled)} | En cours : {len(pending)}")
+
+              report_sections += [
+                  f"### {status_icon} `{wf_name}`",
+                  "",
+                  "| Métrique | Valeur |",
+                  "|----------|--------|",
+                  f"| Runs 24h | {len(runs)} (attendu ~{expected}) |",
+                  f"| Succès | {len(successes)} |",
+                  f"| Échecs | {len(failures)} |",
+                  f"| Annulés | {len(cancelled)} |",
+                  f"| En cours | {len(pending)} |",
+                  "",
+              ]
+
+              if len(runs) < expected * 0.4 and not failures:
+                  report_sections.append(
+                      f"⚠️ **Taux de complétion faible** ({completion_pct:.0f}%) : "
+                      f"{len(runs)}/{expected} runs attendus. "
+                      "Probablement dû aux limitations de planification GitHub Actions."
+                  )
+                  report_sections.append("")
+
+              if failures:
+                  all_failures.extend(failures)
+                  report_sections.append("**Détail des échecs :**")
+                  report_sections.append("")
+
+                  try:
+                      with open(f".github/workflows/{wf_file}", encoding="utf-8") as f:
+                          workflow_content = f.read()
+                  except Exception as e:
+                      workflow_content = f"(fichier introuvable : {e})"
+
+                  for run in failures:
+                      rid = run["id"]
+                      print(f"  → Analyse run #{rid}...")
+                      logs = get_logs(rid)
+                      peut_corriger, workflow_corrige, explication = analyse_with_claude(
+                          run, logs, workflow_content
+                      )
+
+                      icon = "🔧" if peut_corriger else "⚠️"
+                      report_sections += [
+                          f"#### {icon} Run #{rid} — {run.get('created_at', '')}",
+                          f"[→ Voir le run]({run.get('html_url', '')})",
+                          "",
+                          f"**Analyse :** {explication}",
+                      ]
+
+                      if peut_corriger and workflow_corrige:
+                          with open(f".github/workflows/{wf_file}", "w", encoding="utf-8") as f:
+                              f.write(workflow_corrige)
+                          workflow_content = workflow_corrige
+                          corrections.append((wf_file, rid))
+                          report_sections.append(
+                              "✅ **Correction automatique appliquée** au workflow."
+                          )
+                          print(f"     ✓ Workflow {wf_file} corrigé automatiquement")
+
+                      report_sections.append("")
+
+          # ── Résumé final ─────────────────────────────────────────────────────
+          report_sections += ["---", ""]
+
+          if corrections:
+              correction_list = ", ".join(
+                  f"`{wf}` (run #{rid})" for wf, rid in corrections
+              )
+              report_sections += [
+                  "## 🔧 Corrections appliquées",
+                  "",
+                  f"Corrections automatiques : {correction_list}",
+                  "",
+              ]
+
+          if not all_failures:
+              report_sections += [
+                  "✅ **Aucun échec détecté.** Tous les runs des dernières 24h ont réussi.",
+                  "",
+              ]
+
+          report_sections.append(
+              "*Généré automatiquement par "
+              "[monitoring_quotidien.yml](/.github/workflows/monitoring_quotidien.yml)*"
+          )
+
+          report_body = "\n".join(report_sections)
+
+          # ── Créer une issue GitHub si des échecs ont été détectés ────────────
+          if all_failures:
+              date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+              title = f"[Monitoring {date_str}] {len(all_failures)} échec(s) détecté(s)"
+              try:
+                  issue = gh(f"/repos/{REPO}/issues", method="POST", data={
+                      "title": title,
+                      "body": report_body,
+                      "labels": ["monitoring", "bug"],
+                  })
+                  print(f"\n→ Issue créée : #{issue.get('number')} — {issue.get('html_url', '')}")
+              except Exception as e:
+                  print(f"\n⚠️ Impossible de créer l'issue : {e}")
+                  print(report_body[:1000])
+          else:
+              print(f"\n✅ Aucun échec — aucune issue créée.")
+
+          has_fix = "true" if corrections else "false"
+          with open(GITHUB_OUTPUT, "a") as f:
+              f.write(f"has_fix={has_fix}\n")
+
+          print(f"\n{'='*60}\n")
+          PYEOF
+
+      - name: Commiter la correction du workflow si nécessaire
+        if: steps.analyse.outputs.has_fix == 'true'
+        run: |
+          git config user.name  "monitoring-bot"
+          git config user.email "actions@github.com"
+          git diff --name-only .github/workflows/
+          if ! git diff --quiet .github/workflows/; then
+            git add .github/workflows/
+            git commit -m "fix(workflow): correction automatique [monitoring $(date -u +%Y-%m-%d)]"
+            git push origin HEAD:main
+            echo "✓ Correction committée sur main."
+          else
+            echo "Aucun changement à commiter."
+          fi
