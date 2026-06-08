@@ -95,33 +95,28 @@ def main():
     files = drive_list(access, folder_id)
     index = {f["name"]: f["id"] for f in files}
 
-    # Lundi : j1.xlsx (dimanche) absent → chercher le stock du samedi
-    if date.today().weekday() == 0 and "j1.xlsx" not in index:
-        sat = date.today() - timedelta(days=2)
-        sat_name = f"stocks_Drive_{sat.strftime('%d_%m_%Y')}.xlsx"
-        file_id = index.get(sat_name) or find_in_archive(access, folder_id, "stocks", sat_name)
-        if file_id:
-            print(f"Lundi : utilisation de {sat_name} comme j1.xlsx …", flush=True)
-            drive_download(access, file_id, "j1.xlsx")
-            print(f"  → j1.xlsx ({os.path.getsize('j1.xlsx'):,} octets)")
-            index["j1.xlsx"] = file_id
-        else:
-            print(f"ERREUR : {sat_name} introuvable (ni dossier ni archives).")
-            sys.exit(1)
+    # Lundi : pas de capture dimanche → j1.xlsx absent est acceptable.
+    # controle_stocks.py le requiert en argument mais n'utilise pas ses données
+    # quand theo_JJMM.csv est disponible. On le remplace par j.xlsx.
+    lundi_sans_j1 = date.today().weekday() == 0 and "j1.xlsx" not in index
+    required = [n for n in EXPECTED if not (n == "j1.xlsx" and lundi_sans_j1)]
 
-    missing = [n for n in EXPECTED if n not in index]
+    missing = [n for n in required if n not in index]
     if missing:
         print(f"ERREUR : fichier(s) manquant(s) dans le dossier Drive : {missing}")
         print(f"Fichiers présents : {list(index.keys())}")
         sys.exit(1)
 
-    for name in EXPECTED:
-        if os.path.exists(name):
-            continue  # déjà téléchargé (cas j1.xlsx remplacé ci-dessus)
+    for name in required:
         print(f"Téléchargement {name} …", flush=True)
         drive_download(access, index[name], name)
         size = os.path.getsize(name)
         print(f"  → {name} ({size:,} octets)")
+
+    if lundi_sans_j1:
+        import shutil
+        shutil.copy("j.xlsx", "j1.xlsx")
+        print("Lundi : j1.xlsx absent → j.xlsx copié comme j1.xlsx (données non utilisées).")
 
     print("Stocks téléchargés.")
 
