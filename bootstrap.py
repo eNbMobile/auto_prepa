@@ -76,8 +76,11 @@ def main():
 
     print(f"Bootstrap : {len(files)} script(s) depuis Drive {_SCRIPTS_DIR}/")
     for f in files:
-        content = _drive_download(access, f["id"])
         dest = os.path.join(_HERE, f["name"])
+        if os.path.exists(dest):
+            print(f"  ↷ {f['name']} (version locale)")
+            continue
+        content = _drive_download(access, f["id"])
         with open(dest, "wb") as fp:
             fp.write(content)
         print(f"  ✓ {f['name']}")
