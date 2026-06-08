@@ -330,7 +330,7 @@ def generer_ventes(date_j1):
 
     bdc_subdir = os.path.join(BDC_DIR, dossier)
 
-    synced = telecharger_bdc_depuis_drive(dossier)
+    synced = telecharger_bdc_depuis_drive(date_j1)
     if synced:
         bdc_subdir = synced
 
@@ -403,8 +403,8 @@ def _get_gmail_service():
         return None
 
 
-def telecharger_bdc_depuis_drive(dossier_jj_mm):
-    """Télécharge les PDFs BDC depuis Drive pour un sous-dossier JJ_MM."""
+def telecharger_bdc_depuis_drive(date_j1):
+    """Télécharge les PDFs BDC depuis Drive : BDC/MM_AAAA/JJ_MM."""
     if not DRIVE_BDC_FOLDER_ID:
         return None
     svc = _get_drive_service()
@@ -414,15 +414,30 @@ def telecharger_bdc_depuis_drive(dossier_jj_mm):
         import io
         from googleapiclient.http import MediaIoBaseDownload
 
-        # Trouver le sous-dossier JJ_MM dans Drive
+        dossier_mm_aaaa = date_j1.strftime("%m_%Y")  # ex. "06_2026"
+        dossier_jj_mm   = date_j1.strftime("%d_%m")  # ex. "08_06"
+
+        # Trouver le sous-dossier MM_AAAA dans Drive BDC
         res = svc.files().list(
-            q=(f"name='{dossier_jj_mm}' and '{DRIVE_BDC_FOLDER_ID}' in parents "
+            q=(f"name='{dossier_mm_aaaa}' and '{DRIVE_BDC_FOLDER_ID}' in parents "
+               f"and mimeType='application/vnd.google-apps.folder' and trashed=false"),
+            fields="files(id)",
+        ).execute()
+        mois_folders = res.get("files", [])
+        if not mois_folders:
+            print(f"  Sous-dossier {dossier_mm_aaaa} introuvable dans Drive BDC.")
+            return None
+        mois_id = mois_folders[0]["id"]
+
+        # Trouver le sous-dossier JJ_MM dans MM_AAAA
+        res = svc.files().list(
+            q=(f"name='{dossier_jj_mm}' and '{mois_id}' in parents "
                f"and mimeType='application/vnd.google-apps.folder' and trashed=false"),
             fields="files(id)",
         ).execute()
         folders = res.get("files", [])
         if not folders:
-            print(f"  Sous-dossier {dossier_jj_mm} introuvable dans Drive BDC.")
+            print(f"  Sous-dossier {dossier_jj_mm} introuvable dans Drive BDC/{dossier_mm_aaaa}/.")
             return None
         subfolder_id = folders[0]["id"]
 
@@ -448,7 +463,7 @@ def telecharger_bdc_depuis_drive(dossier_jj_mm):
         local_dir = os.path.join(BDC_DIR, dossier_jj_mm)
         os.makedirs(local_dir, exist_ok=True)
 
-        print(f"  Téléchargement {len(files)} PDF(s) depuis Drive BDC/{dossier_jj_mm}/ …")
+        print(f"  Téléchargement {len(files)} PDF(s) depuis Drive BDC/{dossier_mm_aaaa}/{dossier_jj_mm}/ …")
         for f in files:
             dest = os.path.join(local_dir, f["name"])
             if os.path.exists(dest):
