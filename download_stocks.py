@@ -8,7 +8,6 @@ import urllib.parse
 from datetime import date, timedelta
 
 DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
-EXPECTED = ["j1.xlsx", "j.xlsx"]
 
 def get_access_token(token):
     data = urllib.parse.urlencode({
@@ -95,17 +94,14 @@ def main():
     files = drive_list(access, folder_id)
     index = {f["name"]: f["id"] for f in files}
 
-    missing = [n for n in EXPECTED if n not in index]
-    if missing:
-        print(f"ERREUR : fichier(s) manquant(s) dans le dossier Drive : {missing}")
+    if "j.xlsx" not in index:
+        print(f"ERREUR : j.xlsx manquant dans le dossier Drive.")
         print(f"Fichiers présents : {list(index.keys())}")
         sys.exit(1)
 
-    for name in EXPECTED:
-        print(f"Téléchargement {name} …", flush=True)
-        drive_download(access, index[name], name)
-        size = os.path.getsize(name)
-        print(f"  → {name} ({size:,} octets)")
+    print(f"Téléchargement j.xlsx …", flush=True)
+    drive_download(access, index["j.xlsx"], "j.xlsx")
+    print(f"  → j.xlsx ({os.path.getsize('j.xlsx'):,} octets)")
 
     print("Stocks téléchargés.")
 
