@@ -49,7 +49,7 @@ jobs:
             # Lundi : on prend samedi (J-2) car le dimanche n'a pas de ventes
             DATE_ARG="--date $(date -d '2 days ago' +%d/%m/%Y)"
           fi
-          python3 controle_stocks.py j1.xlsx j.xlsx $DATE_ARG --upload
+          python3 controle_stocks.py j.xlsx $DATE_ARG --upload
 
       - name: Publier le CSV résultat en artefact
         if: always()

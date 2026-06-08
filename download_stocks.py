@@ -103,11 +103,6 @@ def main():
     drive_download(access, index["j.xlsx"], "j.xlsx")
     print(f"  → j.xlsx ({os.path.getsize('j.xlsx'):,} octets)")
 
-    # j1.xlsx n'est pas utilisé quand theo_JJMM.csv est disponible (cas normal).
-    # On le crée comme copie de j.xlsx pour satisfaire l'argument positionnel.
-    import shutil
-    shutil.copy("j.xlsx", "j1.xlsx")
-
     print("Stocks téléchargés.")
 
     work_dir = os.environ.get("WORK_DIR", "v 4.0.0")
