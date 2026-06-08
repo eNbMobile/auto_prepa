@@ -8,7 +8,6 @@ import urllib.parse
 from datetime import date, timedelta
 
 DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
-EXPECTED = ["j1.xlsx", "j.xlsx"]
 
 def get_access_token(token):
     data = urllib.parse.urlencode({
@@ -95,28 +94,19 @@ def main():
     files = drive_list(access, folder_id)
     index = {f["name"]: f["id"] for f in files}
 
-    # Lundi : pas de capture dimanche → j1.xlsx absent est acceptable.
-    # controle_stocks.py le requiert en argument mais n'utilise pas ses données
-    # quand theo_JJMM.csv est disponible. On le remplace par j.xlsx.
-    lundi_sans_j1 = date.today().weekday() == 0 and "j1.xlsx" not in index
-    required = [n for n in EXPECTED if not (n == "j1.xlsx" and lundi_sans_j1)]
-
-    missing = [n for n in required if n not in index]
-    if missing:
-        print(f"ERREUR : fichier(s) manquant(s) dans le dossier Drive : {missing}")
+    if "j.xlsx" not in index:
+        print(f"ERREUR : j.xlsx manquant dans le dossier Drive.")
         print(f"Fichiers présents : {list(index.keys())}")
         sys.exit(1)
 
-    for name in required:
-        print(f"Téléchargement {name} …", flush=True)
-        drive_download(access, index[name], name)
-        size = os.path.getsize(name)
-        print(f"  → {name} ({size:,} octets)")
+    print(f"Téléchargement j.xlsx …", flush=True)
+    drive_download(access, index["j.xlsx"], "j.xlsx")
+    print(f"  → j.xlsx ({os.path.getsize('j.xlsx'):,} octets)")
 
-    if lundi_sans_j1:
-        import shutil
-        shutil.copy("j.xlsx", "j1.xlsx")
-        print("Lundi : j1.xlsx absent → j.xlsx copié comme j1.xlsx (données non utilisées).")
+    # j1.xlsx n'est pas utilisé quand theo_JJMM.csv est disponible (cas normal).
+    # On le crée comme copie de j.xlsx pour satisfaire l'argument positionnel.
+    import shutil
+    shutil.copy("j.xlsx", "j1.xlsx")
 
     print("Stocks téléchargés.")
 
