@@ -1,0 +1,376 @@
+name: monitoring_aut_prep
+
+on:
+  schedule:
+    - cron: '0 7 * * *'   # 7h00 UTC = 9h00 Paris (heure d'été CEST)
+  workflow_dispatch:
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Analyser les runs aut_prep des 24 dernières heures
+        id: analyse
+        env:
+          GH_TOKEN:          ${{ secrets.GH_PAT }}
+          GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
+          REPO:              ${{ github.repository }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys, urllib.request, urllib.parse, datetime
+
+          GH_TOKEN = os.environ["GH_TOKEN"]
+          REPO     = os.environ.get("REPO", "enbmobile/auto_prepa")
+
+          def gh_get(path, params=None):
+              url = f"https://api.github.com{path}"
+              if params:
+                  url += "?" + urllib.parse.urlencode(params)
+              req = urllib.request.Request(url, headers={
+                  "Authorization":        f"Bearer {GH_TOKEN}",
+                  "Accept":               "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              })
+              try:
+                  return json.loads(urllib.request.urlopen(req).read())
+              except Exception as e:
+                  print(f"GitHub API error {path}: {e}")
+                  return {}
+
+          def gh_post(path):
+              req = urllib.request.Request(
+                  f"https://api.github.com{path}",
+                  data=b"{}",
+                  headers={
+                      "Authorization":        f"Bearer {GH_TOKEN}",
+                      "Accept":               "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "Content-Type":         "application/json",
+                  }, method="POST")
+              try:
+                  urllib.request.urlopen(req)
+                  return True
+              except Exception as e:
+                  print(f"GitHub API POST error {path}: {e}")
+                  return False
+
+          # Fenêtre 24h
+          now   = datetime.datetime.now(datetime.timezone.utc)
+          since = now - datetime.timedelta(hours=24)
+          since_str = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+          print(f"Analyse des runs aut_prep depuis {since_str}")
+
+          # Récupérer tous les runs des 24 dernières heures
+          all_runs, page = [], 1
+          while True:
+              data = gh_get(f"/repos/{REPO}/actions/workflows/auto_prepa.yml/runs",
+                            {"per_page": 100, "page": page})
+              runs = data.get("workflow_runs", [])
+              if not runs:
+                  break
+              stop = False
+              for r in runs:
+                  if r.get("created_at", "") >= since_str:
+                      all_runs.append(r)
+                  else:
+                      stop = True
+              if stop or len(runs) < 100:
+                  break
+              page += 1
+
+          total     = len(all_runs)
+          successes = [r for r in all_runs if r.get("conclusion") == "success"]
+          failures  = [r for r in all_runs if r.get("conclusion") in ("failure", "timed_out")]
+          cancelled = [r for r in all_runs if r.get("conclusion") == "cancelled"]
+
+          print(f"Runs 24h : {total} total | {len(successes)} succès | "
+                f"{len(failures)} échecs | {len(cancelled)} annulés")
+
+          # Analyser les logs des runs en échec (5 premiers)
+          error_details = []
+          for run in failures[:5]:
+              run_id   = run["id"]
+              jobs_data = gh_get(f"/repos/{REPO}/actions/runs/{run_id}/jobs")
+              for job in jobs_data.get("jobs", []):
+                  if job.get("conclusion") != "failure":
+                      continue
+                  job_id = job["id"]
+                  try:
+                      log_req = urllib.request.Request(
+                          f"https://api.github.com/repos/{REPO}/actions/jobs/{job_id}/logs",
+                          headers={
+                              "Authorization": f"Bearer {GH_TOKEN}",
+                              "Accept":        "application/vnd.github+json",
+                          })
+                      log_content = urllib.request.urlopen(log_req).read().decode("utf-8", errors="replace")
+                      log_tail = "\n".join(log_content.split("\n")[-80:])
+                  except Exception as e:
+                      log_tail = f"(logs indisponibles: {e})"
+
+                  failed_step = next(
+                      (s["name"] for s in job.get("steps", []) if s.get("conclusion") == "failure"),
+                      "inconnue"
+                  )
+                  error_details.append({
+                      "run_id":     run_id,
+                      "run_url":    run["html_url"],
+                      "created_at": run["created_at"],
+                      "job_name":   job["name"],
+                      "failed_step": failed_step,
+                      "log_tail":   log_tail,
+                  })
+
+          # Re-lancer automatiquement les jobs en échec
+          rerun_ok = 0
+          for run in failures:
+              if gh_post(f"/repos/{REPO}/actions/runs/{run['id']}/rerun-failed-jobs"):
+                  rerun_ok += 1
+          if rerun_ok:
+              print(f"{rerun_ok} run(s) en échec relancés automatiquement")
+
+          # Seuil : < 100 runs en 24h peut indiquer un problème de déclencheur
+          low_runs   = total < 100
+          has_issues = bool(failures) or low_runs
+
+          report = {
+              "date":         now.strftime("%Y-%m-%d"),
+              "total":        total,
+              "successes":    len(successes),
+              "failures":     len(failures),
+              "cancelled":    len(cancelled),
+              "rerun_ok":     rerun_ok,
+              "has_failures": bool(failures),
+              "low_runs":     low_runs,
+              "has_issues":   has_issues,
+              "error_details": error_details,
+          }
+
+          with open("/tmp/report.json", "w") as f:
+              json.dump(report, f, ensure_ascii=False, indent=2)
+
+          print(json.dumps({k: v for k, v in report.items() if k != "error_details"}, indent=2))
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"has_issues={'true' if has_issues else 'false'}\n")
+          PYEOF
+
+      - name: Envoyer le rapport par email
+        env:
+          GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys, urllib.request, urllib.parse, base64
+          import email.mime.text, email.mime.multipart
+
+          with open("/tmp/report.json") as f:
+              report = json.load(f)
+
+          # Auth Gmail (rafraîchissement du token OAuth2)
+          token_json = os.environ.get("GOOGLE_TOKEN_JSON", "").strip()
+          if not token_json:
+              print("GOOGLE_TOKEN_JSON absent → rapport email ignoré")
+              sys.exit(0)
+
+          token = json.loads(token_json)
+          data  = urllib.parse.urlencode({
+              "client_id":     token["client_id"],
+              "client_secret": token["client_secret"],
+              "refresh_token": token["refresh_token"],
+              "grant_type":    "refresh_token",
+          }).encode()
+          resp   = json.loads(urllib.request.urlopen(
+              urllib.request.Request("https://oauth2.googleapis.com/token", data=data)
+          ).read())
+          access = resp["access_token"]
+
+          # Corps HTML du rapport
+          status_icon = "✅" if not report["has_issues"] else "❌"
+          date_str    = report["date"]
+          total       = report["total"]
+          successes   = report["successes"]
+          failures    = report["failures"]
+          cancelled   = report["cancelled"]
+          rerun_ok    = report["rerun_ok"]
+
+          errors_html = ""
+          for e in report.get("error_details", []):
+              log_safe = (e.get("log_tail", "")[-3000:]
+                          .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+              errors_html += f"""
+          <div style="background:#fff3cd;border-left:4px solid #dc3545;padding:12px;
+                      margin:12px 0;border-radius:4px;">
+            <b>Run #{e['run_id']}</b> — {e['created_at']}<br/>
+            <b>Étape en erreur :</b> {e['failed_step']}<br/>
+            <a href="{e['run_url']}">📎 Voir le run sur GitHub</a>
+            <details><summary style="cursor:pointer;margin-top:8px;">Afficher les logs</summary>
+            <pre style="font-size:11px;background:#f5f5f5;padding:8px;overflow:auto;
+                        white-space:pre-wrap;">{log_safe}</pre>
+            </details>
+          </div>"""
+
+          low_runs_html = ""
+          if report.get("low_runs"):
+              low_runs_html = f"""
+          <p style="color:darkorange;font-weight:bold;background:#fff3cd;
+                    padding:10px;border-radius:4px;">
+            ⚠️ Seulement {total} runs détectés sur les 24 dernières heures.<br/>
+            Le déclencheur "toutes les minutes" est peut-être interrompu.
+          </p>"""
+
+          rerun_html = ""
+          if rerun_ok > 0:
+              rerun_html = f"<p>🔄 <b>{rerun_ok}</b> run(s) en échec ont été relancés automatiquement.</p>"
+
+          success_rate = f"{successes}/{total}" if total > 0 else "0/0"
+
+          html_body = f"""<!DOCTYPE html><html lang="fr">
+          <head><meta charset="utf-8"/></head>
+          <body style="font-family:Arial,sans-serif;max-width:700px;margin:auto;color:#333;">
+            <h2 style="border-bottom:2px solid #eee;padding-bottom:8px;">
+              {status_icon} Monitoring <code>aut_prep</code> — {date_str}
+            </h2>
+
+            <table border="1" cellpadding="10" cellspacing="0"
+                   style="border-collapse:collapse;width:100%;margin-bottom:16px;">
+              <tr style="background:#f0f0f0;">
+                <th style="text-align:left;">Métrique</th>
+                <th style="text-align:right;">Valeur</th>
+              </tr>
+              <tr><td>Total runs (24h)</td>
+                  <td style="text-align:right;"><b>{total}</b></td></tr>
+              <tr><td>✅ Succès</td>
+                  <td style="text-align:right;color:green;"><b>{successes}</b></td></tr>
+              <tr><td>❌ Échecs</td>
+                  <td style="text-align:right;color:{'red' if failures else 'inherit'};">
+                  <b>{failures}</b></td></tr>
+              <tr><td>⚠️ Annulés</td>
+                  <td style="text-align:right;"><b>{cancelled}</b></td></tr>
+              <tr><td>🔄 Relancés automatiquement</td>
+                  <td style="text-align:right;"><b>{rerun_ok}</b></td></tr>
+            </table>
+
+            {low_runs_html}
+            {rerun_html}
+
+            {'<h3 style="color:red;">Détails des erreurs :</h3>' + errors_html
+              if errors_html
+              else '<p style="color:green;">✅ Aucune erreur détectée. Tout fonctionne correctement.</p>'}
+
+            <hr style="margin-top:24px;"/>
+            <small style="color:#888;">
+              Rapport généré automatiquement par le workflow
+              <a href="https://github.com/{os.environ.get('GITHUB_REPOSITORY','enbmobile/auto_prepa')}/actions/workflows/monitoring_aut_prep.yml">
+                monitoring_aut_prep</a>.
+            </small>
+          </body></html>"""
+
+          RECIPIENT = "erwan.ropars22810@gmail.com"
+          msg = email.mime.multipart.MIMEMultipart("alternative")
+          msg["Subject"] = f"{status_icon} Monitoring aut_prep — {date_str} ({success_rate} succès)"
+          msg["From"]    = "me"
+          msg["To"]      = RECIPIENT
+          msg.attach(email.mime.text.MIMEText(html_body, "html", "utf-8"))
+
+          raw_bytes = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+
+          send_req = urllib.request.Request(
+              "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+              data=json.dumps({"raw": raw_bytes}).encode(),
+              headers={"Authorization": f"Bearer {access}", "Content-Type": "application/json"},
+              method="POST",
+          )
+          try:
+              urllib.request.urlopen(send_req)
+              print(f"✅ Rapport envoyé à {RECIPIENT}")
+          except Exception as e:
+              print(f"Erreur envoi email: {e}")
+              sys.exit(1)
+          PYEOF
+
+      - name: Créer une issue GitHub si problème détecté
+        if: steps.analyse.outputs.has_issues == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPO:     ${{ github.repository }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, urllib.request
+
+          with open("/tmp/report.json") as f:
+              report = json.load(f)
+
+          GH_TOKEN = os.environ["GH_TOKEN"]
+          REPO     = os.environ.get("REPO", "enbmobile/auto_prepa")
+
+          reasons = []
+          if report.get("low_runs"):
+              reasons.append(f"⚠️ Seulement **{report['total']}** runs sur 24h "
+                             f"(déclencheur toutes-les-minutes possiblement interrompu)")
+          if report.get("has_failures"):
+              reasons.append(f"❌ **{report['failures']}** run(s) en échec")
+
+          body_lines = [
+              f"## Rapport monitoring aut_prep — {report['date']}",
+              "",
+              f"| Métrique | Valeur |",
+              f"|---|---|",
+              f"| Total runs 24h | {report['total']} |",
+              f"| ✅ Succès | {report['successes']} |",
+              f"| ❌ Échecs | {report['failures']} |",
+              f"| ⚠️ Annulés | {report['cancelled']} |",
+              f"| 🔄 Relancés auto. | {report['rerun_ok']} |",
+              "",
+              "### Problèmes détectés",
+              *[f"- {r}" for r in reasons],
+          ]
+
+          for e in report.get("error_details", [])[:3]:
+              body_lines += [
+                  "",
+                  "---",
+                  f"**Run #{e['run_id']}** — `{e['created_at']}`",
+                  f"Étape en erreur : `{e['failed_step']}`",
+                  f"[→ Voir le run sur GitHub]({e['run_url']})",
+                  "",
+                  "<details><summary>Logs (fin)</summary>",
+                  "",
+                  "```",
+                  e.get("log_tail", "")[-2000:],
+                  "```",
+                  "</details>",
+              ]
+
+          issue_data = {
+              "title": f"[MONITORING] aut_prep — problèmes détectés le {report['date']}",
+              "body":  "\n".join(body_lines),
+              "labels": ["monitoring", "bug"],
+          }
+
+          req = urllib.request.Request(
+              f"https://api.github.com/repos/{REPO}/issues",
+              data=json.dumps(issue_data).encode(),
+              headers={
+                  "Authorization":        f"Bearer {GH_TOKEN}",
+                  "Accept":               "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "Content-Type":         "application/json",
+              }, method="POST")
+          try:
+              result = json.loads(urllib.request.urlopen(req).read())
+              print(f"Issue créée : {result['html_url']}")
+          except Exception as e:
+              print(f"Erreur création issue: {e}")
+          PYEOF
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+            echo "Secret GOOGLE_TOKEN_JSON mis à jour."
+          fi
