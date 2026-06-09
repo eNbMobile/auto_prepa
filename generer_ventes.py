@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-Génère les ventes du jour J-1 depuis les BDC PDFs.
+Génère les ventes du jour depuis les BDC PDFs.
 Sauvegarde ventes_JJ_MM.csv et l'archive sur Drive.
 Ne génère PAS de fichier de stock théorique.
 """
 import csv
 import os
 import sys
-from datetime import date, timedelta
+from datetime import date
 
 import controle_stocks as cs
 
 
 def main():
     args = sys.argv[1:]
-    date_j1 = date.today() - timedelta(days=1)
+    date_j1 = date.today()
     if "--date" in args:
         i = args.index("--date")
         if i + 1 < len(args):
