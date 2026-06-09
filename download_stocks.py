@@ -79,8 +79,29 @@ def charger_config(access_token):
     return json.loads(urllib.request.urlopen(req).read())
 
 def main():
-    token_json = os.environ.get("GOOGLE_TOKEN_JSON", "").strip()
+    args = sys.argv[1:]
 
+    nb_jours = 1
+    if "--jours" in args:
+        i = args.index("--jours")
+        if i + 1 < len(args):
+            nb_jours = max(1, int(args[i + 1]))
+
+    # Dernier jour de ventes : hier par défaut, samedi si lundi, ou --date override
+    delta = timedelta(days=2) if date.today().weekday() == 0 else timedelta(days=1)
+    date_j1 = date.today() - delta
+    if "--date" in args:
+        i = args.index("--date")
+        if i + 1 < len(args):
+            try:
+                j, m, a = args[i + 1].split("/")
+                date_j1 = date(int(a), int(m), int(j))
+            except Exception:
+                pass
+
+    date_debut = date_j1 - timedelta(days=nb_jours - 1)
+
+    token_json = os.environ.get("GOOGLE_TOKEN_JSON", "").strip()
     if not token_json:
         print("ERREUR : variable GOOGLE_TOKEN_JSON manquante.")
         sys.exit(1)
@@ -99,25 +120,38 @@ def main():
         print(f"Fichiers présents : {list(index.keys())}")
         sys.exit(1)
 
-    print(f"Téléchargement j.xlsx …", flush=True)
+    print("Téléchargement j.xlsx …", flush=True)
     drive_download(access, index["j.xlsx"], "j.xlsx")
     print(f"  → j.xlsx ({os.path.getsize('j.xlsx'):,} octets)")
 
-    print("Stocks téléchargés.")
+    # Stock de départ (J-N) depuis les archives
+    nom_j1 = f"stock_{date_debut.strftime('%d_%m_%Y')}_j.xlsx"
+    file_id_j1 = find_in_archive(access, folder_id, "stocks", nom_j1)
+    if file_id_j1:
+        print(f"Téléchargement {nom_j1} → j1.xlsx …", flush=True)
+        drive_download(access, file_id_j1, "j1.xlsx")
+        print(f"  → j1.xlsx ({os.path.getsize('j1.xlsx'):,} octets)")
+    else:
+        print(f"  {nom_j1} absent des archives — stock de départ non disponible.")
 
     work_dir = os.environ.get("WORK_DIR", "v 4.0.0")
-    # Lundi : pas de ventes du dimanche → on remonte au samedi (J-2)
-    delta = timedelta(days=2) if date.today().weekday() == 0 else timedelta(days=1)
-    dossier_j1 = (date.today() - delta).strftime("%d_%m")
     os.makedirs(work_dir, exist_ok=True)
 
-    nom_ventes = f"ventes_{dossier_j1}.csv"
-    file_id = index.get(nom_ventes) or find_in_archive(access, folder_id, "ventes", nom_ventes)
-    if file_id:
-        dest = os.path.join(work_dir, nom_ventes)
-        print(f"Téléchargement {nom_ventes} …", flush=True)
-        drive_download(access, file_id, dest)
-        print(f"  → {dest} ({os.path.getsize(dest):,} octets)")
+    # Ventes pour chaque jour de la période
+    for i in range(nb_jours):
+        d = date_debut + timedelta(days=i)
+        nom_v = f"ventes_{d.strftime('%d_%m')}.csv"
+        dest = os.path.join(work_dir, nom_v)
+        if os.path.exists(dest):
+            print(f"  {nom_v} (existant)", flush=True)
+            continue
+        file_id = index.get(nom_v) or find_in_archive(access, folder_id, "ventes", nom_v)
+        if file_id:
+            print(f"Téléchargement {nom_v} …", flush=True)
+            drive_download(access, file_id, dest)
+            print(f"  → {dest} ({os.path.getsize(dest):,} octets)")
+        else:
+            print(f"  {nom_v} absent — ventes du {d.strftime('%d/%m/%Y')} non trouvées.")
 
 if __name__ == "__main__":
     main()

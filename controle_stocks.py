@@ -787,7 +787,7 @@ def main():
     args = sys.argv[1:]
     args = [a for a in args if a != "--upload"]  # flag ignoré, upload toujours actif
 
-    # --date JJ/MM/AAAA
+    # --date JJ/MM/AAAA (dernier jour de ventes)
     date_j1 = date.today() - timedelta(days=1)
     if "--date" in args:
         i = args.index("--date")
@@ -797,6 +797,19 @@ def main():
                 date_j1 = date(int(a), int(m), int(j))
             except Exception:
                 print(f"Format de date invalide : {args[i+1]} (attendu JJ/MM/AAAA)")
+                sys.exit(1)
+            args.pop(i + 1)
+            args.pop(i)
+
+    # --jours N (nombre de jours de ventes à cumuler, défaut 1)
+    nb_jours = 1
+    if "--jours" in args:
+        i = args.index("--jours")
+        if i + 1 < len(args):
+            try:
+                nb_jours = max(1, int(args[i + 1]))
+            except ValueError:
+                print(f"Valeur invalide pour --jours : {args[i + 1]}")
                 sys.exit(1)
             args.pop(i + 1)
             args.pop(i)
@@ -813,11 +826,13 @@ def main():
     _charger_config()
 
     # 1. Lire les stocks
-    if fichier_j1:
-        print(f"Lecture stock J-1 : {fichier_j1}")
+    if fichier_j1 and os.path.exists(fichier_j1):
+        print(f"Lecture stock J-{nb_jours} : {fichier_j1}")
         stock_j1, libelles_stock = lire_stock(fichier_j1)
         print(f"  → {len(stock_j1)} gencods, {len(libelles_stock)} libellés xlsx")
     else:
+        if fichier_j1:
+            print(f"  {fichier_j1} absent — stock de départ vide.")
         stock_j1, libelles_stock = {}, {}
 
     print(f"Lecture stock J   : {fichier_j}")
@@ -832,9 +847,22 @@ def main():
     print("\nChargement libellés coursesu ...")
     libelles_dict = charger_libelles_dict()
 
-    # 2. Ventes de la veille pour calculer le stock théorique (stock_j1 - ventes)
-    print(f"\nChargement ventes du {date_j1.strftime('%d/%m/%Y')} …")
-    ventes, libelles_extra = generer_ventes(date_j1)
+    # 2. Ventes de la période pour calculer le stock théorique (stock_j1 - cumul ventes)
+    date_debut = date_j1 - timedelta(days=nb_jours - 1)
+    if nb_jours > 1:
+        print(f"\nChargement ventes du {date_debut.strftime('%d/%m/%Y')} au {date_j1.strftime('%d/%m/%Y')} ({nb_jours} jours) …")
+    else:
+        print(f"\nChargement ventes du {date_j1.strftime('%d/%m/%Y')} …")
+
+    ventes = {}
+    libelles_extra = {}
+    for i in range(nb_jours):
+        d = date_debut + timedelta(days=i)
+        v_day, l_day = generer_ventes(d)
+        for gencod, qty in v_day.items():
+            ventes[gencod] = ventes.get(gencod, 0) + qty
+            if gencod not in libelles_extra and gencod in l_day:
+                libelles_extra[gencod] = l_day[gencod]
 
     # 3. Comparaison — uniquement les 1087 gencods R1
     gencods_r1 = charger_gencods_r1()
