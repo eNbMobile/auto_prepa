@@ -9,7 +9,6 @@ v 4.0.0/obtain_gencod
 v 4.0.0/prepa_drive_degrade
 
 auto_prepa.py
-generer_ventes.py
 analyse_mensuelle.py
 fix_anomalies.py
 
