@@ -72,7 +72,7 @@ def main():
 
     q2 = urllib.parse.quote(f"'{scripts_id}' in parents and trashed=false")
     files = _drive_get(access,
-        f"https://www.googleapis.com/drive/v3/files?q={q2}&fields=files(id,name)&pageSize=50")["files"]
+        f"https://www.googleapis.com/drive/v3/files?q={q2}&fields=files(id,name)&pageSize=50&orderBy=createdTime%20desc")["files"]
 
     print(f"Bootstrap : {len(files)} script(s) depuis Drive {_SCRIPTS_DIR}/")
     for f in files:
