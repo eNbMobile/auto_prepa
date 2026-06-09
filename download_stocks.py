@@ -106,21 +106,18 @@ def main():
     print("Stocks téléchargés.")
 
     work_dir = os.environ.get("WORK_DIR", "v 4.0.0")
-    # Lundi : pas de stock théo/ventes du dimanche → on remonte au samedi (J-2)
+    # Lundi : pas de ventes du dimanche → on remonte au samedi (J-2)
     delta = timedelta(days=2) if date.today().weekday() == 0 else timedelta(days=1)
     dossier_j1 = (date.today() - delta).strftime("%d_%m")
     os.makedirs(work_dir, exist_ok=True)
 
-    for nom, subfolder in [(f"theo_{dossier_j1}.csv", "théo"),
-                            (f"ventes_{dossier_j1}.csv", "ventes")]:
-        file_id = index.get(nom) or find_in_archive(access, folder_id, subfolder, nom)
-        if file_id:
-            dest = os.path.join(work_dir, nom)
-            print(f"Téléchargement {nom} …", flush=True)
-            drive_download(access, file_id, dest)
-            print(f"  → {dest} ({os.path.getsize(dest):,} octets)")
-        elif nom.startswith("theo_"):
-            print(f"  {nom} absent — le théorique sera recalculé depuis les BDC.")
+    nom_ventes = f"ventes_{dossier_j1}.csv"
+    file_id = index.get(nom_ventes) or find_in_archive(access, folder_id, "ventes", nom_ventes)
+    if file_id:
+        dest = os.path.join(work_dir, nom_ventes)
+        print(f"Téléchargement {nom_ventes} …", flush=True)
+        drive_download(access, file_id, dest)
+        print(f"  → {dest} ({os.path.getsize(dest):,} octets)")
 
 if __name__ == "__main__":
     main()
