@@ -602,7 +602,7 @@ def upload_drive(local_path):
 # PDF des écarts + envoi email
 # ─────────────────────────────────────────────────────────────────
 
-def generer_pdf_ecarts(compares, date_j1):
+def generer_pdf_ecarts(compares, date_j1, date_debut=None):
     """Génère un PDF des lignes ECART (trié |écart| desc). Retourne le chemin ou None."""
     try:
         from reportlab.lib.pagesizes import A4
@@ -638,8 +638,11 @@ def generer_pdf_ecarts(compares, date_j1):
     header_s = ParagraphStyle('hdr', fontSize=8, leading=10, textColor=colors.white)
 
     elements = []
+    label_dates = (f"{date_debut.strftime('%d/%m/%Y')} &amp; {date_j1.strftime('%d/%m/%Y')}"
+                   if date_debut and date_debut < date_j1
+                   else date_j1.strftime('%d/%m/%Y'))
     elements.append(Paragraph(
-        f"<b>Contrôle de stocks — {date_j1.strftime('%d/%m/%Y')}</b>"
+        f"<b>Contrôle de stocks — {label_dates}</b>"
         f"&nbsp;&nbsp;({len(ecarts)} écarts)", styles['Title']))
     elements.append(Spacer(1, 5*mm))
 
@@ -704,7 +707,7 @@ def generer_pdf_ecarts(compares, date_j1):
     return nom_pdf
 
 
-def envoyer_email_pdf(pdf_path, date_j1, nb_ecart, manquant, surplus):
+def envoyer_email_pdf(pdf_path, date_j1, nb_ecart, manquant, surplus, date_debut=None):
     """Envoie le PDF par email via Gmail API."""
     try:
         import base64
@@ -718,9 +721,12 @@ def envoyer_email_pdf(pdf_path, date_j1, nb_ecart, manquant, surplus):
 
         msg = MIMEMultipart()
         msg['To']      = EMAIL_DESTINATAIRE
-        msg['Subject'] = (f"Contrôle stocks {date_j1.strftime('%d/%m/%Y')} "
+        label_dates = (f"{date_debut.strftime('%d/%m/%Y')} & {date_j1.strftime('%d/%m/%Y')}"
+                       if date_debut and date_debut < date_j1
+                       else date_j1.strftime('%d/%m/%Y'))
+        msg['Subject'] = (f"Contrôle stocks {label_dates} "
                           f"— {nb_ecart} écart{'s' if nb_ecart > 1 else ''}")
-        corps = (f"Contrôle de stocks du {date_j1.strftime('%d/%m/%Y')}\n\n"
+        corps = (f"Contrôle de stocks du {label_dates}\n\n"
                  f"  Écarts   : {nb_ecart}\n"
                  f"  Manquant : {manquant:.0f} unités\n"
                  f"  Surplus  : +{surplus:.0f} unités\n\n"
@@ -957,10 +963,10 @@ def main():
 
     if nb_ecart > 0:
         print("\nGénération PDF écarts …")
-        nom_pdf = generer_pdf_ecarts(compares, date_j1)
+        nom_pdf = generer_pdf_ecarts(compares, date_j1, date_debut)
         if nom_pdf:
             print("\nEnvoi email …")
-            envoyer_email_pdf(nom_pdf, date_j1, nb_ecart, manquant, surplus)
+            envoyer_email_pdf(nom_pdf, date_j1, nb_ecart, manquant, surplus, date_debut)
 
 
 if __name__ == "__main__":
