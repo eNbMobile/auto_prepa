@@ -109,7 +109,10 @@ jobs:
 
       - name: Installer pdftotext (poppler-utils)
         if: steps.check_pdfs.outputs.has_new == 'true'
-        run: sudo apt-get install -y poppler-utils
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: poppler-utils
+          version: 1.0
 
       - name: Installer Python et dépendances
         if: steps.check_pdfs.outputs.has_new == 'true'
