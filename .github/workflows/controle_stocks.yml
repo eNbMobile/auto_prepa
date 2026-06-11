@@ -3,8 +3,21 @@ name: Contrôle Stocks
 on:
   workflow_dispatch:
     inputs:
+      jours:
+        description: "Jours de ventes à cumuler"
+        required: false
+        default: "1"
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "3"
+          - "4"
+          - "5"
+          - "6"
+          - "7"
       date:
-        description: "Date J-1 (JJ/MM/AAAA) — laisser vide pour hier"
+        description: "Date du dernier jour de ventes (JJ/MM/AAAA) — laisser vide pour hier"
         required: false
         type: string
 
@@ -41,7 +54,8 @@ jobs:
           DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
           WORK_DIR: "v 4.0.0"
         run: |
-          python3 bootstrap.py download_stocks.py
+          JOURS="${{ inputs.jours }}"
+          JOURS="${JOURS:-1}"
           DATE_ARG=""
           if [ -n "${{ inputs.date }}" ]; then
             DATE_ARG="--date ${{ inputs.date }}"
@@ -49,7 +63,8 @@ jobs:
             # Lundi : on prend samedi (J-2) car le dimanche n'a pas de ventes
             DATE_ARG="--date $(date -d '2 days ago' +%d/%m/%Y)"
           fi
-          python3 controle_stocks.py j.xlsx $DATE_ARG --upload
+          python3 bootstrap.py download_stocks.py --jours $JOURS $DATE_ARG
+          python3 controle_stocks.py j1.xlsx j.xlsx --jours $JOURS $DATE_ARG --upload
 
       - name: Publier le CSV résultat en artefact
         if: always()

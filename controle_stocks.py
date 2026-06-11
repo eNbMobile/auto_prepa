@@ -292,26 +292,6 @@ def _charger_ventes_csv(chemin):
     return ventes, libelles
 
 
-def _charger_theo_csv(chemin):
-    """Charge un theo_JJ_MM.csv pré-calculé. Retourne ({gencod: (s_j1, v, s_theo)}, {gencod: libelle})."""
-    theo = {}
-    libelles = {}
-    with open(chemin, newline='', encoding='utf-8-sig') as f:
-        for row in csv.reader(f, delimiter=';'):
-            if len(row) >= 5 and row[0] not in ('gencod', ''):
-                try:
-                    g = row[0]
-                    lib = row[1].strip()
-                    s_j1   = float(row[2])
-                    v      = float(row[3])
-                    s_theo = float(row[4])
-                    theo[g] = (s_j1, v, s_theo)
-                    if lib:
-                        libelles[g] = lib
-                except (ValueError, IndexError):
-                    pass
-    print(f"  → {len(theo)} gencods théoriques chargés")
-    return theo, libelles
 
 
 def generer_ventes(date_j1):
@@ -622,7 +602,7 @@ def upload_drive(local_path):
 # PDF des écarts + envoi email
 # ─────────────────────────────────────────────────────────────────
 
-def generer_pdf_ecarts(compares, date_j1):
+def generer_pdf_ecarts(compares, date_j1, date_debut=None):
     """Génère un PDF des lignes ECART (trié |écart| desc). Retourne le chemin ou None."""
     try:
         from reportlab.lib.pagesizes import A4
@@ -658,8 +638,11 @@ def generer_pdf_ecarts(compares, date_j1):
     header_s = ParagraphStyle('hdr', fontSize=8, leading=10, textColor=colors.white)
 
     elements = []
+    label_dates = (f"{date_debut.strftime('%d/%m/%Y')} &amp; {date_j1.strftime('%d/%m/%Y')}"
+                   if date_debut and date_debut < date_j1
+                   else date_j1.strftime('%d/%m/%Y'))
     elements.append(Paragraph(
-        f"<b>Contrôle de stocks — {date_j1.strftime('%d/%m/%Y')}</b>"
+        f"<b>Contrôle de stocks — {label_dates}</b>"
         f"&nbsp;&nbsp;({len(ecarts)} écarts)", styles['Title']))
     elements.append(Spacer(1, 5*mm))
 
@@ -724,7 +707,7 @@ def generer_pdf_ecarts(compares, date_j1):
     return nom_pdf
 
 
-def envoyer_email_pdf(pdf_path, date_j1, nb_ecart, manquant, surplus):
+def envoyer_email_pdf(pdf_path, date_j1, nb_ecart, manquant, surplus, date_debut=None):
     """Envoie le PDF par email via Gmail API."""
     try:
         import base64
@@ -738,9 +721,12 @@ def envoyer_email_pdf(pdf_path, date_j1, nb_ecart, manquant, surplus):
 
         msg = MIMEMultipart()
         msg['To']      = EMAIL_DESTINATAIRE
-        msg['Subject'] = (f"Contrôle stocks {date_j1.strftime('%d/%m/%Y')} "
+        label_dates = (f"{date_debut.strftime('%d/%m/%Y')} & {date_j1.strftime('%d/%m/%Y')}"
+                       if date_debut and date_debut < date_j1
+                       else date_j1.strftime('%d/%m/%Y'))
+        msg['Subject'] = (f"Contrôle stocks {label_dates} "
                           f"— {nb_ecart} écart{'s' if nb_ecart > 1 else ''}")
-        corps = (f"Contrôle de stocks du {date_j1.strftime('%d/%m/%Y')}\n\n"
+        corps = (f"Contrôle de stocks du {label_dates}\n\n"
                  f"  Écarts   : {nb_ecart}\n"
                  f"  Manquant : {manquant:.0f} unités\n"
                  f"  Surplus  : +{surplus:.0f} unités\n\n"
@@ -807,7 +793,7 @@ def main():
     args = sys.argv[1:]
     args = [a for a in args if a != "--upload"]  # flag ignoré, upload toujours actif
 
-    # --date JJ/MM/AAAA
+    # --date JJ/MM/AAAA (dernier jour de ventes)
     date_j1 = date.today() - timedelta(days=1)
     if "--date" in args:
         i = args.index("--date")
@@ -817,6 +803,19 @@ def main():
                 date_j1 = date(int(a), int(m), int(j))
             except Exception:
                 print(f"Format de date invalide : {args[i+1]} (attendu JJ/MM/AAAA)")
+                sys.exit(1)
+            args.pop(i + 1)
+            args.pop(i)
+
+    # --jours N (nombre de jours de ventes à cumuler, défaut 1)
+    nb_jours = 1
+    if "--jours" in args:
+        i = args.index("--jours")
+        if i + 1 < len(args):
+            try:
+                nb_jours = max(1, int(args[i + 1]))
+            except ValueError:
+                print(f"Valeur invalide pour --jours : {args[i + 1]}")
                 sys.exit(1)
             args.pop(i + 1)
             args.pop(i)
@@ -833,11 +832,13 @@ def main():
     _charger_config()
 
     # 1. Lire les stocks
-    if fichier_j1:
-        print(f"Lecture stock J-1 : {fichier_j1}")
+    if fichier_j1 and os.path.exists(fichier_j1):
+        print(f"Lecture stock J-{nb_jours} : {fichier_j1}")
         stock_j1, libelles_stock = lire_stock(fichier_j1)
         print(f"  → {len(stock_j1)} gencods, {len(libelles_stock)} libellés xlsx")
     else:
+        if fichier_j1:
+            print(f"  {fichier_j1} absent — stock de départ vide.")
         stock_j1, libelles_stock = {}, {}
 
     print(f"Lecture stock J   : {fichier_j}")
@@ -852,17 +853,22 @@ def main():
     print("\nChargement libellés coursesu ...")
     libelles_dict = charger_libelles_dict()
 
-    # 2. Théorique pré-calculé (generer_ventes.py) ou recalcul depuis BDC
-    dossier = date_j1.strftime("%d_%m")
-    chemin_theo = os.path.join(WORK_DIR, f"theo_{dossier}.csv")
-    if os.path.exists(chemin_theo):
-        print(f"\nThéorique pré-calculé : {chemin_theo}")
-        theo_data, libelles_theo = _charger_theo_csv(chemin_theo)
-        libelles_extra = libelles_theo
+    # 2. Ventes de la période pour calculer le stock théorique (stock_j1 - cumul ventes)
+    date_debut = date_j1 - timedelta(days=nb_jours - 1)
+    if nb_jours > 1:
+        print(f"\nChargement ventes du {date_debut.strftime('%d/%m/%Y')} au {date_j1.strftime('%d/%m/%Y')} ({nb_jours} jours) …")
     else:
-        print(f"\nGénération ventes depuis BDC du {date_j1.strftime('%d/%m/%Y')} …")
-        ventes, libelles_extra = generer_ventes(date_j1)
-        theo_data = None
+        print(f"\nChargement ventes du {date_j1.strftime('%d/%m/%Y')} …")
+
+    ventes = {}
+    libelles_extra = {}
+    for i in range(nb_jours):
+        d = date_debut + timedelta(days=i)
+        v_day, l_day = generer_ventes(d)
+        for gencod, qty in v_day.items():
+            ventes[gencod] = ventes.get(gencod, 0) + qty
+            if gencod not in libelles_extra and gencod in l_day:
+                libelles_extra[gencod] = l_day[gencod]
 
     # 3. Comparaison — uniquement les 1087 gencods R1
     gencods_r1 = charger_gencods_r1()
@@ -872,14 +878,10 @@ def main():
     orphelins = []
 
     for gencod in sorted(tous):
-        if theo_data is not None:
-            present_j1 = gencod in theo_data
-            s_j1, v, s_theo = theo_data[gencod] if present_j1 else (0.0, 0.0, 0.0)
-        else:
-            present_j1 = gencod in stock_j1
-            s_j1   = stock_j1.get(gencod, 0.0)
-            v      = ventes.get(gencod, 0.0)
-            s_theo = s_j1 - v
+        present_j1 = gencod in stock_j1
+        s_j1   = stock_j1.get(gencod, 0.0)
+        v      = ventes.get(gencod, 0.0)
+        s_theo = s_j1 - v
         present_j  = gencod in stock_j
 
         s_j   = stock_j.get(gencod, 0.0)
@@ -961,10 +963,10 @@ def main():
 
     if nb_ecart > 0:
         print("\nGénération PDF écarts …")
-        nom_pdf = generer_pdf_ecarts(compares, date_j1)
+        nom_pdf = generer_pdf_ecarts(compares, date_j1, date_debut)
         if nom_pdf:
             print("\nEnvoi email …")
-            envoyer_email_pdf(nom_pdf, date_j1, nb_ecart, manquant, surplus)
+            envoyer_email_pdf(nom_pdf, date_j1, nb_ecart, manquant, surplus, date_debut)
 
 
 if __name__ == "__main__":
