@@ -17,11 +17,14 @@ jobs:
       - name: Récupérer le code
         uses: actions/checkout@v4
 
-      - name: Installer les dépendances
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y poppler-utils
-          pip install pdfplumber google-api-python-client google-auth-oauthlib google-auth-httplib2
+      - name: Installer poppler-utils (avec cache)
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: poppler-utils
+          version: 1.0
+
+      - name: Installer les dépendances Python
+        run: pip install pdfplumber google-api-python-client google-auth-oauthlib google-auth-httplib2
 
       - name: Collecter les EAN depuis Drive BDC
         env:
