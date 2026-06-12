@@ -1,0 +1,205 @@
+name: Monitoring Quotidien
+
+on:
+  schedule:
+    - cron: '0 8 * * *'   # 10h00 Paris (CEST = UTC+2)
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  surveillance:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Analyser les workflows des 24 dernières heures
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys, urllib.request, urllib.error
+          from datetime import datetime, timezone, timedelta
+
+          token = os.environ.get("GH_TOKEN", "")
+          owner, repo = os.environ.get("REPO", "eNbMobile/auto_prepa").split("/", 1)
+          H = {
+              "Authorization": f"Bearer {token}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+
+          def api_get(url):
+              req = urllib.request.Request(url, headers=H)
+              return json.loads(urllib.request.urlopen(req, timeout=30).read())
+
+          def api_post(url, payload):
+              body = json.dumps(payload).encode()
+              req = urllib.request.Request(
+                  url, data=body,
+                  headers={**H, "Content-Type": "application/json"},
+                  method="POST",
+              )
+              try:
+                  return json.loads(urllib.request.urlopen(req, timeout=30).read())
+              except urllib.error.HTTPError as e:
+                  if e.code == 422:  # label already exists — silently ignore
+                      return None
+                  print(f"  POST {url} -> HTTP {e.code}", flush=True)
+                  return None
+              except Exception as e:
+                  print(f"  POST {url} -> {e}", flush=True)
+                  return None
+
+          now   = datetime.now(timezone.utc)
+          since = now - timedelta(hours=24)
+          print(f"Fenêtre : {since.strftime('%Y-%m-%d %H:%M')} → {now.strftime('%Y-%m-%d %H:%M')} UTC", flush=True)
+
+          # ─── Fonction générique : récupérer les runs d'un workflow sur 24h ───
+          def get_runs_24h(workflow_file, max_pages=20):
+              runs = []
+              page = 1
+              while page <= max_pages:
+                  data = api_get(
+                      f"https://api.github.com/repos/{owner}/{repo}"
+                      f"/actions/workflows/{workflow_file}/runs"
+                      f"?per_page=100&page={page}"
+                  )
+                  batch = data.get("workflow_runs", [])
+                  if not batch:
+                      break
+                  stop = False
+                  for run in batch:
+                      created = datetime.fromisoformat(run["created_at"].replace("Z", "+00:00"))
+                      if created >= since:
+                          runs.append(run)
+                      else:
+                          stop = True
+                  if stop or len(batch) < 100:
+                      break
+                  page += 1
+              return runs
+
+          # ─── Analyse aut_prep ─────────────────────────────────────────────
+          print("\n=== aut_prep ===", flush=True)
+          aut_runs = get_runs_24h("auto_prepa.yml")
+          aut_succes  = [r for r in aut_runs if r.get("conclusion") == "success"]
+          aut_echecs  = [r for r in aut_runs if r.get("conclusion") == "failure"]
+          aut_triees  = sorted(aut_runs, key=lambda r: r["created_at"])
+          aut_gap_max = 0.0
+          aut_gaps_alarme = []
+          for i in range(1, len(aut_triees)):
+              t1 = datetime.fromisoformat(aut_triees[i-1]["created_at"].replace("Z", "+00:00"))
+              t2 = datetime.fromisoformat(aut_triees[i]["created_at"].replace("Z", "+00:00"))
+              g  = (t2 - t1).total_seconds() / 60.0
+              if g > aut_gap_max:
+                  aut_gap_max = g
+              if g > 15:
+                  aut_gaps_alarme.append(
+                      f"  - {g:.0f} min entre {t1.strftime('%H:%M')} et {t2.strftime('%H:%M')} UTC"
+                  )
+          print(f"  {len(aut_runs)} runs — {len(aut_succes)} ✅ {len(aut_echecs)} ❌  gap_max={aut_gap_max:.0f}min", flush=True)
+
+          # ─── Analyse collecte_ean ─────────────────────────────────────────
+          print("\n=== collecte_ean ===", flush=True)
+          ean_runs   = get_runs_24h("collecte_ean.yml", max_pages=5)
+          ean_succes = [r for r in ean_runs if r.get("conclusion") == "success"]
+          ean_echecs = [r for r in ean_runs if r.get("conclusion") == "failure"]
+          print(f"  {len(ean_runs)} runs — {len(ean_succes)} ✅ {len(ean_echecs)} ❌", flush=True)
+
+          # ─── Analyse fix_anomalies ────────────────────────────────────────
+          print("\n=== fix_anomalies ===", flush=True)
+          fix_runs   = get_runs_24h("fix_anomalies.yml", max_pages=2)
+          fix_succes = [r for r in fix_runs if r.get("conclusion") == "success"]
+          fix_echecs = [r for r in fix_runs if r.get("conclusion") == "failure"]
+          print(f"  {len(fix_runs)} runs — {len(fix_succes)} ✅ {len(fix_echecs)} ❌", flush=True)
+
+          # ─── Décision globale ─────────────────────────────────────────────
+          probleme = (
+              len(aut_echecs) > 0
+              or len(aut_runs) == 0
+              or len(aut_gaps_alarme) > 0
+              or len(ean_echecs) > 0
+              or len(fix_echecs) > 0
+          )
+
+          # ─── Rapport ─────────────────────────────────────────────────────
+          date_fr = now.strftime("%d/%m/%Y")
+          icone   = "ALERTE" if probleme else "OK"
+          lines   = [
+              f"## [{icone}] Monitoring quotidien — {date_fr}",
+              "",
+              "### Bilan 24 h",
+              "",
+              "| Workflow | Runs | Succès | Échecs | Note |",
+              "|----------|------|--------|--------|------|",
+              f"| `aut_prep` | {len(aut_runs)} | {len(aut_succes)} | {len(aut_echecs)} | gap_max {aut_gap_max:.0f} min |",
+              f"| `collecte_ean` | {len(ean_runs)} | {len(ean_succes)} | {len(ean_echecs)} | — |",
+              f"| `fix_anomalies` | {len(fix_runs)} | {len(fix_succes)} | {len(fix_echecs)} | — |",
+          ]
+
+          if len(aut_runs) == 0:
+              lines += [
+                  "",
+                  "### 🚨 ALERTE CRITIQUE — aut_prep",
+                  "Aucun run détecté en 24 h. Le scheduler externe (cron-job.org) semble arrêté.",
+              ]
+
+          if aut_echecs:
+              lines += ["", "### ❌ Runs aut_prep en échec"]
+              for r in aut_echecs[:20]:
+                  h = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00")).strftime("%H:%M UTC")
+                  lines.append(f"- [Run #{r['run_number']}]({r['html_url']}) à {h}")
+
+          if aut_gaps_alarme:
+              lines += ["", "### ⚠️ Interruptions scheduler aut_prep (> 15 min)"]
+              lines += aut_gaps_alarme[:10]
+
+          if ean_echecs:
+              lines += ["", "### ❌ Runs collecte_ean en échec"]
+              for r in ean_echecs[:10]:
+                  h = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00")).strftime("%H:%M UTC")
+                  lines.append(f"- [Run #{r['run_number']}]({r['html_url']}) à {h}")
+
+          if fix_echecs:
+              lines += ["", "### ❌ Runs fix_anomalies en échec"]
+              for r in fix_echecs[:5]:
+                  h = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00")).strftime("%H:%M UTC")
+                  lines.append(f"- [Run #{r['run_number']}]({r['html_url']}) à {h}")
+
+          if not probleme:
+              lines += [
+                  "",
+                  f"> ✅ Tout fonctionne : {len(aut_succes)} runs aut_prep réussis, "
+                  f"collecte_ean {len(ean_succes)}/{len(ean_runs)}, fix_anomalies {len(fix_succes)}/{len(fix_runs)}.",
+              ]
+
+          rapport = "\n".join(lines)
+          print("\n" + rapport, flush=True)
+
+          # ─── Écrire le step summary GitHub ───────────────────────────────
+          summary_file = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          if summary_file:
+              with open(summary_file, "a") as f:
+                  f.write(rapport + "\n")
+
+          # ─── Créer une issue GitHub si problème ───────────────────────────
+          if probleme:
+              base = f"https://api.github.com/repos/{owner}/{repo}"
+              api_post(f"{base}/labels", {
+                  "name": "monitoring",
+                  "color": "e11d48",
+                  "description": "Surveillance automatique workflows",
+              })
+              issue = api_post(f"{base}/issues", {
+                  "title": f"[MONITORING] Anomalie détectée — {date_fr}",
+                  "body": rapport,
+                  "labels": ["monitoring"],
+              })
+              if issue:
+                  print(f"\nIssue créée : {issue['html_url']}", flush=True)
+              sys.exit(1)
+          PYEOF
