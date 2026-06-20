@@ -124,15 +124,20 @@ def main():
     drive_download(access, index["j.xlsx"], "j.xlsx")
     print(f"  → j.xlsx ({os.path.getsize('j.xlsx'):,} octets)")
 
-    # Stock de départ (J-N) depuis les archives
-    nom_j1 = f"stock_{date_debut.strftime('%d_%m_%Y')}_j.xlsx"
-    file_id_j1 = find_in_archive(access, folder_id, "stocks", nom_j1)
-    if file_id_j1:
-        print(f"Téléchargement {nom_j1} → j1.xlsx …", flush=True)
-        drive_download(access, file_id_j1, "j1.xlsx")
+    # Stock de départ : j1.xlsx déposé manuellement sur Drive, ou archive en fallback
+    if "j1.xlsx" in index:
+        print("Téléchargement j1.xlsx …", flush=True)
+        drive_download(access, index["j1.xlsx"], "j1.xlsx")
         print(f"  → j1.xlsx ({os.path.getsize('j1.xlsx'):,} octets)")
     else:
-        print(f"  {nom_j1} absent des archives — stock de départ non disponible.")
+        nom_j1 = f"stock_{date_debut.strftime('%d_%m_%Y')}_j.xlsx"
+        file_id_j1 = find_in_archive(access, folder_id, "stocks", nom_j1)
+        if file_id_j1:
+            print(f"Téléchargement {nom_j1} (archive) → j1.xlsx …", flush=True)
+            drive_download(access, file_id_j1, "j1.xlsx")
+            print(f"  → j1.xlsx ({os.path.getsize('j1.xlsx'):,} octets)")
+        else:
+            print("  j1.xlsx absent du dossier Drive — stock de départ non disponible.")
 
     work_dir = os.environ.get("WORK_DIR", "v 4.0.0")
     os.makedirs(work_dir, exist_ok=True)
