@@ -590,8 +590,12 @@ def upload_drive(local_path):
                     f.write(contenu_original)
                 upload_to_archive(tmp, "anomalies_bon_prepa", filename=nom_archive)
                 os.remove(tmp)
-                print(f"  {nb} anomalie(s) de point-virgule corrigée(s) dans {nom} "
-                      f"(original archivé → Archives/anomalies_bon_prepa/{nom_archive})")
+                nb_fixes    = sum(1 for c in corrections if '[CORRIGÉ]' in c)
+                nb_signales = nb - nb_fixes
+                statut = f"{nb_fixes} corrigée(s)" + (
+                    f", {nb_signales} non corrigée(s)" if nb_signales else "")
+                print(f"  {nom} : {nb} anomalie(s) de point-virgule ({statut}) "
+                      f"— original archivé → Archives/anomalies_bon_prepa/{nom_archive}")
                 envoyer_email_corrections_bon_prepa([(nom, nb, corrections)])
         except Exception as e:
             print(f"  Vérification point-virgules {nom} échouée : {e}")
@@ -1001,15 +1005,17 @@ def main():
 # Correction des anomalies de point-virgules dans les bons de prépa
 # ─────────────────────────────────────────────────────────────────
 
-def corriger_bon_prepa(chemin, nb_sep=4):
-    """Corrige les lignes avec trop de point-virgules dans un bon de préparation.
+def corriger_bon_prepa(chemin, nb_sep=11):
+    """Détecte et corrige les anomalies de point-virgules dans un bon de préparation.
 
-    Format attendu : gencod;libellé;prix;remise;qty  (nb_sep=4 séparateurs).
-    Quand une ligne contient plus de séparateurs, les champs excédentaires
-    (issus du libellé) sont refusionnés.  Les lignes trop courtes sont
-    conservées telles quelles (on ne peut pas les corriger automatiquement).
+    Format attendu : 12 champs séparés par 11 `;` (nb_sep=11) :
+      gencod ; libellé ; prix_unit ; prix_total ; qty ; OUI/NON ; 0 ; N ;
+      info_commande ; emplacement1 ; emplacement2 ; DLC
 
-    Retourne (nb_corrections, [messages]).
+    - Lignes avec trop de `;` (libellé contenant `;`) : refusion du libellé → CORRIGÉ.
+    - Lignes avec trop peu de `;` : anomalie signalée dans le rapport, ligne conservée.
+
+    Retourne (nb_anomalies_totales, [messages]).
     """
     try:
         try:
@@ -1024,36 +1030,52 @@ def corriger_bon_prepa(chemin, nb_sep=4):
 
     lignes_corrigees = []
     corrections = []
+    has_fix = False
 
     for i, ligne in enumerate(lignes, 1):
         stripped = ligne.rstrip('\n\r')
         if not stripped.strip():
             lignes_corrigees.append(ligne)
             continue
+        # Lignes non-produit (en-tête R,N,M,P …) : le gencod commence toujours par un chiffre
+        if not stripped[0].isdigit():
+            lignes_corrigees.append(ligne)
+            continue
         parts = stripped.split(';')
-        if len(parts) == nb_sep + 1:
+        nb_champs = len(parts)
+        if nb_champs == nb_sep + 1:
             lignes_corrigees.append(ligne)
-        elif len(parts) > nb_sep + 1:
-            gencod  = parts[0]
-            qty     = parts[-1]
-            remise  = parts[-2]
-            prix    = parts[-3]
-            libelle = ';'.join(parts[1:-3])
-            eol = '\n' if ligne.endswith('\n') else ''
-            lignes_corrigees.append(f"{gencod};{libelle};{prix};{remise};{qty}{eol}")
-            avant = ';'.join(parts[1:-3]) if len(parts) > 4 else parts[1]
+        elif nb_champs > nb_sep + 1:
+            # Trop de `;` : le libellé contient des `;` → remplacement par `,`
+            # Les (nb_sep-1) derniers champs sont fixes ; le libellé absorbe le surplus
+            gencod        = parts[0]
+            libelle_parts = parts[1:-(nb_sep - 1)]
+            libelle       = ','.join(libelle_parts)   # `;` → `,` dans le libellé
+            reste         = ';'.join(parts[-(nb_sep - 1):])
+            eol           = '\n' if ligne.endswith('\n') else ''
+            lignes_corrigees.append(f"{gencod};{libelle};{reste}{eol}")
+            avant = ';'.join(libelle_parts)
             corrections.append(
-                f"L{i}: {len(parts)-1}→{nb_sep} sep  "
-                f"gencod={gencod}  libellé={avant!r}"
+                f"L{i}: {nb_champs - 1}→{nb_sep} `;` [CORRIGÉ]  "
+                f"gencod={gencod}  libellé: {avant!r} → {libelle!r}"
             )
+            has_fix = True
         else:
+            # Trop peu de `;` : impossible à corriger automatiquement (champ inconnu manquant)
             lignes_corrigees.append(ligne)
+            gencod = parts[0] if parts else '?'
+            manque = nb_sep + 1 - nb_champs
+            corrections.append(
+                f"L{i}: {nb_champs - 1}→{nb_sep} `;` [NON CORRIGÉ — MANQUE {manque} champ(s)]  "
+                f"gencod={gencod}"
+            )
 
-    if corrections:
+    if has_fix:
         try:
             with open(chemin, 'w', encoding='utf-8') as f:
                 f.writelines(lignes_corrigees)
-            print(f"  {os.path.basename(chemin)} : {len(corrections)} ligne(s) corrigée(s)")
+            nb_fixes = sum(1 for c in corrections if '[CORRIGÉ]' in c)
+            print(f"  {os.path.basename(chemin)} : {nb_fixes} ligne(s) corrigée(s)")
         except Exception as e:
             print(f"  Impossible d'écrire {chemin} : {e}")
             return 0, []
@@ -1170,24 +1192,44 @@ def envoyer_email_corrections_bon_prepa(resultats, date_str=None):
         if not svc:
             return
 
-        date_label = date_str or _date.today().strftime('%d/%m/%Y')
-        nb_total   = sum(r[1] for r in resultats)
+        date_label  = date_str or _date.today().strftime('%d/%m/%Y')
+        nb_total    = sum(r[1] for r in resultats)
+        nb_corriges = sum(
+            sum(1 for c in r[2] if '[CORRIGÉ]' in c) for r in resultats
+        )
+        nb_signales = nb_total - nb_corriges
+
+        sujet_statut = (
+            f"{nb_corriges} corrigé(s)" if nb_corriges else ""
+        ) + (
+            f"{', ' if nb_corriges else ''}{nb_signales} non corrigé(s)" if nb_signales else ""
+        )
 
         msg = MIMEMultipart()
         msg['To']      = EMAIL_DESTINATAIRE
         msg['Subject'] = (
-            f"[Auto-correction] Bons de prépa — "
-            f"{nb_total} point-virgule(s) corrigé(s) — {date_label}"
+            f"[Bons de prépa] Anomalies point-virgules — "
+            f"{sujet_statut} — {date_label}"
         )
 
-        corps  = f"Correction automatique des bons de préparation — {date_label}\n"
+        corps  = f"Anomalies de point-virgules dans les bons de préparation — {date_label}\n"
         corps += "=" * 60 + "\n\n"
         for nom, nb, corrections in resultats:
-            corps += f"Fichier : {nom}  ({nb} correction(s))\n"
+            nb_f = sum(1 for c in corrections if '[CORRIGÉ]' in c)
+            nb_s = nb - nb_f
+            resume = f"{nb_f} corrigée(s)" if nb_f else ""
+            if nb_s:
+                resume += f"{', ' if nb_f else ''}{nb_s} non corrigée(s) (champ manquant inconnu)"
+            corps += f"Fichier : {nom}  ({resume})\n"
             for c in corrections:
                 corps += f"  {c}\n"
             corps += "\n"
-        corps += "Les fichiers ont été corrigés et re-sauvegardés sur Drive.\n"
+        if nb_corriges:
+            corps += "Les lignes corrigées ont été re-sauvegardées sur Drive.\n"
+        if nb_signales:
+            corps += ("ATTENTION : certaines lignes ont un `;` manquant et n'ont pas pu être "
+                      "corrigées automatiquement (impossible de déterminer quel champ est absent).\n"
+                      "Vérifiez la génération du bon de prépa pour ces produits.\n")
 
         msg.attach(MIMEText(corps, 'plain', 'utf-8'))
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
