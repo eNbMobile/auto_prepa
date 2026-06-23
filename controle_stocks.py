@@ -1391,7 +1391,7 @@ def envoyer_email_corrections_bon_prepa(resultats, date_str=None):
             nb_s = nb - nb_f
             resume = f"{nb_f} corrigée(s)" if nb_f else ""
             if nb_s:
-                resume += f"{', ' if nb_f else ''}{nb_s} non corrigée(s) (champ manquant inconnu)"
+                resume += f"{', ' if nb_f else ''}{nb_s} non corrigée(s)"
             corps += f"Fichier : {nom}  ({resume})\n"
             for c in corrections:
                 corps += f"  {c}\n"
@@ -1399,9 +1399,9 @@ def envoyer_email_corrections_bon_prepa(resultats, date_str=None):
         if nb_corriges:
             corps += "Les lignes corrigées ont été re-sauvegardées sur Drive.\n"
         if nb_signales:
-            corps += ("ATTENTION : certaines lignes ont un `;` manquant et n'ont pas pu être "
-                      "corrigées automatiquement (impossible de déterminer quel champ est absent).\n"
-                      "Vérifiez la génération du bon de prépa pour ces produits.\n")
+            corps += ("ATTENTION : certaines lignes n'ont pas pu être corrigées.\n"
+                      "Voir le détail ci-dessus (emplacement absent de chemin_prepa_ramasse.csv "
+                      "sans adresse proche, ou plusieurs champs manquants).\n")
 
         msg.attach(MIMEText(corps, 'plain', 'utf-8'))
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
