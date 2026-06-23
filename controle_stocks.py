@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import zipfile
 import xml.etree.ElementTree as ET
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 _BASE    = os.path.dirname(os.path.abspath(__file__))
 WORK_DIR = os.environ.get("WORK_DIR", os.path.join(_BASE, "v 4.0.0"))
@@ -569,6 +569,34 @@ def upload_to_archive(local_path, subfolder, filename=None):
 
 
 def upload_drive(local_path):
+    nom = os.path.basename(local_path)
+
+    # ── Correction automatique des anomalies de point-virgules ──────────
+    # Pour tout fichier bon_prepa*.txt : avant l'upload, on vérifie les
+    # séparateurs. Si anomalie :
+    #   1. L'original (avec anomalies) est archivé dans Archives/anomalies_bon_prepa/
+    #   2. Le fichier local est corrigé
+    #   3. C'est la version corrigée qui est uploadée — le téléphone la reçoit
+    if nom.startswith("bon_prepa") and nom.endswith(".txt") and os.path.exists(local_path):
+        try:
+            with open(local_path, 'rb') as f:
+                contenu_original = f.read()
+            nb, corrections = corriger_bon_prepa(local_path)
+            if nb > 0:
+                horodatage  = datetime.now().strftime('%Y%m%d_%H%M%S')
+                nom_archive = f"{os.path.splitext(nom)[0]}_{horodatage}.txt"
+                tmp = local_path + "._anomalie_tmp"
+                with open(tmp, 'wb') as f:
+                    f.write(contenu_original)
+                upload_to_archive(tmp, "anomalies_bon_prepa", filename=nom_archive)
+                os.remove(tmp)
+                print(f"  {nb} anomalie(s) de point-virgule corrigée(s) dans {nom} "
+                      f"(original archivé → Archives/anomalies_bon_prepa/{nom_archive})")
+                envoyer_email_corrections_bon_prepa([(nom, nb, corrections)])
+        except Exception as e:
+            print(f"  Vérification point-virgules {nom} échouée : {e}")
+    # ────────────────────────────────────────────────────────────────────
+
     if not DRIVE_CONTROLE_FOLDER_ID:
         print("  DRIVE_CONTROLE_FOLDER_ID non configuré — upload ignoré.")
         return False
@@ -1048,13 +1076,14 @@ def _trouver_dossier_drive(svc, parent_id, name):
 
 
 def corriger_bons_prepa_drive():
-    """Cherche les bon_prepa*.txt sur Drive, corrige les anomalies et re-uploade.
+    """Filet de sécurité : cherche les bon_prepa*.txt dans la racine de
+    DRIVE_CONTROLE_FOLDER_ID, corrige les anomalies de point-virgules et
+    re-uploade. Archive l'original dans Archives/anomalies_bon_prepa/.
 
-    Cherche dans DRIVE_CONTROLE_FOLDER_ID (racine) et dans le sous-dossier
-    Archives/bons/ s'il existe.
+    La correction principale a normalement déjà eu lieu dans upload_drive()
+    lors de la génération du bon. Cette fonction couvre les cas résiduels.
 
-    Retourne [(nom_fichier, nb_corrections, [messages]), ...] pour les
-    fichiers effectivement modifiés.
+    Retourne [(nom_fichier, nb_corrections, [messages]), ...].
     """
     resultats = []
     if not DRIVE_CONTROLE_FOLDER_ID:
@@ -1070,58 +1099,48 @@ def corriger_bons_prepa_drive():
         import io as _io
         from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 
-        def _lister(folder_id):
-            res = svc.files().list(
-                q=(f"'{folder_id}' in parents and trashed=false "
-                   f"and name contains 'bon_prepa'"),
-                fields="files(id,name,mimeType)",
-            ).execute()
-            return [(f, folder_id) for f in res.get("files", [])
+        res = svc.files().list(
+            q=(f"'{DRIVE_CONTROLE_FOLDER_ID}' in parents and trashed=false "
+               f"and name contains 'bon_prepa'"),
+            fields="files(id,name,mimeType)",
+        ).execute()
+        fichiers = [f for f in res.get("files", [])
                     if not f.get("mimeType", "").endswith(".folder")]
 
-        def _telecharger(file_id, dest):
-            req = svc.files().get_media(fileId=file_id)
-            buf = _io.BytesIO()
-            dl  = MediaIoBaseDownload(buf, req)
-            done = False
-            while not done:
-                _, done = dl.next_chunk()
-            with open(dest, "wb") as f:
-                f.write(buf.getvalue())
-
-        def _uploader(file_id, local_path, folder_id, filename):
-            media = MediaFileUpload(local_path, mimetype="text/plain", resumable=False)
-            if file_id:
-                svc.files().update(fileId=file_id, media_body=media).execute()
-            else:
-                svc.files().create(
-                    body={"name": filename, "parents": [folder_id]},
-                    media_body=media, fields="id",
-                ).execute()
-            print(f"  {filename} re-uploadé → Drive OK")
-
-        # Racine + Archives/bons/ (si existant)
-        entrees = _lister(DRIVE_CONTROLE_FOLDER_ID)
-        archives_id = _trouver_dossier_drive(svc, DRIVE_CONTROLE_FOLDER_ID, "Archives")
-        if archives_id:
-            bons_id = _trouver_dossier_drive(svc, archives_id, "bons")
-            if bons_id:
-                entrees += _lister(bons_id)
-
-        if not entrees:
+        if not fichiers:
             print("  Aucun fichier bon_prepa trouvé sur Drive.")
             return resultats
 
-        for fichier, folder_id in entrees:
+        for fichier in fichiers:
             nom   = fichier["name"]
             fid   = fichier["id"]
             local = f"_tmp_{nom}"
             print(f"\nAnalyse {nom} …")
             try:
-                _telecharger(fid, local)
+                req = svc.files().get_media(fileId=fid)
+                buf = _io.BytesIO()
+                dl  = MediaIoBaseDownload(buf, req)
+                done = False
+                while not done:
+                    _, done = dl.next_chunk()
+                contenu_original = buf.getvalue()
+                with open(local, 'wb') as f:
+                    f.write(contenu_original)
+
                 nb, corrections = corriger_bon_prepa(local)
                 if nb > 0:
-                    _uploader(fid, local, folder_id, nom)
+                    # Archiver l'original pour traçabilité
+                    horodatage  = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    nom_archive = f"{os.path.splitext(nom)[0]}_{horodatage}.txt"
+                    tmp = local + "._orig"
+                    with open(tmp, 'wb') as f:
+                        f.write(contenu_original)
+                    upload_to_archive(tmp, "anomalies_bon_prepa", filename=nom_archive)
+                    os.remove(tmp)
+                    # Re-uploader la version corrigée
+                    media = MediaFileUpload(local, mimetype="text/plain", resumable=False)
+                    svc.files().update(fileId=fid, media_body=media).execute()
+                    print(f"  {nom} corrigé et re-uploadé → Drive OK")
                     resultats.append((nom, nb, corrections))
                 else:
                     print(f"  {nom} : aucune anomalie de point-virgule.")
