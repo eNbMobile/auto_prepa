@@ -1147,7 +1147,14 @@ def corriger_bon_prepa(chemin, nb_sep=None):
                 pass
             break
     if _nb_sep is None:
-        _nb_sep = 12  # format courant avec zone
+        # Pas d'en-tête R,N — détecter depuis les lignes de données (mode le plus fréquent)
+        from collections import Counter
+        counts = Counter(
+            l.rstrip('\n\r').count(';')
+            for l in lignes
+            if l.strip() and l.strip()[0].isdigit()
+        )
+        _nb_sep = counts.most_common(1)[0][0] if counts else 13
 
     lignes_corrigees = []
     corrections = []
@@ -1203,7 +1210,8 @@ def corriger_bon_prepa(chemin, nb_sep=None):
             zone, emp_proche = _trouver_zone_approchee(emplacement, _chemin_mapping)
 
             if zone:
-                lignes_corrigees.append(f"{stripped};{zone}{eol}")
+                # Zone s'insère avant le dernier champ (DLC)
+                lignes_corrigees.append(f"{';'.join(parts[:-1])};{zone};{parts[-1]}{eol}")
                 if emp_proche == emplacement:
                     corrections.append(
                         f"L{i}: {nb_champs - 1}→{_nb_sep} `;` [CORRIGÉ +zone]  "
