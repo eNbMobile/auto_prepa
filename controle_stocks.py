@@ -34,6 +34,9 @@ DRIVE_BDC_FOLDER_ID      = ""
 
 _config_drive_index = None   # {nom: file_id}
 _config_drive_cache = {}     # {nom: contenu texte}
+_chemin_prepa_cache = None   # (mapping, contenu_brut) ou None
+
+_NOM_CHEMIN_PREPA = "chemin_prepa_ramasse.csv"
 
 TOKEN_FILE         = os.path.expanduser("~/.auto_prepa_token.json")
 SCOPES             = ["https://www.googleapis.com/auth/drive"]
@@ -1005,15 +1008,120 @@ def main():
 # Correction des anomalies de point-virgules dans les bons de prépa
 # ─────────────────────────────────────────────────────────────────
 
-def corriger_bon_prepa(chemin, nb_sep=11):
+def _charger_chemin_prepa():
+    """Charge chemin_prepa_ramasse.csv depuis Drive.
+    Retourne (mapping {emplacement: (libelle, zone)}, contenu_brut).
+    """
+    global _chemin_prepa_cache
+    if _chemin_prepa_cache is not None:
+        return _chemin_prepa_cache
+    contenu = _lire_config_drive(_NOM_CHEMIN_PREPA)
+    if not contenu:
+        _chemin_prepa_cache = ({}, '')
+        return _chemin_prepa_cache
+    mapping = {}
+    for ligne in contenu.splitlines():
+        parts = ligne.split(';')
+        if len(parts) >= 3:
+            emp  = parts[0].strip()
+            lib  = parts[1].strip()
+            zone = parts[2].strip()
+            if emp:
+                mapping[emp] = (lib, zone)
+    _chemin_prepa_cache = (mapping, contenu)
+    return _chemin_prepa_cache
+
+
+def _trouver_zone_approchee(emplacement, mapping):
+    """Cherche emplacement dans mapping chemin_prepa.
+    Si absent, retourne la zone de l'adresse la plus proche.
+    Retourne (zone, emp_proche) ou (None, None).
+    """
+    import difflib
+    if not emplacement or not mapping:
+        return None, None
+    if emplacement in mapping:
+        lib, zone = mapping[emplacement]
+        return zone, emplacement
+    # Uniquement les vraies adresses (contiennent '-', pas les codes de rayon numériques)
+    adresses = [e for e in mapping if '-' in e]
+    if not adresses:
+        return None, None
+    # Meilleure correspondance par similarité globale
+    matches = difflib.get_close_matches(emplacement, adresses, n=3, cutoff=0.4)
+    if not matches:
+        # Même section XX-YY
+        parts_e = emplacement.split('-')
+        if len(parts_e) >= 2:
+            prefix2 = '-'.join(parts_e[:2])
+            matches = [a for a in adresses if a.startswith(prefix2 + '-')]
+    if not matches:
+        # Même bâtiment XX
+        parts_e = emplacement.split('-')
+        if parts_e:
+            matches = [a for a in adresses if a.startswith(parts_e[0] + '-')]
+    if matches:
+        best = max(matches, key=lambda a: difflib.SequenceMatcher(None, emplacement, a).ratio())
+        lib, zone = mapping[best]
+        return zone, best
+    return None, None
+
+
+def _maj_chemin_prepa_drive(emplacement, libelle_emp, zone, emp_proche, contenu_original):
+    """Insère emplacement dans chemin_prepa_ramasse.csv sur Drive, juste après emp_proche.
+    Invalide les caches locaux pour forcer un rechargement.
+    """
+    global _config_drive_cache, _config_drive_index, _chemin_prepa_cache
+    try:
+        lignes = contenu_original.splitlines(keepends=True)
+        idx_insertion = len(lignes)  # défaut : en fin de fichier
+        for i, ligne in enumerate(lignes):
+            if ligne.lstrip().startswith(emp_proche + ';'):
+                idx_insertion = i + 1
+                break
+        nouvelle_ligne = f"{emplacement};{libelle_emp};{zone}\n"
+        lignes.insert(idx_insertion, nouvelle_ligne)
+        nouveau_contenu = ''.join(lignes)
+
+        import io as _io
+        from googleapiclient.http import MediaIoBaseUpload
+        svc = _get_drive_service()
+        if not svc or not _config_drive_index:
+            print(f"  {_NOM_CHEMIN_PREPA} : Drive non initialisé — mise à jour ignorée.")
+            return False
+        file_id = _config_drive_index.get(_NOM_CHEMIN_PREPA)
+        if not file_id:
+            print(f"  {_NOM_CHEMIN_PREPA} absent de l'index Drive config.")
+            return False
+        media = MediaIoBaseUpload(
+            _io.BytesIO(nouveau_contenu.encode('utf-8')),
+            mimetype='text/plain', resumable=False,
+        )
+        svc.files().update(fileId=file_id, media_body=media).execute()
+        _config_drive_cache.pop(_NOM_CHEMIN_PREPA, None)
+        _chemin_prepa_cache = None
+        print(f"  {_NOM_CHEMIN_PREPA} mis à jour : '{emplacement}' → zone {zone!r} "
+              f"(inséré après '{emp_proche}')")
+        return True
+    except Exception as e:
+        print(f"  _maj_chemin_prepa_drive échoué : {e}")
+        return False
+
+
+def corriger_bon_prepa(chemin, nb_sep=None):
     """Détecte et corrige les anomalies de point-virgules dans un bon de préparation.
 
-    Format attendu : 12 champs séparés par 11 `;` (nb_sep=11) :
+    nb_sep est auto-détecté depuis l'en-tête R,N,… (ex. R,12,254,300 → nb_sep=12).
+    Format courant (nb_sep=12, 13 champs) :
       gencod ; libellé ; prix_unit ; prix_total ; qty ; OUI/NON ; 0 ; N ;
-      info_commande ; emplacement1 ; emplacement2 ; DLC
+      info_commande ; emplacement ; libellé_emplacement ; DLC ; zone
 
-    - Lignes avec trop de `;` (libellé contenant `;`) : refusion du libellé → CORRIGÉ.
-    - Lignes avec trop peu de `;` : anomalie signalée dans le rapport, ligne conservée.
+    Corrections :
+    - Trop de `;` (libellé contenant `;`) : `;` remplacé par `,` [CORRIGÉ].
+    - Un seul `;` manquant (zone absente) : zone recherchée dans chemin_prepa [CORRIGÉ].
+      Si l'adresse est inconnue, l'adresse la plus proche est utilisée, et l'entrée
+      manquante est ajoutée dans chemin_prepa_ramasse.csv sur Drive.
+    - Plusieurs `;` manquants : signalé, non corrigé.
 
     Retourne (nb_anomalies_totales, [messages]).
     """
@@ -1028,45 +1136,109 @@ def corriger_bon_prepa(chemin, nb_sep=11):
         print(f"  Impossible de lire {chemin} : {e}")
         return 0, []
 
+    # Auto-détection du nombre de séparateurs depuis l'en-tête R,N,…
+    _nb_sep = nb_sep
+    for ligne in lignes:
+        s = ligne.rstrip('\n\r').strip()
+        if s.startswith('R,'):
+            try:
+                _nb_sep = int(s.split(',')[1])
+            except (IndexError, ValueError):
+                pass
+            break
+    if _nb_sep is None:
+        _nb_sep = 12  # format courant avec zone
+
     lignes_corrigees = []
     corrections = []
     has_fix = False
+
+    # Chargement paresseux de chemin_prepa (seulement si nécessaire)
+    _chemin_charge  = False
+    _chemin_mapping = {}
+    _chemin_contenu = ''
+
+    def _load_chemin():
+        nonlocal _chemin_charge, _chemin_mapping, _chemin_contenu
+        if not _chemin_charge:
+            _chemin_mapping, _chemin_contenu = _charger_chemin_prepa()
+            _chemin_charge = True
 
     for i, ligne in enumerate(lignes, 1):
         stripped = ligne.rstrip('\n\r')
         if not stripped.strip():
             lignes_corrigees.append(ligne)
             continue
-        # Lignes non-produit (en-tête R,N,M,P …) : le gencod commence toujours par un chiffre
         if not stripped[0].isdigit():
             lignes_corrigees.append(ligne)
             continue
-        parts = stripped.split(';')
+        parts    = stripped.split(';')
         nb_champs = len(parts)
-        if nb_champs == nb_sep + 1:
+        eol      = '\n' if ligne.endswith('\n') else ''
+
+        if nb_champs == _nb_sep + 1:
             lignes_corrigees.append(ligne)
-        elif nb_champs > nb_sep + 1:
+
+        elif nb_champs > _nb_sep + 1:
             # Trop de `;` : le libellé contient des `;` → remplacement par `,`
-            # Les (nb_sep-1) derniers champs sont fixes ; le libellé absorbe le surplus
             gencod        = parts[0]
-            libelle_parts = parts[1:-(nb_sep - 1)]
-            libelle       = ','.join(libelle_parts)   # `;` → `,` dans le libellé
-            reste         = ';'.join(parts[-(nb_sep - 1):])
-            eol           = '\n' if ligne.endswith('\n') else ''
+            libelle_parts = parts[1:-(_nb_sep - 1)]
+            libelle       = ','.join(libelle_parts)
+            reste         = ';'.join(parts[-(_nb_sep - 1):])
             lignes_corrigees.append(f"{gencod};{libelle};{reste}{eol}")
             avant = ';'.join(libelle_parts)
             corrections.append(
-                f"L{i}: {nb_champs - 1}→{nb_sep} `;` [CORRIGÉ]  "
+                f"L{i}: {nb_champs - 1}→{_nb_sep} `;` [CORRIGÉ +libellé]  "
                 f"gencod={gencod}  libellé: {avant!r} → {libelle!r}"
             )
             has_fix = True
+
+        elif nb_champs == _nb_sep:
+            # Un seul champ manquant → zone absente (dernier champ)
+            gencod       = parts[0]
+            emplacement  = parts[-3]
+            libelle_emp  = parts[-2]
+
+            _load_chemin()
+            zone, emp_proche = _trouver_zone_approchee(emplacement, _chemin_mapping)
+
+            if zone:
+                lignes_corrigees.append(f"{stripped};{zone}{eol}")
+                if emp_proche == emplacement:
+                    corrections.append(
+                        f"L{i}: {nb_champs - 1}→{_nb_sep} `;` [CORRIGÉ +zone]  "
+                        f"gencod={gencod}  emplacement={emplacement!r}  zone={zone!r}"
+                    )
+                else:
+                    try:
+                        ok = _maj_chemin_prepa_drive(
+                            emplacement, libelle_emp, zone,
+                            emp_proche, _chemin_contenu,
+                        )
+                        if ok:
+                            _chemin_charge = False
+                            _load_chemin()
+                    except Exception as e:
+                        print(f"  Impossible d'ajouter {emplacement!r} dans chemin_prepa : {e}")
+                    corrections.append(
+                        f"L{i}: {nb_champs - 1}→{_nb_sep} `;` [CORRIGÉ +zone]  "
+                        f"gencod={gencod}  emplacement={emplacement!r} (inconnu)  "
+                        f"zone approchée={zone!r} via {emp_proche!r}  → ajouté dans chemin_prepa"
+                    )
+                has_fix = True
+            else:
+                lignes_corrigees.append(ligne)
+                corrections.append(
+                    f"L{i}: {nb_champs - 1}→{_nb_sep} `;` [NON CORRIGÉ — zone introuvable]  "
+                    f"gencod={gencod}  emplacement={emplacement!r}"
+                )
+
         else:
-            # Trop peu de `;` : impossible à corriger automatiquement (champ inconnu manquant)
             lignes_corrigees.append(ligne)
             gencod = parts[0] if parts else '?'
-            manque = nb_sep + 1 - nb_champs
+            manque = _nb_sep + 1 - nb_champs
             corrections.append(
-                f"L{i}: {nb_champs - 1}→{nb_sep} `;` [NON CORRIGÉ — MANQUE {manque} champ(s)]  "
+                f"L{i}: {nb_champs - 1}→{_nb_sep} `;` [NON CORRIGÉ — MANQUE {manque} champ(s)]  "
                 f"gencod={gencod}"
             )
 
