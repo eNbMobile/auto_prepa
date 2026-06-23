@@ -30,6 +30,7 @@ jobs:
               with open(os.environ["GITHUB_OUTPUT"], "a") as f: f.write("has_new=false\n")
               sys.exit(0)
 
+          import time
           token = json.loads(token_json)
           data = urllib.parse.urlencode({
               "client_id":     token["client_id"],
@@ -37,10 +38,22 @@ jobs:
               "refresh_token": token["refresh_token"],
               "grant_type":    "refresh_token"
           }).encode()
-          resp = json.loads(urllib.request.urlopen(
-              urllib.request.Request("https://oauth2.googleapis.com/token", data=data)
-          ).read())
-          access = resp["access_token"]
+          access = None
+          for attempt in range(3):
+              try:
+                  resp = json.loads(urllib.request.urlopen(
+                      urllib.request.Request("https://oauth2.googleapis.com/token", data=data),
+                      timeout=15,
+                  ).read())
+                  access = resp["access_token"]
+                  break
+              except Exception as e:
+                  if attempt < 2:
+                      time.sleep(2 ** attempt * 2)
+                  else:
+                      print(f"Erreur réseau token OAuth ({e}) → skip précautionneux")
+                      with open(os.environ["GITHUB_OUTPUT"], "a") as f: f.write("has_new=false\n")
+                      sys.exit(0)
           headers = {"Authorization": f"Bearer {access}"}
 
           # Charger les filtres depuis Drive (gmail_filters.json)
