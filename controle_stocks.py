@@ -969,5 +969,214 @@ def main():
             envoyer_email_pdf(nom_pdf, date_j1, nb_ecart, manquant, surplus, date_debut)
 
 
+# ─────────────────────────────────────────────────────────────────
+# Correction des anomalies de point-virgules dans les bons de prépa
+# ─────────────────────────────────────────────────────────────────
+
+def corriger_bon_prepa(chemin, nb_sep=4):
+    """Corrige les lignes avec trop de point-virgules dans un bon de préparation.
+
+    Format attendu : gencod;libellé;prix;remise;qty  (nb_sep=4 séparateurs).
+    Quand une ligne contient plus de séparateurs, les champs excédentaires
+    (issus du libellé) sont refusionnés.  Les lignes trop courtes sont
+    conservées telles quelles (on ne peut pas les corriger automatiquement).
+
+    Retourne (nb_corrections, [messages]).
+    """
+    try:
+        try:
+            with open(chemin, encoding='utf-8') as f:
+                lignes = f.readlines()
+        except UnicodeDecodeError:
+            with open(chemin, encoding='latin-1') as f:
+                lignes = f.readlines()
+    except Exception as e:
+        print(f"  Impossible de lire {chemin} : {e}")
+        return 0, []
+
+    lignes_corrigees = []
+    corrections = []
+
+    for i, ligne in enumerate(lignes, 1):
+        stripped = ligne.rstrip('\n\r')
+        if not stripped.strip():
+            lignes_corrigees.append(ligne)
+            continue
+        parts = stripped.split(';')
+        if len(parts) == nb_sep + 1:
+            lignes_corrigees.append(ligne)
+        elif len(parts) > nb_sep + 1:
+            gencod  = parts[0]
+            qty     = parts[-1]
+            remise  = parts[-2]
+            prix    = parts[-3]
+            libelle = ';'.join(parts[1:-3])
+            eol = '\n' if ligne.endswith('\n') else ''
+            lignes_corrigees.append(f"{gencod};{libelle};{prix};{remise};{qty}{eol}")
+            avant = ';'.join(parts[1:-3]) if len(parts) > 4 else parts[1]
+            corrections.append(
+                f"L{i}: {len(parts)-1}→{nb_sep} sep  "
+                f"gencod={gencod}  libellé={avant!r}"
+            )
+        else:
+            lignes_corrigees.append(ligne)
+
+    if corrections:
+        try:
+            with open(chemin, 'w', encoding='utf-8') as f:
+                f.writelines(lignes_corrigees)
+            print(f"  {os.path.basename(chemin)} : {len(corrections)} ligne(s) corrigée(s)")
+        except Exception as e:
+            print(f"  Impossible d'écrire {chemin} : {e}")
+            return 0, []
+
+    return len(corrections), corrections
+
+
+def _trouver_dossier_drive(svc, parent_id, name):
+    """Retourne l'ID d'un sous-dossier Drive (None si absent, sans créer)."""
+    try:
+        res = svc.files().list(
+            q=(f"name='{name}' and '{parent_id}' in parents "
+               f"and mimeType='application/vnd.google-apps.folder' and trashed=false"),
+            fields="files(id)",
+        ).execute()
+        files = res.get("files", [])
+        return files[0]["id"] if files else None
+    except Exception:
+        return None
+
+
+def corriger_bons_prepa_drive():
+    """Cherche les bon_prepa*.txt sur Drive, corrige les anomalies et re-uploade.
+
+    Cherche dans DRIVE_CONTROLE_FOLDER_ID (racine) et dans le sous-dossier
+    Archives/bons/ s'il existe.
+
+    Retourne [(nom_fichier, nb_corrections, [messages]), ...] pour les
+    fichiers effectivement modifiés.
+    """
+    resultats = []
+    if not DRIVE_CONTROLE_FOLDER_ID:
+        print("  DRIVE_CONTROLE_FOLDER_ID non configuré — correction Drive ignorée.")
+        return resultats
+
+    svc = _get_drive_service()
+    if not svc:
+        print("  Drive inaccessible — correction ignorée.")
+        return resultats
+
+    try:
+        import io as _io
+        from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
+
+        def _lister(folder_id):
+            res = svc.files().list(
+                q=(f"'{folder_id}' in parents and trashed=false "
+                   f"and name contains 'bon_prepa'"),
+                fields="files(id,name,mimeType)",
+            ).execute()
+            return [(f, folder_id) for f in res.get("files", [])
+                    if not f.get("mimeType", "").endswith(".folder")]
+
+        def _telecharger(file_id, dest):
+            req = svc.files().get_media(fileId=file_id)
+            buf = _io.BytesIO()
+            dl  = MediaIoBaseDownload(buf, req)
+            done = False
+            while not done:
+                _, done = dl.next_chunk()
+            with open(dest, "wb") as f:
+                f.write(buf.getvalue())
+
+        def _uploader(file_id, local_path, folder_id, filename):
+            media = MediaFileUpload(local_path, mimetype="text/plain", resumable=False)
+            if file_id:
+                svc.files().update(fileId=file_id, media_body=media).execute()
+            else:
+                svc.files().create(
+                    body={"name": filename, "parents": [folder_id]},
+                    media_body=media, fields="id",
+                ).execute()
+            print(f"  {filename} re-uploadé → Drive OK")
+
+        # Racine + Archives/bons/ (si existant)
+        entrees = _lister(DRIVE_CONTROLE_FOLDER_ID)
+        archives_id = _trouver_dossier_drive(svc, DRIVE_CONTROLE_FOLDER_ID, "Archives")
+        if archives_id:
+            bons_id = _trouver_dossier_drive(svc, archives_id, "bons")
+            if bons_id:
+                entrees += _lister(bons_id)
+
+        if not entrees:
+            print("  Aucun fichier bon_prepa trouvé sur Drive.")
+            return resultats
+
+        for fichier, folder_id in entrees:
+            nom   = fichier["name"]
+            fid   = fichier["id"]
+            local = f"_tmp_{nom}"
+            print(f"\nAnalyse {nom} …")
+            try:
+                _telecharger(fid, local)
+                nb, corrections = corriger_bon_prepa(local)
+                if nb > 0:
+                    _uploader(fid, local, folder_id, nom)
+                    resultats.append((nom, nb, corrections))
+                else:
+                    print(f"  {nom} : aucune anomalie de point-virgule.")
+            except Exception as e:
+                print(f"  Erreur traitement {nom} : {e}")
+            finally:
+                if os.path.exists(local):
+                    os.remove(local)
+
+    except Exception as e:
+        print(f"  corriger_bons_prepa_drive échoué : {e}")
+
+    return resultats
+
+
+def envoyer_email_corrections_bon_prepa(resultats, date_str=None):
+    """Envoie un email récapitulatif des corrections de point-virgules appliquées."""
+    if not resultats:
+        return
+    try:
+        import base64
+        from datetime import date as _date
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+
+        svc = _get_gmail_service()
+        if not svc:
+            return
+
+        date_label = date_str or _date.today().strftime('%d/%m/%Y')
+        nb_total   = sum(r[1] for r in resultats)
+
+        msg = MIMEMultipart()
+        msg['To']      = EMAIL_DESTINATAIRE
+        msg['Subject'] = (
+            f"[Auto-correction] Bons de prépa — "
+            f"{nb_total} point-virgule(s) corrigé(s) — {date_label}"
+        )
+
+        corps  = f"Correction automatique des bons de préparation — {date_label}\n"
+        corps += "=" * 60 + "\n\n"
+        for nom, nb, corrections in resultats:
+            corps += f"Fichier : {nom}  ({nb} correction(s))\n"
+            for c in corrections:
+                corps += f"  {c}\n"
+            corps += "\n"
+        corps += "Les fichiers ont été corrigés et re-sauvegardés sur Drive.\n"
+
+        msg.attach(MIMEText(corps, 'plain', 'utf-8'))
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        svc.users().messages().send(userId='me', body={'raw': raw}).execute()
+        print(f"  Email de correction envoyé → {EMAIL_DESTINATAIRE}")
+    except Exception as e:
+        print(f"  Email de correction échoué : {e}")
+
+
 if __name__ == "__main__":
     main()
