@@ -22,7 +22,18 @@ jobs:
           DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
         run: |
           python3 - <<'EOF'
-          import json, os, sys, urllib.request, urllib.parse
+          import json, os, sys, time, urllib.request, urllib.parse
+
+          def urlopen_retry(req, max_attempts=3):
+              for attempt in range(max_attempts):
+                  try:
+                      return urllib.request.urlopen(req)
+                  except Exception as e:
+                      if attempt == max_attempts - 1:
+                          raise
+                      wait = 2 ** attempt
+                      print(f"  Tentative {attempt+1}/{max_attempts} échouée ({e}) → retry dans {wait}s")
+                      time.sleep(wait)
 
           token_json = os.environ.get("GOOGLE_TOKEN_JSON", "").strip()
           if not token_json:
@@ -37,7 +48,7 @@ jobs:
               "refresh_token": token["refresh_token"],
               "grant_type":    "refresh_token"
           }).encode()
-          resp = json.loads(urllib.request.urlopen(
+          resp = json.loads(urlopen_retry(
               urllib.request.Request("https://oauth2.googleapis.com/token", data=data)
           ).read())
           access = resp["access_token"]
@@ -135,6 +146,7 @@ jobs:
 
       - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
         if: steps.check_pdfs.outputs.has_new == 'true'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
