@@ -1,0 +1,90 @@
+name: fix_chemin_prepa
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # toutes les 5 minutes
+  workflow_dispatch:
+
+concurrency:
+  group: fix_chemin_prepa
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Vérifier s'il y a des emails à traiter
+        id: check
+        env:
+          GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys, urllib.parse, urllib.request
+
+          token_json = os.environ.get("GOOGLE_TOKEN_JSON", "").strip()
+          if not token_json:
+              print("Pas de token → skip")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f: f.write("has_emails=false\n")
+              sys.exit(0)
+
+          token = json.loads(token_json)
+          data = urllib.parse.urlencode({
+              "client_id":     token["client_id"],
+              "client_secret": token["client_secret"],
+              "refresh_token": token["refresh_token"],
+              "grant_type":    "refresh_token"
+          }).encode()
+          resp = json.loads(urllib.request.urlopen(
+              urllib.request.Request("https://oauth2.googleapis.com/token", data=data)
+          ).read())
+          access = resp["access_token"]
+
+          url = ("https://gmail.googleapis.com/gmail/v1/users/me/messages?"
+                 + urllib.parse.urlencode({
+                     "q": 'subject:"bon de prepa invalide" -label:chemin_fix_traite',
+                     "maxResults": "1"
+                 }))
+          res = json.loads(urllib.request.urlopen(
+              urllib.request.Request(url, headers={"Authorization": f"Bearer {access}"})
+          ).read())
+
+          has = "true" if res.get("messages") else "false"
+          print(f"Emails 'bon de prepa invalide' non traités : {has}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f: f.write(f"has_emails={has}\n")
+          EOF
+
+      - name: Installer Python et dépendances
+        if: steps.check.outputs.has_emails == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer les dépendances pip
+        if: steps.check.outputs.has_emails == 'true'
+        run: pip install -r requirements.txt
+
+      - name: Corriger chemin_prepa_mono (adresses manquantes)
+        if: steps.check.outputs.has_emails == 'true'
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+        run: python3 bootstrap.py fix_chemin_prepa.py
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        if: steps.check.outputs.has_emails == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+            echo "Secret GOOGLE_TOKEN_JSON mis à jour."
+          fi
