@@ -3,12 +3,35 @@ import json
 import os
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
 _HERE          = os.path.dirname(os.path.abspath(__file__))
 _SCRIPTS_DIR   = "scripts"
 _TOKEN_FILE    = os.path.expanduser("~/.auto_prepa_token.json")
+
+# Retry on transient HTTP errors (503, 429, 500) with exponential backoff
+_RETRYABLE = {429, 500, 502, 503, 504}
+
+def _urlopen_retry(req, max_attempts=4):
+    for attempt in range(max_attempts):
+        try:
+            return urllib.request.urlopen(req)
+        except urllib.error.HTTPError as e:
+            if e.code not in _RETRYABLE or attempt == max_attempts - 1:
+                raise
+            wait = 2 ** attempt
+            print(f"  HTTP {e.code} → retry dans {wait}s (tentative {attempt+1}/{max_attempts})")
+            time.sleep(wait)
+        except Exception as e:
+            if attempt == max_attempts - 1:
+                raise
+            wait = 2 ** attempt
+            print(f"  Erreur réseau ({e}) → retry dans {wait}s (tentative {attempt+1}/{max_attempts})")
+            time.sleep(wait)
+
 
 def _access_token():
     token_json = os.environ.get("GOOGLE_TOKEN_JSON", "").strip()
@@ -22,7 +45,7 @@ def _access_token():
         "refresh_token": token["refresh_token"],
         "grant_type":    "refresh_token",
     }).encode()
-    resp = json.loads(urllib.request.urlopen(
+    resp = json.loads(_urlopen_retry(
         urllib.request.Request("https://oauth2.googleapis.com/token", data=data)
     ).read())
     token["access_token"] = resp["access_token"]
@@ -32,14 +55,14 @@ def _access_token():
 
 
 def _drive_get(access, url):
-    return json.loads(urllib.request.urlopen(
+    return json.loads(_urlopen_retry(
         urllib.request.Request(url, headers={"Authorization": f"Bearer {access}"})
     ).read())
 
 
 def _drive_download(access, file_id):
     url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
-    return urllib.request.urlopen(
+    return _urlopen_retry(
         urllib.request.Request(url, headers={"Authorization": f"Bearer {access}"})
     ).read()
 
