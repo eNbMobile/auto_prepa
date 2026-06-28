@@ -3,7 +3,7 @@
 Télécharge les visuels produits depuis coursesu.com dans le dossier local visuels_produits/.
 
 Les EAN sont lus depuis visuels_ean_liste.json (fichier local ou sur Drive).
-Les EAN déjà présents dans visuels_produits/ sont automatiquement ignorés.
+Les EAN déjà présents sur enbmobile.nl/mobUDrive/visuels/ sont automatiquement ignorés.
 
 Usage :
     python3 telecharger_visuels.py [chemin/visuels_ean_liste.json]
@@ -15,9 +15,10 @@ Variables optionnelles :
     DRIVE_CONFIG_FOLDER_ID  ID du dossier Drive (si lecture depuis Drive)
     GOOGLE_TOKEN_JSON       Token OAuth Google (si lecture depuis Drive)
     VISUELS_DIR             Dossier de destination (défaut: visuels_produits)
-    COURSESU_URL            URL de base coursesu (défaut: https://www.coursesu.com)
     BATCH_SIZE              Nombre d'EAN par exécution (défaut: 0 = tous)
-    DELAY_DL                Délai entre téléchargements en secondes (défaut: 0.5)
+    DELAY_DL                Délai entre téléchargements en secondes (défaut: 2)
+    NAVIGATEUR              firefox ou chrome (défaut: firefox)
+    TAILLE_IMAGE            Taille des images en px (défaut: 400)
 """
 
 import io
@@ -26,33 +27,29 @@ import os
 import re
 import sys
 import time
-import urllib.request
 from pathlib import Path
+
+import requests
+from bs4 import BeautifulSoup
 
 # Flush immédiat pour les logs en temps réel
 sys.stdout.reconfigure(line_buffering=True)
 
-VISUELS_DIR   = Path(os.environ.get("VISUELS_DIR", "visuels_produits"))
-BASE_URL      = os.environ.get("COURSESU_URL", "https://www.coursesu.com")
-ENBMOBILE_URL = os.environ.get("ENBMOBILE_URL", "http://enbmobile.nl/MobUDrive/visuels")
-BATCH_SIZE    = int(os.environ.get("BATCH_SIZE", "0"))
-DELAY         = float(os.environ.get("DELAY_DL", "0.5"))
+VISUELS_DIR  = Path(os.environ.get("VISUELS_DIR", "visuels_produits"))
+BATCH_SIZE   = int(os.environ.get("BATCH_SIZE", "0"))
+DELAY        = float(os.environ.get("DELAY_DL", "2"))
+NAVIGATEUR   = os.environ.get("NAVIGATEUR", "firefox")
+TAILLE_IMAGE = int(os.environ.get("TAILLE_IMAGE", "400"))
 
-_PATTERNS = [
-    "/media/catalog/product/{e0}/{e1}/{ean}.jpg",
-    "/media/catalog/product/{e0}/{e1}/{ean}.png",
-    "/media/catalog/product/{e0}/{e1}/{ean}_1.jpg",
-    "/media/catalog/product/{e0}/{e1}/{ean}_2.jpg",
-    "/img/produits/{ean}.jpg",
-    "/img/produits/{ean}.png",
+URL_VERIF       = "https://enbmobile.nl/mobUDrive/visuels/{gencod}.png"
+FICHIER_IGNORES = "gencods_ignores.txt"
+
+PHRASES_AUCUN_RESULTAT = [
+    "nous n'avons rien trouvé pour",
+    "aucun résultat",
+    "no results",
+    "ces produits pourraient vous plaire",
 ]
-
-_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    )
-}
 
 
 # ── Chargement de la liste EAN ────────────────────────────────────
@@ -127,72 +124,118 @@ def charger_eans(chemin_arg=None):
     return data
 
 
-# ── EAN déjà téléchargés ─────────────────────────────────────────
-
-def eans_presents():
-    if not VISUELS_DIR.exists():
-        return set()
-    return {
-        re.sub(r'\.[a-zA-Z0-9]+$', '', f.name)
-        for f in VISUELS_DIR.iterdir()
-        if f.is_file()
-    }
-
-
-# ── Session HTTP avec cookies Firefox ────────────────────────────
+# ── Session HTTP avec cookies navigateur ─────────────────────────
 
 def _get_session():
     try:
         import browser_cookie3
-        import requests
     except ImportError:
-        print("ERREUR : pip install browser_cookie3 requests")
+        print("ERREUR : pip install browser_cookie3")
         sys.exit(1)
 
     session = requests.Session()
-    session.headers.update(_HEADERS)
     try:
-        cookies = browser_cookie3.firefox(domain_name=".coursesu.com")
-        session.cookies.update(cookies)
-        print("  Cookies Firefox chargés pour coursesu.com")
+        if NAVIGATEUR == "firefox":
+            cookies = browser_cookie3.firefox(domain_name="coursesu.com")
+        else:
+            cookies = browser_cookie3.chrome(domain_name="coursesu.com")
+        session.cookies = cookies
+        print(f"  Cookies {NAVIGATEUR} chargés pour coursesu.com")
     except Exception as e:
-        print(f"  Avertissement cookies Firefox : {e}")
+        print(f"  Avertissement cookies : {e}")
     return session
 
 
 # ── Vérification enbmobile ───────────────────────────────────────
 
-def deja_sur_enbmobile(ean):
-    """Retourne True si le visuel est déjà présent sur enbmobile.nl (destination finale)."""
-    base = ENBMOBILE_URL.rstrip("/")
-    for ext in (".jpg", ".png"):
-        url = f"{base}/{ean}{ext}"
-        try:
-            req = urllib.request.Request(url, method="HEAD", headers=_HEADERS)
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                if resp.status == 200:
-                    return True
-        except Exception:
-            continue
-    return False
+def deja_sur_enbmobile(gencod):
+    """Retourne True si le visuel est déjà sur enbmobile.nl (destination finale)."""
+    url = URL_VERIF.format(gencod=gencod)
+    try:
+        resp = requests.head(url, timeout=8)
+        return resp.status_code == 200
+    except Exception:
+        return False
 
 
-# ── Téléchargement depuis coursesu ───────────────────────────────
+# ── Recherche image sur coursesu ─────────────────────────────────
 
-def telecharger_visuel(session, ean):
-    """Retourne (data_bytes, extension) ou (None, None) si introuvable."""
-    e0, e1 = ean[0], ean[1]
-    for pattern in _PATTERNS:
-        url = BASE_URL.rstrip("/") + pattern.format(ean=ean, e0=e0, e1=e1)
-        try:
-            r = session.get(url, timeout=15)
-            if r.status_code == 200 and len(r.content) > 500:
-                ct  = r.headers.get("Content-Type", "")
-                ext = ".jpg" if "jpeg" in ct.lower() or url.endswith(".jpg") else ".png"
-                return r.content, ext
-        except Exception:
-            continue
-    return None, None
+def _ajuster_taille(url):
+    url = re.sub(r'sw=\d+', f'sw={TAILLE_IMAGE}', url)
+    url = re.sub(r'sh=\d+', f'sh={TAILLE_IMAGE}', url)
+    return url
+
+
+def _nettoyer_url(url):
+    if url.count("https://") > 1:
+        url = url.split("https://", 1)[1]
+        url = "https://" + url.split("https://")[0]
+    match = re.search(r'(.*?sm=fit)', url)
+    if match:
+        url = match.group(1)
+    return url
+
+
+def _aucun_resultat(soup):
+    texte = soup.get_text().lower()
+    return any(phrase in texte for phrase in PHRASES_AUCUN_RESULTAT)
+
+
+def chercher_image(gencod, session):
+    """Scrape la page de recherche coursesu et retourne l'URL image, 'AUCUN_RESULTAT', ou None."""
+    url = f"https://www.coursesu.com/recherche?q={gencod}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "fr-FR,fr;q=0.9",
+        "Referer": "https://www.coursesu.com/",
+    }
+    resp = session.get(url, headers=headers, timeout=15)
+    if resp.status_code != 200:
+        print(f"  ⚠️  Status HTTP : {resp.status_code}")
+        return None
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    if _aucun_resultat(soup):
+        return "AUCUN_RESULTAT"
+
+    for img in soup.find_all("img"):
+        for attr in ["src", "data-src", "data-lazy-src"]:
+            src = img.get(attr, "")
+            if "static.coursesu.com" in src and "demandware" in src:
+                return _ajuster_taille(_nettoyer_url(src))
+
+    for img in soup.find_all("img"):
+        srcset = img.get("srcset", "")
+        if "static.coursesu.com" in srcset:
+            premiere = srcset.split(",")[0].strip().split(" ")[0]
+            return _ajuster_taille(_nettoyer_url(premiere))
+
+    matches = re.findall(r'https://static\.coursesu\.com[^"\'>\s]+demandware[^"\'>\s]+', resp.text)
+    if matches:
+        return _ajuster_taille(_nettoyer_url(matches[0]))
+
+    return None
+
+
+# ── Téléchargement de l'image ────────────────────────────────────
+
+def telecharger_image(url_image, chemin, session):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+        "Referer": "https://www.coursesu.com/",
+        "Accept-Language": "fr-FR,fr;q=0.9",
+        "Connection": "keep-alive",
+    }
+    resp = session.get(url_image, headers=headers, timeout=15, stream=True)
+    if resp.status_code == 403:
+        raise Exception("403 Forbidden (anti-bot détecté)")
+    resp.raise_for_status()
+    with open(chemin, "wb") as f:
+        for chunk in resp.iter_content(8192):
+            f.write(chunk)
 
 
 # ── Pipeline principal ────────────────────────────────────────────
@@ -206,61 +249,93 @@ def main():
     tous_eans = charger_eans(chemin_arg)
     print(f"  {len(tous_eans)} EAN chargés")
 
-    deja = eans_presents()
-    print(f"  {len(deja)} visuels déjà présents dans {VISUELS_DIR}/")
-
-    a_traiter = [ean for ean in tous_eans if ean not in deja]
-    if not a_traiter:
-        print("Tous les visuels sont déjà téléchargés.")
-        return
-
-    batch = a_traiter[:BATCH_SIZE] if BATCH_SIZE > 0 else a_traiter
-    print(f"  {len(a_traiter)} EAN manquants — téléchargement de {len(batch)}\n")
+    batch = tous_eans[:BATCH_SIZE] if BATCH_SIZE > 0 else tous_eans
+    print(f"  Lot : {len(batch)} EAN\n")
 
     VISUELS_DIR.mkdir(parents=True, exist_ok=True)
-
     session = _get_session()
-    ok = absent = enbmobile_ok = erreur = 0
+
+    resultats = {"deja_present": [], "succes": [], "ignore": [], "echec": []}
 
     for i, ean in enumerate(batch, 1):
-        prefix = f"  [{i}/{len(batch)}] {ean}"
+        gencod_sans_zeros = ean.lstrip("0") or ean
+        a_des_zeros = gencod_sans_zeros != ean
+        dernier_est_deja_0 = ean.endswith("0")
 
-        # 1. Vérifier si déjà présent sur enbmobile.nl (destination finale → ignorer)
+        if a_des_zeros:
+            print(f"[{i}/{len(batch)}] {ean} → sans zéros : {gencod_sans_zeros}")
+        else:
+            print(f"[{i}/{len(batch)}] {ean}")
+
+        # 1. Déjà sur enbmobile.nl → ignorer
         if deja_sur_enbmobile(ean):
-            print(f"{prefix} ↷ déjà sur enbmobile")
-            enbmobile_ok += 1
+            print("    ⏭️  Déjà présent sur enbmobile.nl — ignoré")
+            resultats["deja_present"].append(ean)
             continue
 
-        # 2. Télécharger depuis coursesu.com
-        data, ext = telecharger_visuel(session, ean)
-        if data is None:
-            e0, e1 = ean[0], ean[1]
-            exemple_url = (BASE_URL.rstrip("/")
-                           + f"/media/catalog/product/{e0}/{e1}/{ean}.jpg")
-            print(f"{prefix} ✗ introuvable  (ex: {exemple_url})")
-            absent += 1
-        else:
-            dest = VISUELS_DIR / f"{ean}{ext}"
-            try:
-                dest.write_bytes(data)
-                print(f"{prefix} ✓ coursesu ({len(data):,} o)")
-                ok += 1
-            except Exception as e:
-                print(f"{prefix} ✗ erreur écriture : {e}")
-                erreur += 1
+        # 2. Construire les variantes à essayer
+        variantes = [gencod_sans_zeros]
+        if a_des_zeros:
+            variantes.append(ean)
+        if not dernier_est_deja_0:
+            variantes.append(gencod_sans_zeros[:-1] + "0")
+            if a_des_zeros:
+                variantes.append(ean[:-1] + "0")
+        variantes = list(dict.fromkeys(variantes))
 
-        if i < len(batch):
+        url_image = None
+        for variante in variantes:
+            print(f"    🔍 Essai avec {variante}...", end=" ", flush=True)
+            try:
+                resultat = chercher_image(variante, session)
+            except Exception as e:
+                print(f"❌ Erreur : {e}")
+                time.sleep(DELAY)
+                continue
+
+            if resultat and resultat != "AUCUN_RESULTAT":
+                url_image = resultat
+                print("✅ Trouvé !")
+                break
+            elif resultat == "AUCUN_RESULTAT":
+                print("⛔ Aucun résultat")
+            else:
+                print("❌ Image non trouvée")
+
             time.sleep(DELAY)
 
+        if not url_image:
+            print("    ⛔ Aucun résultat après toutes les variantes — ignoré")
+            with open(FICHIER_IGNORES, "a") as f:
+                f.write(ean + "\n")
+            resultats["ignore"].append(ean)
+            continue
+
+        # 3. Télécharger — nom fichier = EAN original
+        chemin = VISUELS_DIR / f"{ean}.png"
+        try:
+            telecharger_image(url_image, chemin, session)
+            taille_ko = chemin.stat().st_size // 1024
+            print(f"    ✅ Téléchargé ({taille_ko} Ko) → {ean}.png")
+            resultats["succes"].append(ean)
+        except Exception as e:
+            print(f"    ❌ Erreur téléchargement : {e}")
+            resultats["echec"].append(ean)
+
+        time.sleep(DELAY)
+
     print(f"\n── Résultat ───────────────────────────")
-    if enbmobile_ok:
-        print(f"  Déjà sur enbmobile (ignorés) : {enbmobile_ok}")
-    print(f"  Téléchargés depuis coursesu : {ok}")
-    print(f"  Introuvables : {absent}")
-    if erreur:
-        print(f"  Erreurs     : {erreur}")
-    if BATCH_SIZE > 0 and len(a_traiter) > BATCH_SIZE:
-        print(f"  Restants    : {len(a_traiter) - BATCH_SIZE}")
+    print(f"  Déjà sur enbmobile (ignorés) : {len(resultats['deja_present'])}")
+    print(f"  Téléchargés                  : {len(resultats['succes'])}")
+    print(f"  Introuvables (ignorés)       : {len(resultats['ignore'])}")
+    print(f"  Erreurs                      : {len(resultats['echec'])}")
+    if resultats["ignore"]:
+        print(f"\n  EAN ignorés enregistrés dans : {FICHIER_IGNORES}")
+    if resultats["echec"]:
+        print(f"\n  EAN en échec :")
+        for g in resultats["echec"]:
+            print(f"    • {g}  → https://www.coursesu.com/recherche?q={g}")
+    print(f"\n  Images dans : {VISUELS_DIR.resolve()}/")
 
 
 if __name__ == "__main__":
