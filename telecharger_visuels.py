@@ -29,6 +29,9 @@ import time
 import urllib.request
 from pathlib import Path
 
+# Flush immédiat pour les logs en temps réel
+sys.stdout.reconfigure(line_buffering=True)
+
 VISUELS_DIR = Path(os.environ.get("VISUELS_DIR", "visuels_produits"))
 BASE_URL    = os.environ.get("COURSESU_URL", "https://www.coursesu.com")
 BATCH_SIZE  = int(os.environ.get("BATCH_SIZE", "0"))
@@ -133,22 +136,40 @@ def eans_presents():
     }
 
 
+# ── Session HTTP avec cookies Firefox ────────────────────────────
+
+def _get_session():
+    try:
+        import browser_cookie3
+        import requests
+    except ImportError:
+        print("ERREUR : pip install browser_cookie3 requests")
+        sys.exit(1)
+
+    session = requests.Session()
+    session.headers.update(_HEADERS)
+    try:
+        cookies = browser_cookie3.firefox(domain_name=".coursesu.com")
+        session.cookies.update(cookies)
+        print("  Cookies Firefox chargés pour coursesu.com")
+    except Exception as e:
+        print(f"  Avertissement cookies Firefox : {e}")
+    return session
+
+
 # ── Téléchargement ────────────────────────────────────────────────
 
-def telecharger_visuel(ean):
+def telecharger_visuel(session, ean):
     """Retourne (data_bytes, extension) ou (None, None) si introuvable."""
     e0, e1 = ean[0], ean[1]
     for pattern in _PATTERNS:
         url = BASE_URL.rstrip("/") + pattern.format(ean=ean, e0=e0, e1=e1)
         try:
-            req = urllib.request.Request(url, headers=_HEADERS)
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                if resp.status == 200:
-                    data = resp.read()
-                    if len(data) > 500:
-                        ct  = resp.headers.get("Content-Type", "")
-                        ext = ".jpg" if "jpeg" in ct.lower() or url.endswith(".jpg") else ".png"
-                        return data, ext
+            r = session.get(url, timeout=15)
+            if r.status_code == 200 and len(r.content) > 500:
+                ct  = r.headers.get("Content-Type", "")
+                ext = ".jpg" if "jpeg" in ct.lower() or url.endswith(".jpg") else ".png"
+                return r.content, ext
         except Exception:
             continue
     return None, None
@@ -178,10 +199,11 @@ def main():
 
     VISUELS_DIR.mkdir(parents=True, exist_ok=True)
 
+    session = _get_session()
     ok = absent = erreur = 0
 
     for i, ean in enumerate(batch, 1):
-        data, ext = telecharger_visuel(ean)
+        data, ext = telecharger_visuel(session, ean)
         if data is None:
             print(f"  [{i}/{len(batch)}] ✗ {ean} → introuvable")
             absent += 1
