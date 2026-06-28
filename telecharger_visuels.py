@@ -32,16 +32,19 @@ from pathlib import Path
 # Flush immédiat pour les logs en temps réel
 sys.stdout.reconfigure(line_buffering=True)
 
-VISUELS_DIR = Path(os.environ.get("VISUELS_DIR", "visuels_produits"))
-BASE_URL    = os.environ.get("COURSESU_URL", "https://www.coursesu.com")
-BATCH_SIZE  = int(os.environ.get("BATCH_SIZE", "0"))
-DELAY       = float(os.environ.get("DELAY_DL", "0.5"))
+VISUELS_DIR   = Path(os.environ.get("VISUELS_DIR", "visuels_produits"))
+BASE_URL      = os.environ.get("COURSESU_URL", "https://www.coursesu.com")
+ENBMOBILE_URL = os.environ.get("ENBMOBILE_URL", "http://enbmobile.nl/MobUDrive/visuels")
+BATCH_SIZE    = int(os.environ.get("BATCH_SIZE", "0"))
+DELAY         = float(os.environ.get("DELAY_DL", "0.5"))
 
 _PATTERNS = [
     "/media/catalog/product/{e0}/{e1}/{ean}.jpg",
     "/media/catalog/product/{e0}/{e1}/{ean}.png",
     "/media/catalog/product/{e0}/{e1}/{ean}_1.jpg",
+    "/media/catalog/product/{e0}/{e1}/{ean}_2.jpg",
     "/img/produits/{ean}.jpg",
+    "/img/produits/{ean}.png",
 ]
 
 _HEADERS = {
@@ -157,7 +160,29 @@ def _get_session():
     return session
 
 
-# ── Téléchargement ────────────────────────────────────────────────
+# ── Vérification enbmobile ───────────────────────────────────────
+
+def deja_sur_enbmobile(ean):
+    """Retourne (data, ext) si le visuel existe déjà sur enbmobile.nl, sinon (None, None)."""
+    base = ENBMOBILE_URL.rstrip("/")
+    for ext in (".jpg", ".png"):
+        url = f"{base}/{ean}{ext}"
+        try:
+            req = urllib.request.Request(url, method="HEAD", headers=_HEADERS)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status == 200:
+                    # Télécharger le contenu pour le sauvegarder localement
+                    req2 = urllib.request.Request(url, headers=_HEADERS)
+                    with urllib.request.urlopen(req2, timeout=15) as r2:
+                        data = r2.read()
+                    if len(data) > 500:
+                        return data, ext
+        except Exception:
+            continue
+    return None, None
+
+
+# ── Téléchargement depuis coursesu ───────────────────────────────
 
 def telecharger_visuel(session, ean):
     """Retourne (data_bytes, extension) ou (None, None) si introuvable."""
@@ -200,28 +225,47 @@ def main():
     VISUELS_DIR.mkdir(parents=True, exist_ok=True)
 
     session = _get_session()
-    ok = absent = erreur = 0
+    ok = absent = enbmobile_ok = erreur = 0
 
     for i, ean in enumerate(batch, 1):
+        prefix = f"  [{i}/{len(batch)}] {ean}"
+
+        # 1. Vérifier d'abord sur enbmobile.nl
+        data, ext = deja_sur_enbmobile(ean)
+        if data is not None:
+            dest = VISUELS_DIR / f"{ean}{ext}"
+            dest.write_bytes(data)
+            print(f"{prefix} ← enbmobile ({len(data):,} o)")
+            enbmobile_ok += 1
+            if i < len(batch):
+                time.sleep(DELAY)
+            continue
+
+        # 2. Télécharger depuis coursesu.com
         data, ext = telecharger_visuel(session, ean)
         if data is None:
-            print(f"  [{i}/{len(batch)}] ✗ {ean} → introuvable")
+            e0, e1 = ean[0], ean[1]
+            exemple_url = (BASE_URL.rstrip("/")
+                           + f"/media/catalog/product/{e0}/{e1}/{ean}.jpg")
+            print(f"{prefix} ✗ introuvable  (ex: {exemple_url})")
             absent += 1
         else:
             dest = VISUELS_DIR / f"{ean}{ext}"
             try:
                 dest.write_bytes(data)
-                print(f"  [{i}/{len(batch)}] ✓ {ean}{ext}  ({len(data):,} o)")
+                print(f"{prefix} ✓ coursesu ({len(data):,} o)")
                 ok += 1
             except Exception as e:
-                print(f"  [{i}/{len(batch)}] ✗ {ean} → erreur écriture : {e}")
+                print(f"{prefix} ✗ erreur écriture : {e}")
                 erreur += 1
 
         if i < len(batch):
             time.sleep(DELAY)
 
     print(f"\n── Résultat ───────────────────────────")
-    print(f"  Téléchargés : {ok}")
+    if enbmobile_ok:
+        print(f"  Récupérés depuis enbmobile : {enbmobile_ok}")
+    print(f"  Téléchargés depuis coursesu : {ok}")
     print(f"  Introuvables : {absent}")
     if erreur:
         print(f"  Erreurs     : {erreur}")
