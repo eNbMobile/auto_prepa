@@ -44,10 +44,9 @@ GMAIL_LABEL_NOM      = ""
 
 DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
 
-DRIVE_BONS_FOLDER_ID           = ""
-DRIVE_BDC_FOLDER_ID            = ""
-DRIVE_ANTICIPATION_FOLDER_ID   = ""
-EMAIL_ANTICIPATION             = ""
+DRIVE_BONS_FOLDER_ID = ""
+DRIVE_BDC_FOLDER_ID  = ""
+EMAIL_ANTICIPATION   = ""
 
 CONFIG_FILES = [
     "chemin_prepa_mono.csv",
@@ -379,28 +378,6 @@ def upload_bon(drive_svc, local_path):
         print(f"    {filename} => Drive ECHEC : {e}")
         return False
 
-def _archiver_anticipation(drive_svc, local_path):
-    """Copie bon_anticipation_*.txt dans MobUDrive_Bons/Anticipation/ pour archivage."""
-    if not DRIVE_ANTICIPATION_FOLDER_ID:
-        return
-    filename = os.path.basename(local_path)
-    media = MediaFileUpload(local_path, mimetype="text/plain", resumable=False)
-    try:
-        res = drive_svc.files().list(
-            q=f"name='{filename}' and '{DRIVE_ANTICIPATION_FOLDER_ID}' in parents and trashed=false",
-            fields="files(id)",
-        ).execute()
-        existing = res.get("files", [])
-        if existing:
-            drive_svc.files().update(fileId=existing[0]["id"], media_body=media).execute()
-        else:
-            drive_svc.files().create(
-                body={"name": filename, "parents": [DRIVE_ANTICIPATION_FOLDER_ID]},
-                media_body=media,
-                fields="id",
-            ).execute()
-    except Exception as e:
-        print(f"    Archive anticipation {filename} echouee : {e}")
 
 def telecharger_config_drive(drive_svc):
     """Telecharge les CSV de config et le binaire depuis Drive vers WORK_DIR."""
@@ -551,25 +528,23 @@ def _get_heure_email_original(gmail_svc, numero):
         return None
 
 def _telecharger_anticipation_drive(drive_svc, numero):
-    """Telecharge et retourne le contenu de bon_anticipation_NUMERO.txt depuis Anticipation/."""
-    if not DRIVE_ANTICIPATION_FOLDER_ID:
+    """Telecharge et retourne le contenu de bon_anticipation_NUMERO.txt depuis Drive."""
+    if not DRIVE_BONS_FOLDER_ID:
         return ""
     nom = f"bon_anticipation_{numero}.txt"
     try:
         res = drive_svc.files().list(
-            q=f"name='{nom}' and '{DRIVE_ANTICIPATION_FOLDER_ID}' in parents and trashed=false",
+            q=f"name='{nom}' and '{DRIVE_BONS_FOLDER_ID}' in parents and trashed=false",
             fields="files(id)",
         ).execute()
         files = res.get("files", [])
         if not files:
             return ""
-        file_id = files[0]["id"]
         buf = io.BytesIO()
-        dl = MediaIoBaseDownload(buf, drive_svc.files().get_media(fileId=file_id))
+        dl = MediaIoBaseDownload(buf, drive_svc.files().get_media(fileId=files[0]["id"]))
         done = False
         while not done:
             _, done = dl.next_chunk()
-        drive_svc.files().delete(fileId=file_id).execute()
         return buf.getvalue().decode("utf-8", errors="replace")
     except Exception as e:
         print(f"    Telechargement anticipation {numero} echoue : {e}")
@@ -718,7 +693,7 @@ def main():
 
 def _charger_config(drive_svc):
     """Charge config.json depuis DRIVE_CONFIG_FOLDER_ID et initialise les globals."""
-    global DRIVE_BONS_FOLDER_ID, DRIVE_BDC_FOLDER_ID, EMAIL_ANTICIPATION, DRIVE_ANTICIPATION_FOLDER_ID
+    global DRIVE_BONS_FOLDER_ID, DRIVE_BDC_FOLDER_ID, EMAIL_ANTICIPATION
     if not DRIVE_CONFIG_FOLDER_ID:
         print("ERREUR : secret DRIVE_CONFIG_FOLDER_ID manquant.")
         sys.exit(1)
@@ -740,9 +715,6 @@ def _charger_config(drive_svc):
         DRIVE_BONS_FOLDER_ID = cfg["drive_bons_folder_id"]
         DRIVE_BDC_FOLDER_ID  = cfg["drive_bdc_folder_id"]
         EMAIL_ANTICIPATION   = cfg.get("email_destinataire", "")
-        DRIVE_ANTICIPATION_FOLDER_ID = _get_or_create_subfolder(
-            drive_svc, DRIVE_BONS_FOLDER_ID, "Anticipation"
-        ) or ""
     except Exception as e:
         print(f"ERREUR chargement config Drive : {e}")
         sys.exit(1)
@@ -944,8 +916,6 @@ def _main():
             fpath = os.path.join(WORK_DIR, fname)
             if os.path.exists(fpath):
                 if upload_bon(drive_svc, fpath):
-                    if fname.startswith("bon_anticipation_"):
-                        _archiver_anticipation(drive_svc, fpath)
                     os.remove(fpath)
 
         pdf_work = os.path.join(WORK_DIR, pdf)
