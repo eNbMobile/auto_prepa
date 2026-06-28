@@ -163,7 +163,7 @@ def _get_session():
 # ── Vérification enbmobile ───────────────────────────────────────
 
 def deja_sur_enbmobile(ean):
-    """Retourne (data, ext) si le visuel existe déjà sur enbmobile.nl, sinon (None, None)."""
+    """Retourne True si le visuel est déjà présent sur enbmobile.nl (destination finale)."""
     base = ENBMOBILE_URL.rstrip("/")
     for ext in (".jpg", ".png"):
         url = f"{base}/{ean}{ext}"
@@ -171,15 +171,10 @@ def deja_sur_enbmobile(ean):
             req = urllib.request.Request(url, method="HEAD", headers=_HEADERS)
             with urllib.request.urlopen(req, timeout=10) as resp:
                 if resp.status == 200:
-                    # Télécharger le contenu pour le sauvegarder localement
-                    req2 = urllib.request.Request(url, headers=_HEADERS)
-                    with urllib.request.urlopen(req2, timeout=15) as r2:
-                        data = r2.read()
-                    if len(data) > 500:
-                        return data, ext
+                    return True
         except Exception:
             continue
-    return None, None
+    return False
 
 
 # ── Téléchargement depuis coursesu ───────────────────────────────
@@ -230,15 +225,10 @@ def main():
     for i, ean in enumerate(batch, 1):
         prefix = f"  [{i}/{len(batch)}] {ean}"
 
-        # 1. Vérifier d'abord sur enbmobile.nl
-        data, ext = deja_sur_enbmobile(ean)
-        if data is not None:
-            dest = VISUELS_DIR / f"{ean}{ext}"
-            dest.write_bytes(data)
-            print(f"{prefix} ← enbmobile ({len(data):,} o)")
+        # 1. Vérifier si déjà présent sur enbmobile.nl (destination finale → ignorer)
+        if deja_sur_enbmobile(ean):
+            print(f"{prefix} ↷ déjà sur enbmobile")
             enbmobile_ok += 1
-            if i < len(batch):
-                time.sleep(DELAY)
             continue
 
         # 2. Télécharger depuis coursesu.com
@@ -264,7 +254,7 @@ def main():
 
     print(f"\n── Résultat ───────────────────────────")
     if enbmobile_ok:
-        print(f"  Récupérés depuis enbmobile : {enbmobile_ok}")
+        print(f"  Déjà sur enbmobile (ignorés) : {enbmobile_ok}")
     print(f"  Téléchargés depuis coursesu : {ok}")
     print(f"  Introuvables : {absent}")
     if erreur:
