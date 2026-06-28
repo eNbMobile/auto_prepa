@@ -1,0 +1,51 @@
+name: telecharger_visuels
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * *'   # tous les jours à 4h
+
+concurrency:
+  group: telecharger_visuels
+  cancel-in-progress: false
+
+jobs:
+  telecharger:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python et dépendances
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer les dépendances pip
+        run: pip install -r requirements.txt
+
+      - name: Télécharger et uploader les visuels
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          FTP_HOST:               ${{ secrets.FTP_HOST }}
+          FTP_USER:               ${{ secrets.FTP_USER }}
+          FTP_PASS:               ${{ secrets.FTP_PASS }}
+          FTP_DIR:                /mobUDrive/visuels
+          BATCH_SIZE:             "100"
+          DELAY_DL:               "0.8"
+        run: python3 telecharger_visuels.py
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+          fi
