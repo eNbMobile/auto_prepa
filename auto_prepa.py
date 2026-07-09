@@ -565,32 +565,57 @@ def _envoyer_email_anticipation(gmail_svc, numero, contenu):
     except Exception as e:
         print(f"    Envoi email anticipation {numero} echoue : {e}")
 
-def _envoyer_email_adresses_manquantes(gmail_svc, numero, avertissements):
-    """Alerte par email quand des adresses manquent dans chemin_prepa_mono."""
+def _envoyer_email_adresses_manquantes(gmail_svc, numero, avertissements_nomenclature, avertissements_inconnues):
+    """Alerte par email sur les anomalies d'adressage remontees par prepa_drive_degrade.
+
+    Deux cas distincts :
+    - adresse absente de chemin_prepa_mono mais nomenclature trouvee : le produit
+      est replace au bon endroit via gencod_nomenclatures.csv (chemin_prepa_ramasse
+      ou chemin_prepa_mono selon le cas) ;
+    - ni adresse ni nomenclature : le produit est insere avec la mention
+      'ADRESSE INCONNUE' et positionne en fin de chemin (zone 'W').
+    """
     from email.mime.text import MIMEText
     destinataire = EMAIL_ANTICIPATION
     if not destinataire:
         return
-    detail = '\n'.join(f"  {a}" for a in avertissements)
-    corps = (
+    total = len(avertissements_nomenclature) + len(avertissements_inconnues)
+    sections = [
         f"Bonjour,\n\n"
-        f"Lors du traitement de la commande {numero}, {len(avertissements)} adresse(s) "
-        f"absente(s) du chemin de preparation mono ont ete detectees "
-        f"(zone marquee 'W' dans le bon de prepa) :\n\n"
-        f"{detail}\n\n"
-        f"Ces produits ont ete inseres avec la mention 'ADRESSE INCONNUE' et "
-        f"positionnes en fin de chemin (W).\n"
-        f"Merci de mettre a jour chemin_prepa_mono.csv sur Drive.\n"
+        f"Lors du traitement de la commande {numero}, {total} anomalie(s) d'adressage "
+        f"ont ete detectee(s) :\n"
+    ]
+    if avertissements_nomenclature:
+        detail = '\n'.join(f"  {a}" for a in avertissements_nomenclature)
+        sections.append(
+            f"\n{len(avertissements_nomenclature)} produit(s) dont l'adresse ne fait pas "
+            f"partie du chemin de preparation ont ete replaces au bon endroit via leur "
+            f"nomenclature (gencod_nomenclatures.csv) dans chemin_prepa_ramasse ou "
+            f"chemin_prepa_mono :\n\n"
+            f"{detail}\n"
+        )
+    if avertissements_inconnues:
+        detail = '\n'.join(f"  {a}" for a in avertissements_inconnues)
+        sections.append(
+            f"\n{len(avertissements_inconnues)} produit(s) sans adresse ni nomenclature "
+            f"connue(s) ont ete inseres avec la mention 'ADRESSE INCONNUE' et positionnes "
+            f"en fin de chemin (zone 'W') :\n\n"
+            f"{detail}\n"
+        )
+    sections.append(
+        f"\nMerci de mettre a jour chemin_prepa_mono.csv"
+        f"{' et gencod_nomenclatures.csv' if avertissements_inconnues else ''} sur Drive.\n"
     )
+    corps = ''.join(sections)
     try:
         msg = MIMEText(corps, "plain", "utf-8")
         msg["to"] = destinataire
-        msg["subject"] = f"Commande {numero} - adresse(s) manquante(s) dans chemin_prepa_mono"
+        msg["subject"] = f"Commande {numero} - anomalie(s) d'adressage dans chemin_prepa_mono"
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
-        print(f"    Email adresses manquantes envoye pour cde {numero} => {destinataire}")
+        print(f"    Email anomalie(s) d'adressage envoye pour cde {numero} => {destinataire}")
     except Exception as e:
-        print(f"    Envoi email adresses manquantes {numero} echoue : {e}")
+        print(f"    Envoi email anomalie(s) d'adressage {numero} echoue : {e}")
 
 def _envoyer_email_anomalie_bon(gmail_svc, numero, lignes_invalides):
     """Alerte par email quand un bon de prepa contient des lignes mal formees."""
@@ -851,15 +876,23 @@ def _main():
             continue
         print(" OK")
 
-        avertissements_adresses = [
+        avertissements_nomenclature = [
             ligne.rstrip('\n')
             for ligne in r.stdout.splitlines()
             if "ne fait pas partie du chemin de" in ligne
-            or "Aucune adresse ni aucune nomenclature" in ligne
         ]
-        if avertissements_adresses:
-            print(f"    {len(avertissements_adresses)} adresse(s) manquante(s) detectee(s) dans chemin_prepa_mono")
-            _envoyer_email_adresses_manquantes(gmail_svc, order_num, avertissements_adresses)
+        avertissements_inconnues = [
+            ligne.rstrip('\n')
+            for ligne in r.stdout.splitlines()
+            if "Aucune adresse ni aucune nomenclature" in ligne
+        ]
+        if avertissements_nomenclature or avertissements_inconnues:
+            total = len(avertissements_nomenclature) + len(avertissements_inconnues)
+            print(f"    {total} anomalie(s) d'adressage detectee(s) dans chemin_prepa_mono "
+                  f"({len(avertissements_nomenclature)} replacee(s) via nomenclature, "
+                  f"{len(avertissements_inconnues)} adresse inconnue)")
+            _envoyer_email_adresses_manquantes(
+                gmail_svc, order_num, avertissements_nomenclature, avertissements_inconnues)
 
         with open(bon_prepa_path, 'r', encoding='utf-8') as f:
             lignes = f.readlines()
