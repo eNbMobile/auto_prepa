@@ -8,11 +8,16 @@ import shutil
 import subprocess
 import io
 import base64
+import socket
 import tempfile
 import fcntl
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 _TZ = ZoneInfo("Europe/Paris")
+
+# httplib2 (utilisé par googleapiclient) ne pose aucun timeout par défaut :
+# un appel Drive/Gmail qui ne répond plus peut bloquer le run indéfiniment.
+socket.setdefaulttimeout(60)
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials

@@ -14,11 +14,12 @@ _TOKEN_FILE    = os.path.expanduser("~/.auto_prepa_token.json")
 
 # Retry on transient HTTP errors (503, 429, 500) with exponential backoff
 _RETRYABLE = {429, 500, 502, 503, 504}
+_TIMEOUT = 30  # secondes : évite un blocage indéfini si le réseau/serveur ne répond plus
 
 def _urlopen_retry(req, max_attempts=4):
     for attempt in range(max_attempts):
         try:
-            return urllib.request.urlopen(req)
+            return urllib.request.urlopen(req, timeout=_TIMEOUT)
         except urllib.error.HTTPError as e:
             if e.code not in _RETRYABLE or attempt == max_attempts - 1:
                 raise
