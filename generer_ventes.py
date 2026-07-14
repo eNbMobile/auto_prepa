@@ -31,8 +31,8 @@ def main():
     ventes, libelles = cs.generer_ventes(date_j1)
 
     if not ventes:
-        print("Aucune vente trouvée — aucun fichier généré.")
-        sys.exit(1)
+        print("Aucune vente trouvée (aucune commande à traiter) — aucun fichier généré.")
+        return
 
     dossier = date_j1.strftime("%d_%m")
     os.makedirs(cs.WORK_DIR, exist_ok=True)
