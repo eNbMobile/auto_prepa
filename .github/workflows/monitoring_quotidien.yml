@@ -201,5 +201,13 @@ jobs:
               })
               if issue:
                   print(f"\nIssue créée : {issue['html_url']}", flush=True)
+                  # Le label peut ne pas être attaché si la création via POST /issues
+                  # l'a silencieusement ignoré (ex: échec de la création implicite du
+                  # label ci-dessus) — on le rattache explicitement pour être sûr.
+                  labeled = api_post(f"{base}/issues/{issue['number']}/labels", {
+                      "labels": ["monitoring"],
+                  })
+                  if labeled is None:
+                      print("  ⚠️ échec de l'attachement du label 'monitoring' à l'issue", flush=True)
               sys.exit(1)
           PYEOF
