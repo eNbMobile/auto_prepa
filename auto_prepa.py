@@ -180,7 +180,15 @@ def telecharger_bons_email(gmail_svc, cache_dir, traites):
     """
     Lit les emails de confirmation (no-reply@systeme-u.fr),
     telecharge bon_encaissement.pdf => BonDeCommande_XXX.pdf dans cache_dir.
-    Retourne {filename: (dossier_jj_mm, dossier_mm_aaaa)} pour les nouveaux PDFs telecharges.
+    Retourne ({filename: (dossier_jj_mm, dossier_mm_aaaa, msg_id)}, label_id)
+    pour les nouveaux PDFs telecharges.
+
+    Le marquage de l'email (label + retrait INBOX) n'est PAS fait ici pour
+    les nouvelles commandes : il est differe jusqu'a ce que la commande soit
+    entierement traitee (bon de preparation genere et uploade), a la charge
+    de l'appelant. Sinon un plantage en cours de traitement laisse l'email
+    marque "traite" alors que rien n'a ete genere, et la commande est perdue
+    silencieusement (elle ne sera plus jamais redetectee).
     """
     label_id = _get_or_create_gmail_label(gmail_svc, GMAIL_LABEL_CONF)
     q = f'from:{GMAIL_CONF_FROM} subject:"{GMAIL_CONF_SUBJECT}" -label:{GMAIL_LABEL_CONF}'
@@ -190,13 +198,13 @@ def telecharger_bons_email(gmail_svc, cache_dir, traites):
         messages = res.get('messages', [])
     except Exception as e:
         print(f"  Gmail inaccessible pour les confirmations ({e})")
-        return {}
+        return {}, label_id
 
     if not messages:
-        return {}
+        return {}, label_id
 
     print(f"  {len(messages)} email(s) de confirmation a traiter.")
-    nouveaux = {}  # {filename: (dossier_jj_mm, dossier_mm_aaaa)}
+    nouveaux = {}  # {filename: (dossier_jj_mm, dossier_mm_aaaa, msg_id)}
 
     for m in messages:
         try:
@@ -246,13 +254,12 @@ def telecharger_bons_email(gmail_svc, cache_dir, traites):
                     f.write(pdf_bytes)
                 print(f"    => {filename} OK")
 
-            nouveaux[filename] = (dossier_jj_mm, dossier_mm_aaaa)
-            _marquer_email(gmail_svc, m['id'], label_id)
+            nouveaux[filename] = (dossier_jj_mm, dossier_mm_aaaa, m['id'])
 
         except Exception as e:
             print(f"    Erreur traitement email : {e}")
 
-    return nouveaux
+    return nouveaux, label_id
 
 def traiter_modifications_clients(drive_svc, gmail_svc, traites):
     """Lit les mails de modification de commande, supprime les anciens bons, archive les mails."""
@@ -772,6 +779,18 @@ def _charger_gmail_filters(drive_svc):
         print(f"ERREUR chargement gmail_filters.json : {e}")
         sys.exit(1)
 
+def _lire_lignes_tolerant(path):
+    """Lit bon_prepa.txt en UTF-8, avec repli CP1252 si le binaire
+    ./prepa_drive_degrade a ecrit un octet non-UTF8 (accent mal encode).
+    Evite qu'une commande plante et reste bloquee (email deja marque
+    traite mais bon de preparation jamais genere)."""
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.readlines()
+    except UnicodeDecodeError:
+        with open(path, 'r', encoding='cp1252') as f:
+            return f.readlines()
+
 def _main():
     os.makedirs(WORK_DIR, exist_ok=True)
     os.makedirs(CACHE_DIR, exist_ok=True)
@@ -789,7 +808,7 @@ def _main():
 
     traites = charger_traites(drive_svc)
     traiter_modifications_clients(drive_svc, gmail_svc, traites)
-    nouveaux = telecharger_bons_email(gmail_svc, CACHE_DIR, traites)
+    nouveaux, conf_label_id = telecharger_bons_email(gmail_svc, CACHE_DIR, traites)
 
     if not nouveaux:
         print(f"Pas de nouvelle commande ({len(traites)} deja traitee(s)).")
@@ -802,7 +821,14 @@ def _main():
     os.makedirs(BDC_DIR, exist_ok=True)
     processed = set()
 
-    for pdf, (dossier_jj_mm, dossier_mm_aaaa) in sorted(nouveaux.items()):
+    def _finaliser(pdf, msg_id):
+        """Marque une commande comme traitee : email Gmail + Drive, une fois
+        le sort du PDF definitivement regle (generee ou ecartee), jamais avant."""
+        processed.add(pdf)
+        _marquer_email(gmail_svc, msg_id, conf_label_id)
+        sauvegarder_traites(drive_svc, traites | processed)
+
+    for pdf, (dossier_jj_mm, dossier_mm_aaaa, msg_id) in sorted(nouveaux.items()):
         order_num = pdf.removeprefix("BonDeCommande_").removesuffix(".pdf")
 
         bdc_subdir = os.path.join(BDC_DIR, dossier_jj_mm) if dossier_jj_mm else BDC_DIR
@@ -843,7 +869,7 @@ def _main():
         if not pt.stdout.strip():
             print(f"  ECHEC pdftotext - PDF vide ou non lisible : {pdf}")
             os.remove(pdf_path)
-            processed.add(pdf)
+            _finaliser(pdf, msg_id)
             continue
 
         articles_pdf, produits_pdf = extraire_articles_produits_pdf(pt.stdout)
@@ -872,7 +898,7 @@ def _main():
         if not os.path.exists(bon_prepa_path) or os.path.getsize(bon_prepa_path) == 0:
             print(f" VIDE - bon_prepa.txt absent ou vide")
             if r.stdout: print(f"    sortie C++ : {r.stdout[:300]}")
-            processed.add(pdf)
+            _finaliser(pdf, msg_id)
             continue
         print(" OK")
 
@@ -894,8 +920,7 @@ def _main():
             _envoyer_email_adresses_manquantes(
                 gmail_svc, order_num, avertissements_nomenclature, avertissements_inconnues)
 
-        with open(bon_prepa_path, 'r', encoding='utf-8') as f:
-            lignes = f.readlines()
+        lignes = _lire_lignes_tolerant(bon_prepa_path)
         if lignes:
             if montant_pdf:
                 lignes[0] = lignes[0].rstrip('\n') + ',' + montant_pdf + '\n'
@@ -904,8 +929,7 @@ def _main():
             f.writelines(lignes)
 
         if articles_pdf is not None and produits_pdf is not None:
-            with open(bon_prepa_path, 'r', encoding='utf-8') as _f:
-                _entete = _f.readline().rstrip('\n')
+            _entete = _lire_lignes_tolerant(bon_prepa_path)[0].rstrip('\n')
             _parts = _entete.split(',')
             try:
                 articles_gen = int(_parts[2].strip())
@@ -918,12 +942,11 @@ def _main():
                 pass
 
         lignes_invalides = []
-        with open(bon_prepa_path, 'r', encoding='utf-8') as _f:
-            for i, ligne in enumerate(_f, start=1):
-                if i == 1:
-                    continue
-                if ligne.strip() and ligne.count(';') != 13:
-                    lignes_invalides.append((i, ligne.count(';'), ligne.strip()))
+        for i, ligne in enumerate(_lire_lignes_tolerant(bon_prepa_path), start=1):
+            if i == 1:
+                continue
+            if ligne.strip() and ligne.count(';') != 13:
+                lignes_invalides.append((i, ligne.count(';'), ligne.strip()))
         if lignes_invalides:
             details = '\n'.join(
                 f"  ligne {i} ({nb} separateurs) : {l[:120]}"
@@ -955,9 +978,7 @@ def _main():
         if os.path.exists(pdf_work):
             os.remove(pdf_work)
 
-        processed.add(pdf)
-
-    sauvegarder_traites(drive_svc, traites | processed)
+        _finaliser(pdf, msg_id)
 
 if __name__ == "__main__":
     main()
