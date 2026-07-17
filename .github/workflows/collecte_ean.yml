@@ -33,7 +33,7 @@ jobs:
           BDC_FOLDER_ID:          ${{ secrets.BDC_FOLDER_ID }}
         run: |
           python3 - <<'EOF'
-          import json, os, re, sys, tempfile, urllib.parse, urllib.request
+          import json, os, re, sys, tempfile, time, urllib.parse, urllib.request
 
           # ── Auth ──────────────────────────────────────────────────────────
           token_json = os.environ.get("GOOGLE_TOKEN_JSON", "").strip()
@@ -42,23 +42,41 @@ jobs:
               sys.exit(0)
 
           token = json.loads(token_json)
-          data = urllib.parse.urlencode({
-              "client_id":     token["client_id"],
-              "client_secret": token["client_secret"],
-              "refresh_token": token["refresh_token"],
-              "grant_type":    "refresh_token",
-          }).encode()
-          resp = json.loads(urllib.request.urlopen(
-              urllib.request.Request("https://oauth2.googleapis.com/token", data=data)
-          ).read())
-          access = resp["access_token"]
-          token["access_token"] = access
-
-          # Sauvegarder le token rafraîchi
           import pathlib
-          pathlib.Path(pathlib.Path.home() / ".auto_prepa_token.json").write_text(json.dumps(token))
+
+          def refresh_access_token():
+              """Rafraîchit le token OAuth et le persiste sur disque. Le token d'accès
+              Google n'est valable qu'environ 1h ; comme la collecte peut traiter des
+              centaines de PDF et dépasser cette durée, on doit pouvoir le renouveler
+              en cours de route plutôt qu'une seule fois au démarrage."""
+              data = urllib.parse.urlencode({
+                  "client_id":     token["client_id"],
+                  "client_secret": token["client_secret"],
+                  "refresh_token": token["refresh_token"],
+                  "grant_type":    "refresh_token",
+              }).encode()
+              resp = json.loads(urllib.request.urlopen(
+                  urllib.request.Request("https://oauth2.googleapis.com/token", data=data)
+              ).read())
+              token["access_token"] = resp["access_token"]
+              pathlib.Path(pathlib.Path.home() / ".auto_prepa_token.json").write_text(json.dumps(token))
+              return resp["access_token"], resp.get("expires_in", 3600)
+
+          access, expires_in = refresh_access_token()
+          token_expiry = time.time() + expires_in - 300  # marge de 5 min avant expiration réelle
 
           H = {"Authorization": f"Bearer {access}"}
+
+          def ensure_fresh_token():
+              """À appeler régulièrement pendant les longues boucles : renouvelle le
+              token juste avant qu'il n'expire pour éviter les 401 en plein traitement."""
+              global access, token_expiry
+              if time.time() < token_expiry:
+                  return
+              access, expires_in = refresh_access_token()
+              token_expiry = time.time() + expires_in - 300
+              H["Authorization"] = f"Bearer {access}"
+              print("  (token Google rafraîchi)")
 
           def drive_list(q, fields="files(id,name,mimeType,createdTime)"):
               url = "https://www.googleapis.com/drive/v3/files?" + urllib.parse.urlencode(
@@ -169,56 +187,76 @@ jobs:
           import pdfplumber, io as _io
 
           nouveaux_eans = []
-          mois_dossiers = drive_list(
-              f"'{bdc_root_id}' in parents"
-              " and mimeType='application/vnd.google-apps.folder' and trashed=false")
+          eans_sauvegardes = len(visuels_ean)
+          traites_sauvegardes = len(traites)
 
-          for mois in mois_dossiers:
-              jours_dossiers = drive_list(
-                  f"'{mois['id']}' in parents"
+          def sauvegarder_etat():
+              """Persiste l'état sur Drive. Appelée après chaque dossier jour ET dans
+              un finally, pour qu'un crash (401, PDF corrompu, etc.) en cours de route
+              ne fasse jamais perdre le travail déjà accompli lors de ce run."""
+              global eans_sauvegardes, traites_sauvegardes
+              ensure_fresh_token()
+              if len(visuels_ean) > eans_sauvegardes:
+                  drive_upload_or_update(data_folder_id, "visuels_ean.json",
+                                         json.dumps(visuels_ean, ensure_ascii=False, indent=2).encode())
+                  eans_sauvegardes = len(visuels_ean)
+                  print(f"  visuels_ean.json mis à jour sur Drive ({len(visuels_ean)} EAN)")
+              if len(traites) > traites_sauvegardes:
+                  drive_upload_or_update(data_folder_id, "fichiers_traites.json",
+                                         json.dumps(list(traites)).encode())
+                  traites_sauvegardes = len(traites)
+                  print(f"  fichiers_traites.json mis à jour sur Drive ({len(traites)} entrées)")
+
+          try:
+              mois_dossiers = drive_list(
+                  f"'{bdc_root_id}' in parents"
                   " and mimeType='application/vnd.google-apps.folder' and trashed=false")
-              for jour in jours_dossiers:
-                  pdfs = drive_list(
-                      f"'{jour['id']}' in parents"
-                      " and mimeType='application/pdf'"
-                      " and name contains 'BonDeCommande' and trashed=false")
-                  for pdf in pdfs:
-                      if pdf["id"] in traites:
-                          continue
-                      print(f"  {mois['name']}/{jour['name']}/{pdf['name']}")
-                      m = re.search(r"BonDeCommande_(\w+)\.pdf", pdf["name"], re.IGNORECASE)
-                      bdc_num = m.group(1) if m else pdf["name"]
-                      try:
-                          raw = drive_download(pdf["id"])
-                          with pdfplumber.open(_io.BytesIO(raw)) as doc:
-                              texte = "\n".join(p.extract_text() or "" for p in doc.pages)
-                          eans = extraire_eans(texte)
-                          for ean in eans:
-                              if ean not in eans_existants:
-                                  visuels_ean.append({
-                                      "ean": ean,
-                                      "bdc_numero": bdc_num,
-                                      "date_bdc": f"{jour['name']}/{mois['name']}",
-                                      "drive_file_id": pdf["id"],
-                                  })
-                                  eans_existants.add(ean)
-                                  nouveaux_eans.append(ean)
-                          print(f"    → {len(eans)} EAN trouvé(s)")
-                          traites.add(pdf["id"])
-                      except Exception as e:
-                          print(f"    Erreur : {e}")
+
+              for mois in mois_dossiers:
+                  ensure_fresh_token()
+                  jours_dossiers = drive_list(
+                      f"'{mois['id']}' in parents"
+                      " and mimeType='application/vnd.google-apps.folder' and trashed=false")
+                  for jour in jours_dossiers:
+                      ensure_fresh_token()
+                      pdfs = drive_list(
+                          f"'{jour['id']}' in parents"
+                          " and mimeType='application/pdf'"
+                          " and name contains 'BonDeCommande' and trashed=false")
+                      for pdf in pdfs:
+                          if pdf["id"] in traites:
+                              continue
+                          ensure_fresh_token()
+                          print(f"  {mois['name']}/{jour['name']}/{pdf['name']}")
+                          m = re.search(r"BonDeCommande_(\w+)\.pdf", pdf["name"], re.IGNORECASE)
+                          bdc_num = m.group(1) if m else pdf["name"]
+                          try:
+                              raw = drive_download(pdf["id"])
+                              with pdfplumber.open(_io.BytesIO(raw)) as doc:
+                                  texte = "\n".join(p.extract_text() or "" for p in doc.pages)
+                              eans = extraire_eans(texte)
+                              for ean in eans:
+                                  if ean not in eans_existants:
+                                      visuels_ean.append({
+                                          "ean": ean,
+                                          "bdc_numero": bdc_num,
+                                          "date_bdc": f"{jour['name']}/{mois['name']}",
+                                          "drive_file_id": pdf["id"],
+                                      })
+                                      eans_existants.add(ean)
+                                      nouveaux_eans.append(ean)
+                              print(f"    → {len(eans)} EAN trouvé(s)")
+                              traites.add(pdf["id"])
+                          except Exception as e:
+                              print(f"    Erreur : {e}")
+                      # Sauvegarde incrémentale après chaque dossier jour, pour ne
+                      # jamais retraiter tout le backlog depuis zéro à cause d'un
+                      # crash tardif (ex: token expiré au bout d'1h sur un gros run).
+                      sauvegarder_etat()
+          finally:
+              sauvegarder_etat()
 
           print(f"\nNouveaux EAN : {len(nouveaux_eans)}")
-
-          # ── Sauvegarder sur Drive ─────────────────────────────────────────
-          if nouveaux_eans:
-              drive_upload_or_update(data_folder_id, "visuels_ean.json",
-                                     json.dumps(visuels_ean, ensure_ascii=False, indent=2).encode())
-              print("visuels_ean.json mis à jour sur Drive")
-
-          drive_upload_or_update(data_folder_id, "fichiers_traites.json",
-                                 json.dumps(list(traites)).encode())
-          print(f"fichiers_traites.json mis à jour ({len(traites)} entrées)")
           EOF
 
       - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
