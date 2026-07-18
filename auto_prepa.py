@@ -700,6 +700,17 @@ def log_ecart_drive(drive_svc, numero, articles_pdf, produits_pdf, articles_gen,
     except Exception as e:
         print(f"    Log ecart Drive echoue : {e}")
 
+def _lire_texte_bon_prepa(path):
+    """Lit bon_prepa.txt (produit par le binaire C++ prepa_drive_degrade) en tolerant
+    un encodage non-UTF-8 residuel (ex: caracteres accentues Windows-1252)."""
+    with open(path, 'rb') as f:
+        raw = f.read()
+    try:
+        return raw.decode('utf-8')
+    except UnicodeDecodeError as e:
+        print(f"    AVERTISSEMENT bon_prepa.txt non-UTF-8 ({e}) -> fallback cp1252")
+        return raw.decode('cp1252', errors='replace')
+
 LOCK_FILE = os.path.expanduser("~/.auto_prepa.lock")
 
 def main():
@@ -894,8 +905,7 @@ def _main():
             _envoyer_email_adresses_manquantes(
                 gmail_svc, order_num, avertissements_nomenclature, avertissements_inconnues)
 
-        with open(bon_prepa_path, 'r', encoding='utf-8') as f:
-            lignes = f.readlines()
+        lignes = _lire_texte_bon_prepa(bon_prepa_path).splitlines(keepends=True)
         if lignes:
             if montant_pdf:
                 lignes[0] = lignes[0].rstrip('\n') + ',' + montant_pdf + '\n'
