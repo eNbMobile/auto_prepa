@@ -631,7 +631,7 @@ def _envoyer_email_anomalie_bon(gmail_svc, numero, lignes_invalides):
         f"Bonjour,\n\n"
         f"Le bon de preparation de la commande {numero} contient "
         f"{len(lignes_invalides)} ligne(s) avec un nombre de separateurs incorrect "
-        f"(attendu : 13).\n\n"
+        f"(attendu : 14).\n\n"
         f"Detail :\n{details}\n\n"
         f"Le fichier a quand meme ete uploade mais pourrait faire planter l'appli.\n"
     )
@@ -922,7 +922,7 @@ def _main():
             for i, ligne in enumerate(_f, start=1):
                 if i == 1:
                     continue
-                if ligne.strip() and ligne.count(';') != 13:
+                if ligne.strip() and ligne.count(';') != 14:
                     lignes_invalides.append((i, ligne.count(';'), ligne.strip()))
         if lignes_invalides:
             details = '\n'.join(
