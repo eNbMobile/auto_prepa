@@ -922,7 +922,7 @@ def _main():
             for i, ligne in enumerate(_f, start=1):
                 if i == 1:
                     continue
-                if ligne.strip() and ligne.count(';') != 13:
+                if ligne.strip() and ligne.count(';') != 14:
                     lignes_invalides.append((i, ligne.count(';'), ligne.strip()))
         if lignes_invalides:
             details = '\n'.join(

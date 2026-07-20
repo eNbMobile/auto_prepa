@@ -973,13 +973,16 @@ def main():
 # Correction des anomalies de point-virgules dans les bons de prépa
 # ─────────────────────────────────────────────────────────────────
 
-def corriger_bon_prepa(chemin, nb_sep=4):
+def corriger_bon_prepa(chemin, nb_sep=5):
     """Corrige les lignes avec trop de point-virgules dans un bon de préparation.
 
-    Format attendu : gencod;libellé;prix;remise;qty  (nb_sep=4 séparateurs).
-    Quand une ligne contient plus de séparateurs, les champs excédentaires
-    (issus du libellé) sont refusionnés.  Les lignes trop courtes sont
-    conservées telles quelles (on ne peut pas les corriger automatiquement).
+    Format attendu : gencod;libellé;<nb_sep-1 champs fixes de fin de ligne>
+    (nb_sep=5 séparateurs). Le libellé est le seul champ à contenu libre
+    (susceptible de contenir des ';' parasites) ; quand une ligne contient
+    plus de séparateurs que prévu, les champs excédentaires sont refusionnés
+    dans le libellé, les nb_sep-1 derniers champs étant préservés tels quels.
+    Les lignes trop courtes sont conservées telles quelles (on ne peut pas
+    les corriger automatiquement).
 
     Retourne (nb_corrections, [messages]).
     """
@@ -1006,17 +1009,14 @@ def corriger_bon_prepa(chemin, nb_sep=4):
         if len(parts) == nb_sep + 1:
             lignes_corrigees.append(ligne)
         elif len(parts) > nb_sep + 1:
-            gencod  = parts[0]
-            qty     = parts[-1]
-            remise  = parts[-2]
-            prix    = parts[-3]
-            libelle = ';'.join(parts[1:-3])
+            gencod   = parts[0]
+            suffixe  = parts[-(nb_sep - 1):]
+            libelle  = ';'.join(parts[1:-(nb_sep - 1)])
             eol = '\n' if ligne.endswith('\n') else ''
-            lignes_corrigees.append(f"{gencod};{libelle};{prix};{remise};{qty}{eol}")
-            avant = ';'.join(parts[1:-3]) if len(parts) > 4 else parts[1]
+            lignes_corrigees.append(f"{gencod};{libelle};{';'.join(suffixe)}{eol}")
             corrections.append(
                 f"L{i}: {len(parts)-1}→{nb_sep} sep  "
-                f"gencod={gencod}  libellé={avant!r}"
+                f"gencod={gencod}  libellé={libelle!r}"
             )
         else:
             lignes_corrigees.append(ligne)
