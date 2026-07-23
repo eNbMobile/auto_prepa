@@ -773,6 +773,8 @@ def _charger_gmail_filters(drive_svc):
         sys.exit(1)
 
 def _main():
+    heure_cron = datetime.now(_TZ).strftime("%Hh%M")
+
     os.makedirs(WORK_DIR, exist_ok=True)
     os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -898,7 +900,8 @@ def _main():
             lignes = f.readlines()
         if lignes:
             if montant_pdf:
-                lignes[0] = lignes[0].rstrip('\n') + ',' + montant_pdf + '\n'
+                lignes[0] = lignes[0].rstrip('\n') + ',' + montant_pdf
+            lignes[0] = lignes[0].rstrip('\n') + ',' + heure_cron + '\n'
             lignes[1:] = [re.sub(r'^(?:-\d+)?;(\d{13};)', r'\1', l) for l in lignes[1:]]
         with open(bon_prepa_path, 'w', encoding='utf-8') as f:
             f.writelines(lignes)
