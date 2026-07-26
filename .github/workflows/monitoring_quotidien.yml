@@ -88,6 +88,10 @@ jobs:
           aut_runs = get_runs_24h("auto_prepa.yml")
           aut_succes  = [r for r in aut_runs if r.get("conclusion") == "success"]
           aut_echecs  = [r for r in aut_runs if r.get("conclusion") == "failure"]
+          # cancelled/startup_failure en rafale = un run bloqué a fait déborder la
+          # queue de la concurrency group (voir incident du 25/07/2026, run #112410
+          # resté ~45 min en attente d'un runner GitHub avant de s'exécuter).
+          aut_autres  = [r for r in aut_runs if r.get("conclusion") in ("cancelled", "startup_failure")]
           aut_triees  = sorted(aut_runs, key=lambda r: r["created_at"])
           aut_gap_max = 0.0
           aut_gaps_alarme = []
@@ -101,7 +105,7 @@ jobs:
                   aut_gaps_alarme.append(
                       f"  - {g:.0f} min entre {t1.strftime('%H:%M')} et {t2.strftime('%H:%M')} UTC"
                   )
-          print(f"  {len(aut_runs)} runs — {len(aut_succes)} ✅ {len(aut_echecs)} ❌  gap_max={aut_gap_max:.0f}min", flush=True)
+          print(f"  {len(aut_runs)} runs — {len(aut_succes)} ✅ {len(aut_echecs)} ❌ {len(aut_autres)} ⏸(cancelled/startup_failure)  gap_max={aut_gap_max:.0f}min", flush=True)
 
           # ─── Analyse collecte_ean ─────────────────────────────────────────
           print("\n=== collecte_ean ===", flush=True)
@@ -122,6 +126,7 @@ jobs:
               len(aut_echecs) > 0
               or len(aut_runs) == 0
               or len(aut_gaps_alarme) > 0
+              or len(aut_autres) > 5
               or len(ean_echecs) > 0
               or len(fix_echecs) > 0
           )
@@ -136,7 +141,7 @@ jobs:
               "",
               "| Workflow | Runs | Succès | Échecs | Note |",
               "|----------|------|--------|--------|------|",
-              f"| `aut_prep` | {len(aut_runs)} | {len(aut_succes)} | {len(aut_echecs)} | gap_max {aut_gap_max:.0f} min |",
+              f"| `aut_prep` | {len(aut_runs)} | {len(aut_succes)} | {len(aut_echecs)} | gap_max {aut_gap_max:.0f} min, {len(aut_autres)} cancelled/startup_failure |",
               f"| `collecte_ean` | {len(ean_runs)} | {len(ean_succes)} | {len(ean_echecs)} | — |",
               f"| `fix_anomalies` | {len(fix_runs)} | {len(fix_succes)} | {len(fix_echecs)} | — |",
           ]
@@ -157,6 +162,20 @@ jobs:
           if aut_gaps_alarme:
               lines += ["", "### ⚠️ Interruptions scheduler aut_prep (> 15 min)"]
               lines += aut_gaps_alarme[:10]
+
+          if len(aut_autres) > 5:
+              lines += [
+                  "",
+                  "### ⚠️ Rafale de runs aut_prep cancelled/startup_failure",
+                  f"{len(aut_autres)} runs non exécutés (ni succès ni échec applicatif) sur la fenêtre. "
+                  "Symptôme typique : un run est resté bloqué en file d'attente d'un runner GitHub, "
+                  "et la concurrency group (`cancel-in-progress: false`) a fait déborder les déclenchements "
+                  "suivants du scheduler externe (cron-job.org). Vérifier le run le plus ancien du lot ci-dessous "
+                  "(écart entre `created_at` et le démarrage réel du job) pour confirmer la cause.",
+              ]
+              for r in aut_autres[:15]:
+                  h = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00")).strftime("%H:%M UTC")
+                  lines.append(f"- [Run #{r['run_number']}]({r['html_url']}) à {h} — {r.get('conclusion')}")
 
           if ean_echecs:
               lines += ["", "### ❌ Runs collecte_ean en échec"]
