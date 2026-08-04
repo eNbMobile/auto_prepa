@@ -27,6 +27,8 @@ _SORTIE_CANDIDATS = [
     ("bon_prepa.txt",        1, 4),  # gencod;libellé;prix;remise;qty (toujours généré)
 ]
 
+SEUIL_STOCK_BAS = 2  # stock J <= ce seuil → alerte "stock insuffisant Drive"
+
 DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
 
 DRIVE_CONTROLE_FOLDER_ID = ""
@@ -602,8 +604,9 @@ def upload_drive(local_path):
 # PDF des écarts + envoi email
 # ─────────────────────────────────────────────────────────────────
 
-def generer_pdf_ecarts(compares, date_j1, date_debut=None):
-    """Génère un PDF des lignes ECART (trié |écart| desc). Retourne le chemin ou None."""
+def _construire_pdf_tableau(rows, titre_html, nom_pdf):
+    """Génère un PDF tableau (code-barres, libellé, J-1, ventes, théo, J, écart)
+    pour la liste de lignes fournie. Retourne le chemin ou None."""
     try:
         from reportlab.lib.pagesizes import A4
         from reportlab.lib import colors
@@ -624,11 +627,9 @@ def generer_pdf_ecarts(compares, date_j1, date_debut=None):
         except Exception:
             return None
 
-    ecarts = [r for r in compares if r[6] == "ECART"]
-    if not ecarts:
+    if not rows:
         return None
 
-    nom_pdf = f"ecarts_{date_j1.strftime('%Y%m%d')}.pdf"
     doc = SimpleDocTemplate(nom_pdf, pagesize=A4,
                             topMargin=8*mm, bottomMargin=8*mm,
                             leftMargin=3*mm, rightMargin=3*mm)
@@ -638,12 +639,7 @@ def generer_pdf_ecarts(compares, date_j1, date_debut=None):
     header_s = ParagraphStyle('hdr', fontSize=8, leading=10, textColor=colors.white)
 
     elements = []
-    label_dates = (f"{date_debut.strftime('%d/%m/%Y')} &amp; {date_j1.strftime('%d/%m/%Y')}"
-                   if date_debut and date_debut < date_j1
-                   else date_j1.strftime('%d/%m/%Y'))
-    elements.append(Paragraph(
-        f"<b>Contrôle de stocks — {label_dates}</b>"
-        f"&nbsp;&nbsp;({len(ecarts)} écarts)", styles['Title']))
+    elements.append(Paragraph(titre_html, styles['Title']))
     elements.append(Spacer(1, 5*mm))
 
     col_widths = [108, 246, 33, 40, 33, 33, 34]  # ≈ 527 pt (marges 3mm, sans colonne gencod)
@@ -653,7 +649,7 @@ def generer_pdf_ecarts(compares, date_j1, date_debut=None):
 
     tiny_c = ParagraphStyle('tiny_c', fontSize=7, leading=8, alignment=1)
 
-    for r in ecarts:
+    for r in rows:
         gencod, s_j1, v, s_theo, s_j, ecart, _, lib = r
         bc = make_barcode(gencod) if len(gencod) == 13 else None
         if bc:
@@ -694,7 +690,7 @@ def generer_pdf_ecarts(compares, date_j1, date_debut=None):
         ('TOPPADDING',     (0, 0), (-1, -1), 12),
         ('BOTTOMPADDING',  (0, 0), (-1, -1), 12),
     ])
-    for i, r in enumerate(ecarts, 1):
+    for i, r in enumerate(rows, 1):
         c = colors.HexColor('#D32F2F') if float(r[5]) < 0 else colors.HexColor('#E65100')
         style.add('TEXTCOLOR', (6, i), (6, i), c)
         style.add('FONTNAME',  (6, i), (6, i), 'Helvetica-Bold')
@@ -703,12 +699,40 @@ def generer_pdf_ecarts(compares, date_j1, date_debut=None):
     table.setStyle(style)
     elements.append(table)
     doc.build(elements)
-    print(f"  → {nom_pdf} ({len(ecarts)} écarts)")
+    print(f"  → {nom_pdf} ({len(rows)} ligne(s))")
     return nom_pdf
 
 
-def envoyer_email_pdf(pdf_path, date_j1, nb_ecart, manquant, surplus, date_debut=None):
-    """Envoie le PDF par email via Gmail API."""
+def generer_pdf_ecarts(compares, date_j1, date_debut=None):
+    """Génère un PDF des lignes ECART (trié |écart| desc). Retourne le chemin ou None."""
+    ecarts = [r for r in compares if r[6] == "ECART"]
+    if not ecarts:
+        return None
+
+    nom_pdf = f"ecarts_{date_j1.strftime('%Y%m%d')}.pdf"
+    label_dates = (f"{date_debut.strftime('%d/%m/%Y')} &amp; {date_j1.strftime('%d/%m/%Y')}"
+                   if date_debut and date_debut < date_j1
+                   else date_j1.strftime('%d/%m/%Y'))
+    titre_html = (f"<b>Contrôle de stocks — {label_dates}</b>"
+                  f"&nbsp;&nbsp;({len(ecarts)} écarts)")
+    return _construire_pdf_tableau(ecarts, titre_html, nom_pdf)
+
+
+def generer_pdf_stock_insuffisant(stock_bas, date_courante):
+    """Génère un PDF listant tous les produits dont le stock J est <= SEUIL_STOCK_BAS.
+    Retourne le chemin ou None."""
+    if not stock_bas:
+        return None
+
+    nom_pdf = f"stock_insuffisant_{date_courante.strftime('%Y%m%d')}.pdf"
+    titre_html = (f"<b>Stocks insuffisant Drive - {date_courante.strftime('%d/%m/%Y')}</b>"
+                  f"&nbsp;&nbsp;({len(stock_bas)} produit{'s' if len(stock_bas) > 1 else ''})")
+    return _construire_pdf_tableau(stock_bas, titre_html, nom_pdf)
+
+
+def envoyer_email_pdf(pdf_ecarts, pdf_stock_bas, date_j1, nb_ecart, manquant, surplus,
+                      nb_stock_bas, date_debut=None, date_courante=None):
+    """Envoie par email les PDF d'écarts et/ou de stocks insuffisants (Gmail API)."""
     try:
         import base64
         from email.mime.multipart import MIMEMultipart
@@ -724,20 +748,37 @@ def envoyer_email_pdf(pdf_path, date_j1, nb_ecart, manquant, surplus, date_debut
         label_dates = (f"{date_debut.strftime('%d/%m/%Y')} & {date_j1.strftime('%d/%m/%Y')}"
                        if date_debut and date_debut < date_j1
                        else date_j1.strftime('%d/%m/%Y'))
-        msg['Subject'] = (f"Contrôle stocks {label_dates} "
-                          f"— {nb_ecart} écart{'s' if nb_ecart > 1 else ''}")
-        corps = (f"Contrôle de stocks du {label_dates}\n\n"
-                 f"  Écarts   : {nb_ecart}\n"
-                 f"  Manquant : {manquant:.0f} unités\n"
-                 f"  Surplus  : +{surplus:.0f} unités\n\n"
-                 f"Détail en pièce jointe.")
+
+        parties_sujet = []
+        if nb_ecart > 0:
+            parties_sujet.append(f"{nb_ecart} écart{'s' if nb_ecart > 1 else ''}")
+        if nb_stock_bas > 0:
+            parties_sujet.append(f"{nb_stock_bas} stock{'s' if nb_stock_bas > 1 else ''} bas")
+        msg['Subject'] = f"Contrôle stocks {label_dates}"
+        if parties_sujet:
+            msg['Subject'] += " — " + ", ".join(parties_sujet)
+
+        corps = f"Contrôle de stocks du {label_dates}\n\n"
+        if pdf_ecarts:
+            corps += (f"  Écarts   : {nb_ecart}\n"
+                      f"  Manquant : {manquant:.0f} unités\n"
+                      f"  Surplus  : +{surplus:.0f} unités\n\n")
+        if pdf_stock_bas:
+            date_label = (date_courante or date_j1).strftime('%d/%m/%Y')
+            corps += (f"  Stocks insuffisant Drive - {date_label} "
+                      f"(stock J ≤ {SEUIL_STOCK_BAS}) : {nb_stock_bas} produit"
+                      f"{'s' if nb_stock_bas > 1 else ''}\n\n")
+        corps += "Détail en pièce(s) jointe(s)."
         msg.attach(MIMEText(corps, 'plain', 'utf-8'))
 
-        with open(pdf_path, 'rb') as f:
-            part = MIMEApplication(f.read(), 'pdf')
-            part.add_header('Content-Disposition', 'attachment',
-                            filename=os.path.basename(pdf_path))
-            msg.attach(part)
+        for pdf_path in (pdf_ecarts, pdf_stock_bas):
+            if not pdf_path:
+                continue
+            with open(pdf_path, 'rb') as f:
+                part = MIMEApplication(f.read(), 'pdf')
+                part.add_header('Content-Disposition', 'attachment',
+                                filename=os.path.basename(pdf_path))
+                msg.attach(part)
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         svc.users().messages().send(userId='me', body={'raw': raw}).execute()
@@ -874,14 +915,17 @@ def main():
     gencods_r1 = charger_gencods_r1()
     tous = gencods_r1 if gencods_r1 is not None else (set(stock_j1) | set(stock_j))
 
-    compares  = []
-    orphelins = []
+    compares   = []
+    orphelins  = []
+    stock_bas  = []
 
     for gencod in sorted(tous):
         present_j1 = gencod in stock_j1
         s_j1   = stock_j1.get(gencod, 0.0)
         v      = ventes.get(gencod, 0.0)
-        s_theo = s_j1 - v
+        # Le stock Drive ne descend jamais sous 0 : un théorique négatif
+        # (ventes > stock J-1) est normal et ne doit pas générer un faux écart.
+        s_theo = max(0.0, s_j1 - v)
         present_j  = gencod in stock_j
 
         s_j   = stock_j.get(gencod, 0.0)
@@ -906,6 +950,9 @@ def main():
         # tuple : gencod, s_j1, v, s_theo, s_j, ecart, statut, libelle
         row = (gencod, s_j1, v, s_theo, s_j, ecart, statut, lib)
         (orphelins if absents else compares).append(row)
+
+        if present_j and s_j <= SEUIL_STOCK_BAS:
+            stock_bas.append(row)
 
     compares.sort(key=lambda r: abs(r[5]), reverse=True)
     orphelins.sort(key=lambda r: r[0])
@@ -938,6 +985,8 @@ def main():
     manquant  = sum(r[5] for r in compares if r[5] < 0)
     surplus   = sum(r[5] for r in compares if r[5] > 0)
 
+    stock_bas.sort(key=lambda r: (r[4], r[0]))
+
     print(f"\n── Résultats ──────────────────────────────────────")
     print(f"  Gencods appairés  : {len(compares)}")
     print(f"    Sans écart (OK) : {nb_ok}")
@@ -946,6 +995,7 @@ def main():
         print(f"  Gencods orphelins : {len(orphelins)}")
     print(f"  Total manquant    : {manquant:.0f} unités")
     print(f"  Total surplus     : {+surplus:.0f} unités")
+    print(f"  Stocks ≤ {SEUIL_STOCK_BAS}       : {len(stock_bas)} produit(s)")
 
     if nb_ecart > 0:
         print(f"\n  Top 10 écarts (|écart| décroissant) :")
@@ -961,12 +1011,21 @@ def main():
     upload_drive(nom_sortie)
     upload_to_archive(nom_sortie, "écarts")
 
+    nom_pdf_ecarts = None
     if nb_ecart > 0:
         print("\nGénération PDF écarts …")
-        nom_pdf = generer_pdf_ecarts(compares, date_j1, date_debut)
-        if nom_pdf:
-            print("\nEnvoi email …")
-            envoyer_email_pdf(nom_pdf, date_j1, nb_ecart, manquant, surplus, date_debut)
+        nom_pdf_ecarts = generer_pdf_ecarts(compares, date_j1, date_debut)
+
+    date_courante = date.today()
+    nom_pdf_stock_bas = None
+    if stock_bas:
+        print("\nGénération PDF stocks insuffisants …")
+        nom_pdf_stock_bas = generer_pdf_stock_insuffisant(stock_bas, date_courante)
+
+    if nom_pdf_ecarts or nom_pdf_stock_bas:
+        print("\nEnvoi email …")
+        envoyer_email_pdf(nom_pdf_ecarts, nom_pdf_stock_bas, date_j1, nb_ecart,
+                          manquant, surplus, len(stock_bas), date_debut, date_courante)
 
 
 # ─────────────────────────────────────────────────────────────────
