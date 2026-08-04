@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Cumule les ventes de la semaine en cours (lundi → date donnée, dimanche par défaut).
+Cumule les ventes de la semaine en cours (lundi → dernier jour de vente, samedi
+par défaut : le dimanche n'a jamais de ventes, comme dans controle_stocks.py).
 Sauvegarde ventes_SXX.csv (XX = numéro de semaine sur 2 chiffres) et l'archive
 sur Drive dans Controles Stock > Archives > VMS.
 """
@@ -27,8 +28,13 @@ def main():
 
     cs._charger_config()
 
+    # Le dimanche n'a jamais de ventes (magasin fermé) : si la date de fin
+    # tombe un dimanche, on s'arrête au samedi (J-1), comme dans controle_stocks.py.
+    dernier_jour_vente = date_fin - timedelta(days=1) if date_fin.weekday() == 6 else date_fin
+
     lundi = date_fin - timedelta(days=date_fin.weekday())
-    jours = [lundi + timedelta(days=i) for i in range(7) if lundi + timedelta(days=i) <= date_fin]
+    jours = [lundi + timedelta(days=i) for i in range(7)
+             if lundi + timedelta(days=i) <= dernier_jour_vente]
 
     numero_semaine = date_fin.isocalendar()[1]
     print(f"\nCumul des ventes semaine {numero_semaine:02d} "
