@@ -1,0 +1,59 @@
+name: Cumul Ventes Semaine
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Dernier jour de la semaine (JJ/MM/AAAA) — laisser vide pour aujourd'hui"
+        required: false
+        type: string
+
+concurrency:
+  group: cumul_ventes_semaine
+  cancel-in-progress: false
+
+jobs:
+  cumul:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python et dépendances
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer poppler-utils avec cache
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: poppler-utils
+          version: 1.0
+
+      - name: Installer les dépendances pip
+        run: pip install -r requirements.txt
+
+      - name: Cumuler les ventes de la semaine
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          WORK_DIR: "v 4.0.0"
+        run: |
+          DATE_ARG=""
+          if [ -n "${{ inputs.date }}" ]; then
+            DATE_ARG="--date ${{ inputs.date }}"
+          fi
+          python3 bootstrap.py cumul_ventes_semaine.py $DATE_ARG
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+          fi
