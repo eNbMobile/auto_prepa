@@ -763,7 +763,8 @@ def _construire_pdf_tableau(rows, titre_html, nom_pdf, complet=True, vms_map=Non
         else:
             ligne = [bc_cell, Paragraph(lib, small), Paragraph(str(int(s_j)), small)]
             if vms_map is not None:
-                ligne.append(Paragraph(f"{vms_map.get(gencod, 0.0):.1f}", small))
+                vms_txt = f"{vms_map.get(gencod, 0.0):.1f}".replace('.', ',')
+                ligne.append(Paragraph(vms_txt, small))
             data.append(ligne)
 
     BLEU = colors.HexColor('#006797')
