@@ -604,9 +604,12 @@ def upload_drive(local_path):
 # PDF des écarts + envoi email
 # ─────────────────────────────────────────────────────────────────
 
-def _construire_pdf_tableau(rows, titre_html, nom_pdf):
-    """Génère un PDF tableau (code-barres, libellé, J-1, ventes, théo, J, écart)
-    pour la liste de lignes fournie. Retourne le chemin ou None."""
+def _construire_pdf_tableau(rows, titre_html, nom_pdf, complet=True):
+    """Génère un PDF tableau pour la liste de lignes fournie. Retourne le chemin ou None.
+
+    complet=True  : code-barres, libellé, J-1, ventes, théo, J, écart.
+    complet=False : code-barres, libellé, stock du jour uniquement.
+    """
     try:
         from reportlab.lib.pagesizes import A4
         from reportlab.lib import colors
@@ -642,9 +645,13 @@ def _construire_pdf_tableau(rows, titre_html, nom_pdf):
     elements.append(Paragraph(titre_html, styles['Title']))
     elements.append(Spacer(1, 5*mm))
 
-    col_widths = [108, 246, 33, 40, 33, 33, 34]  # ≈ 527 pt (marges 3mm, sans colonne gencod)
-    hdr = [Paragraph(t, header_s) for t in
-           ['Code-barres', 'Libellé', 'J-1', 'Ventes', 'Théo', 'J', 'Écart']]
+    if complet:
+        col_widths = [108, 246, 33, 40, 33, 33, 34]  # ≈ 527 pt (marges 3mm, sans colonne gencod)
+        hdr_txts = ['Code-barres', 'Libellé', 'J-1', 'Ventes', 'Théo', 'J', 'Écart']
+    else:
+        col_widths = [108, 366, 53]  # ≈ 527 pt
+        hdr_txts = ['Code-barres', 'Libellé', 'Stock du jour']
+    hdr = [Paragraph(t, header_s) for t in hdr_txts]
     data = [hdr]
 
     tiny_c = ParagraphStyle('tiny_c', fontSize=7, leading=8, alignment=1)
@@ -666,15 +673,22 @@ def _construire_pdf_tableau(rows, titre_html, nom_pdf):
             )
         else:
             bc_cell = Paragraph(gencod, small)
-        data.append([
-            bc_cell,
-            Paragraph(lib, small),
-            Paragraph(str(int(s_j1)), small),
-            Paragraph(str(int(v)),    small),
-            Paragraph(str(int(s_theo)), small),
-            Paragraph(str(int(s_j)),  small),
-            Paragraph(f"{int(ecart):+d}", small),
-        ])
+        if complet:
+            data.append([
+                bc_cell,
+                Paragraph(lib, small),
+                Paragraph(str(int(s_j1)), small),
+                Paragraph(str(int(v)),    small),
+                Paragraph(str(int(s_theo)), small),
+                Paragraph(str(int(s_j)),  small),
+                Paragraph(f"{int(ecart):+d}", small),
+            ])
+        else:
+            data.append([
+                bc_cell,
+                Paragraph(lib, small),
+                Paragraph(str(int(s_j)), small),
+            ])
 
     BLEU = colors.HexColor('#006797')
     style = TableStyle([
@@ -690,10 +704,11 @@ def _construire_pdf_tableau(rows, titre_html, nom_pdf):
         ('TOPPADDING',     (0, 0), (-1, -1), 12),
         ('BOTTOMPADDING',  (0, 0), (-1, -1), 12),
     ])
-    for i, r in enumerate(rows, 1):
-        c = colors.HexColor('#D32F2F') if float(r[5]) < 0 else colors.HexColor('#E65100')
-        style.add('TEXTCOLOR', (6, i), (6, i), c)
-        style.add('FONTNAME',  (6, i), (6, i), 'Helvetica-Bold')
+    if complet:
+        for i, r in enumerate(rows, 1):
+            c = colors.HexColor('#D32F2F') if float(r[5]) < 0 else colors.HexColor('#E65100')
+            style.add('TEXTCOLOR', (6, i), (6, i), c)
+            style.add('FONTNAME',  (6, i), (6, i), 'Helvetica-Bold')
 
     table = Table(data, colWidths=col_widths, repeatRows=1)
     table.setStyle(style)
@@ -727,7 +742,7 @@ def generer_pdf_stock_insuffisant(stock_bas, date_courante):
     nom_pdf = f"stock_insuffisant_{date_courante.strftime('%Y%m%d')}.pdf"
     titre_html = (f"<b>Stocks insuffisant Drive - {date_courante.strftime('%d/%m/%Y')}</b>"
                   f"&nbsp;&nbsp;({len(stock_bas)} produit{'s' if len(stock_bas) > 1 else ''})")
-    return _construire_pdf_tableau(stock_bas, titre_html, nom_pdf)
+    return _construire_pdf_tableau(stock_bas, titre_html, nom_pdf, complet=False)
 
 
 def envoyer_email_pdf(pdf_ecarts, pdf_stock_bas, date_j1, nb_ecart, manquant, surplus,
