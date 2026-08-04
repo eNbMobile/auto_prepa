@@ -304,8 +304,13 @@ def generer_ventes(date_j1):
     """
     dossier    = date_j1.strftime("%d_%m")
 
-    # Charger les ventes pré-calculées si disponibles (générées par generer_ventes.py)
+    # Charger les ventes pré-calculées si disponibles (générées par generer_ventes.py),
+    # localement ou depuis l'archive Drive (Archives/ventes/).
     chemin_precompute = os.path.join(WORK_DIR, f"ventes_{dossier}.csv")
+    if not os.path.exists(chemin_precompute):
+        telecharge = _telecharger_ventes_archive(date_j1)
+        if telecharge:
+            chemin_precompute = telecharge
     if os.path.exists(chemin_precompute):
         print(f"  Ventes pré-calculées : {chemin_precompute}")
         return _charger_ventes_csv(chemin_precompute)
@@ -346,6 +351,72 @@ def generer_ventes(date_j1):
 
     print(f"  → {len(ventes_totales)} gencods vendus, {sum(ventes_totales.values())} produits total")
     return ventes_totales, libelles_totales
+
+
+def _telecharger_ventes_archive(date_j1):
+    """Télécharge ventes_JJ_MM.csv depuis Drive Archives/ventes/ (si présent).
+
+    Retourne le chemin local ou None (pas d'archive, Drive inaccessible, etc.).
+    """
+    if not DRIVE_CONTROLE_FOLDER_ID:
+        return None
+    try:
+        from googleapiclient.http import MediaIoBaseDownload
+        svc = _get_drive_service()
+        if not svc:
+            return None
+        archives_id = _trouver_dossier_drive(svc, DRIVE_CONTROLE_FOLDER_ID, "Archives")
+        if not archives_id:
+            return None
+        ventes_id = _trouver_dossier_drive(svc, archives_id, "ventes")
+        if not ventes_id:
+            return None
+        nom = f"ventes_{date_j1.strftime('%d_%m')}.csv"
+        res = svc.files().list(
+            q=f"name='{nom}' and '{ventes_id}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        files = res.get("files", [])
+        if not files:
+            return None
+        buf = io.BytesIO()
+        dl  = MediaIoBaseDownload(buf, svc.files().get_media(fileId=files[0]["id"]))
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        os.makedirs(WORK_DIR, exist_ok=True)
+        chemin = os.path.join(WORK_DIR, nom)
+        with open(chemin, "wb") as f:
+            f.write(buf.getvalue())
+        return chemin
+    except Exception as e:
+        print(f"  Téléchargement archive ventes {date_j1.strftime('%d/%m/%Y')} échoué : {e}")
+        return None
+
+
+def calculer_vms(gencods, date_reference, nb_semaines=5):
+    """Calcule la Vente Moyenne Semaine (VMS) pour les gencods fournis.
+
+    Cumule les ventes sur les nb_semaines dernières semaines complètes
+    (lundi-dimanche) précédant la semaine de date_reference, puis divise
+    par nb_semaines. Retourne {gencod: vms}.
+    """
+    lundi_courant = date_reference - timedelta(days=date_reference.weekday())
+    fin   = lundi_courant - timedelta(days=1)                    # dimanche précédent
+    debut = fin - timedelta(days=nb_semaines * 7 - 1)
+
+    print(f"\nCalcul VMS ({nb_semaines} dernières semaines, "
+          f"{debut.strftime('%d/%m/%Y')} au {fin.strftime('%d/%m/%Y')}) …")
+
+    cumul = {}
+    d = debut
+    while d <= fin:
+        v_day, _ = generer_ventes(d)
+        for gencod, qty in v_day.items():
+            cumul[gencod] = cumul.get(gencod, 0) + qty
+        d += timedelta(days=1)
+
+    return {g: cumul.get(g, 0) / nb_semaines for g in gencods}
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -644,11 +715,11 @@ def upload_drive(local_path):
 # PDF des écarts + envoi email
 # ─────────────────────────────────────────────────────────────────
 
-def _construire_pdf_tableau(rows, titre_html, nom_pdf, complet=True):
+def _construire_pdf_tableau(rows, titre_html, nom_pdf, complet=True, vms_map=None):
     """Génère un PDF tableau pour la liste de lignes fournie. Retourne le chemin ou None.
 
     complet=True  : code-barres, libellé, J-1, ventes, théo, J, écart.
-    complet=False : code-barres, libellé, stock du jour uniquement.
+    complet=False : code-barres, libellé, stock du jour (+ VMS si vms_map fourni).
     """
     try:
         from reportlab.lib.pagesizes import A4
@@ -688,6 +759,9 @@ def _construire_pdf_tableau(rows, titre_html, nom_pdf, complet=True):
     if complet:
         col_widths = [108, 246, 33, 40, 33, 33, 34]  # ≈ 527 pt (marges 3mm, sans colonne gencod)
         hdr_txts = ['Code-barres', 'Libellé', 'J-1', 'Ventes', 'Théo', 'J', 'Écart']
+    elif vms_map is not None:
+        col_widths = [108, 296, 53, 70]  # ≈ 527 pt
+        hdr_txts = ['Code-barres', 'Libellé', 'Stock du jour', 'VMS']
     else:
         col_widths = [108, 366, 53]  # ≈ 527 pt
         hdr_txts = ['Code-barres', 'Libellé', 'Stock du jour']
@@ -724,11 +798,10 @@ def _construire_pdf_tableau(rows, titre_html, nom_pdf, complet=True):
                 Paragraph(f"{int(ecart):+d}", small),
             ])
         else:
-            data.append([
-                bc_cell,
-                Paragraph(lib, small),
-                Paragraph(str(int(s_j)), small),
-            ])
+            ligne = [bc_cell, Paragraph(lib, small), Paragraph(str(int(s_j)), small)]
+            if vms_map is not None:
+                ligne.append(Paragraph(f"{vms_map.get(gencod, 0.0):.1f}", small))
+            data.append(ligne)
 
     BLEU = colors.HexColor('#006797')
     style = TableStyle([
@@ -773,7 +846,7 @@ def generer_pdf_ecarts(compares, date_j1, date_debut=None):
     return _construire_pdf_tableau(ecarts, titre_html, nom_pdf)
 
 
-def generer_pdf_stock_insuffisant(stock_bas, date_courante):
+def generer_pdf_stock_insuffisant(stock_bas, date_courante, vms_map=None):
     """Génère un PDF listant tous les produits dont le stock J est <= SEUIL_STOCK_BAS.
     Retourne le chemin ou None."""
     if not stock_bas:
@@ -782,7 +855,7 @@ def generer_pdf_stock_insuffisant(stock_bas, date_courante):
     nom_pdf = f"stock_insuffisant_{date_courante.strftime('%Y%m%d')}.pdf"
     titre_html = (f"<b>Stocks insuffisant Drive - {date_courante.strftime('%d/%m/%Y')}</b>"
                   f"&nbsp;&nbsp;({len(stock_bas)} produit{'s' if len(stock_bas) > 1 else ''})")
-    return _construire_pdf_tableau(stock_bas, titre_html, nom_pdf, complet=False)
+    return _construire_pdf_tableau(stock_bas, titre_html, nom_pdf, complet=False, vms_map=vms_map)
 
 
 def envoyer_email_pdf(pdf_ecarts, pdf_stock_bas, date_j1, nb_ecart, manquant, surplus,
@@ -1074,8 +1147,9 @@ def main():
     date_courante = date.today()
     nom_pdf_stock_bas = None
     if stock_bas:
+        vms_map = calculer_vms([r[0] for r in stock_bas], date_courante)
         print("\nGénération PDF stocks insuffisants …")
-        nom_pdf_stock_bas = generer_pdf_stock_insuffisant(stock_bas, date_courante)
+        nom_pdf_stock_bas = generer_pdf_stock_insuffisant(stock_bas, date_courante, vms_map)
 
     if nom_pdf_ecarts or nom_pdf_stock_bas:
         print("\nEnvoi email …")
