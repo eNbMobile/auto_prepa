@@ -304,13 +304,8 @@ def generer_ventes(date_j1):
     """
     dossier    = date_j1.strftime("%d_%m")
 
-    # Charger les ventes pré-calculées si disponibles (générées par generer_ventes.py),
-    # localement ou depuis l'archive Drive (Archives/ventes/).
+    # Charger les ventes pré-calculées si disponibles (générées par generer_ventes.py)
     chemin_precompute = os.path.join(WORK_DIR, f"ventes_{dossier}.csv")
-    if not os.path.exists(chemin_precompute):
-        telecharge = _telecharger_ventes_archive(date_j1)
-        if telecharge:
-            chemin_precompute = telecharge
     if os.path.exists(chemin_precompute):
         print(f"  Ventes pré-calculées : {chemin_precompute}")
         return _charger_ventes_csv(chemin_precompute)
@@ -353,68 +348,36 @@ def generer_ventes(date_j1):
     return ventes_totales, libelles_totales
 
 
-def _telecharger_ventes_archive(date_j1):
-    """Télécharge ventes_JJ_MM.csv depuis Drive Archives/ventes/ (si présent).
-
-    Retourne le chemin local ou None (pas d'archive, Drive inaccessible, etc.).
-    """
-    if not DRIVE_CONTROLE_FOLDER_ID:
-        return None
-    try:
-        from googleapiclient.http import MediaIoBaseDownload
-        svc = _get_drive_service()
-        if not svc:
-            return None
-        archives_id = _trouver_dossier_drive(svc, DRIVE_CONTROLE_FOLDER_ID, "Archives")
-        if not archives_id:
-            return None
-        ventes_id = _trouver_dossier_drive(svc, archives_id, "ventes")
-        if not ventes_id:
-            return None
-        nom = f"ventes_{date_j1.strftime('%d_%m')}.csv"
-        res = svc.files().list(
-            q=f"name='{nom}' and '{ventes_id}' in parents and trashed=false",
-            fields="files(id)",
-        ).execute()
-        files = res.get("files", [])
-        if not files:
-            return None
-        buf = io.BytesIO()
-        dl  = MediaIoBaseDownload(buf, svc.files().get_media(fileId=files[0]["id"]))
-        done = False
-        while not done:
-            _, done = dl.next_chunk()
-        os.makedirs(WORK_DIR, exist_ok=True)
-        chemin = os.path.join(WORK_DIR, nom)
-        with open(chemin, "wb") as f:
-            f.write(buf.getvalue())
-        return chemin
-    except Exception as e:
-        print(f"  Téléchargement archive ventes {date_j1.strftime('%d/%m/%Y')} échoué : {e}")
-        return None
-
-
 def calculer_vms(gencods, date_reference, nb_semaines=5):
     """Calcule la Vente Moyenne Semaine (VMS) pour les gencods fournis.
 
-    Cumule les ventes sur les nb_semaines dernières semaines complètes
-    (lundi-dimanche) précédant la semaine de date_reference, puis divise
-    par nb_semaines. Retourne {gencod: vms}.
+    Cumule les cumuls hebdomadaires (ventes_SXX.csv, générés par
+    cumul_ventes_semaine.py et archivés dans Drive Archives/VMS/) des
+    nb_semaines dernières semaines complètes précédant la semaine de
+    date_reference, puis divise par nb_semaines. Retourne {gencod: vms}.
+
+    Une semaine dont le fichier n'est pas trouvé (pas encore généré, Drive
+    inaccessible, …) est ignorée dans le cumul.
     """
     lundi_courant = date_reference - timedelta(days=date_reference.weekday())
-    fin   = lundi_courant - timedelta(days=1)                    # dimanche précédent
-    debut = fin - timedelta(days=nb_semaines * 7 - 1)
 
-    print(f"\nCalcul VMS ({nb_semaines} dernières semaines, "
-          f"{debut.strftime('%d/%m/%Y')} au {fin.strftime('%d/%m/%Y')}) …")
+    numeros_semaine = [(lundi_courant - timedelta(weeks=i)).isocalendar()[1]
+                       for i in range(1, nb_semaines + 1)]
+    print(f"\nCalcul VMS ({nb_semaines} dernières semaines : "
+          f"{', '.join(f'S{n:02d}' for n in reversed(numeros_semaine))}) …")
 
     cumul = {}
-    d = debut
-    while d <= fin:
-        v_day, _ = generer_ventes(d)
-        for gencod, qty in v_day.items():
+    for numero in numeros_semaine:
+        nom_csv = f"ventes_S{numero:02d}.csv"
+        chemin_local = os.path.join(WORK_DIR, nom_csv)
+        if not os.path.exists(chemin_local):
+            telecharger_fichier_archive("VMS", nom_csv, chemin_local)
+        if not os.path.exists(chemin_local):
+            print(f"  {nom_csv} introuvable — semaine ignorée dans le calcul VMS.")
+            continue
+        v_semaine, _ = _charger_ventes_csv(chemin_local)
+        for gencod, qty in v_semaine.items():
             cumul[gencod] = cumul.get(gencod, 0) + qty
-        d += timedelta(days=1)
 
     return {g: cumul.get(g, 0) / nb_semaines for g in gencods}
 
