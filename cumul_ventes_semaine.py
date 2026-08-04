@@ -40,10 +40,20 @@ def main():
     print(f"\nCumul des ventes semaine {numero_semaine:02d} "
           f"({jours[0].strftime('%d/%m/%Y')} → {jours[-1].strftime('%d/%m/%Y')}) …")
 
+    os.makedirs(cs.WORK_DIR, exist_ok=True)
+
     ventes = {}
     libelles = {}
     for jour in jours:
         print(f"  {jour.strftime('%d/%m/%Y')} :")
+        # Le CSV du jour est déjà généré et archivé sur Drive par generer_ventes.py :
+        # on le récupère tel quel pour éviter de retélécharger et reparser tous les
+        # BonDeCommande PDF du jour (generer_ventes() ne regarde que le WORK_DIR local,
+        # vide sur un runner fraîchement démarré).
+        nom_csv = f"ventes_{jour.strftime('%d_%m')}.csv"
+        chemin_local = os.path.join(cs.WORK_DIR, nom_csv)
+        if not os.path.exists(chemin_local):
+            cs.telecharger_fichier_archive("ventes", nom_csv, chemin_local)
         v_jour, l_jour = cs.generer_ventes(jour)
         for gencod, qty in v_jour.items():
             ventes[gencod] = ventes.get(gencod, 0) + qty
@@ -54,7 +64,6 @@ def main():
         print("Aucune vente trouvée sur la semaine — aucun fichier généré.")
         sys.exit(1)
 
-    os.makedirs(cs.WORK_DIR, exist_ok=True)
     chemin_ventes = os.path.join(cs.WORK_DIR, f"ventes_S{numero_semaine:02d}.csv")
 
     with open(chemin_ventes, "w", newline="", encoding="utf-8-sig") as f:

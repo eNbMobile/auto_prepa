@@ -496,6 +496,46 @@ def telecharger_fichier_controle(nom, dest=None):
         return None
 
 
+def telecharger_fichier_archive(subfolder, nom, dest=None):
+    """Télécharge 'nom' depuis DRIVE_CONTROLE_FOLDER_ID/Archives/{subfolder}/.
+
+    Retourne le chemin local ou None (dossier/fichier absent, Drive inaccessible).
+    """
+    if not DRIVE_CONTROLE_FOLDER_ID:
+        return None
+    try:
+        import io
+        from googleapiclient.http import MediaIoBaseDownload
+        svc = _get_drive_service()
+        if not svc:
+            return None
+        archives_id = _trouver_dossier_drive(svc, DRIVE_CONTROLE_FOLDER_ID, "Archives")
+        if not archives_id:
+            return None
+        sub_id = _trouver_dossier_drive(svc, archives_id, subfolder)
+        if not sub_id:
+            return None
+        res = svc.files().list(
+            q=f"name='{nom}' and '{sub_id}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        files = res.get("files", [])
+        if not files:
+            return None
+        req = svc.files().get_media(fileId=files[0]["id"])
+        buf = io.BytesIO()
+        dl  = MediaIoBaseDownload(buf, req)
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        chemin = dest or nom
+        with open(chemin, "wb") as f:
+            f.write(buf.getvalue())
+        print(f"  → {chemin} téléchargé depuis Archives/{subfolder}/ ({os.path.getsize(chemin):,} octets)")
+        return chemin
+    except Exception as e:
+        print(f"  telecharger_fichier_archive({subfolder}/{nom}) échoué : {e}")
+        return None
 
 
 # ─────────────────────────────────────────────────────────────────
