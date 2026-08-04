@@ -348,6 +348,40 @@ def generer_ventes(date_j1):
     return ventes_totales, libelles_totales
 
 
+def calculer_vms(gencods, date_reference, nb_semaines=5):
+    """Calcule la Vente Moyenne Semaine (VMS) pour les gencods fournis.
+
+    Cumule les cumuls hebdomadaires (ventes_SXX.csv, générés par
+    cumul_ventes_semaine.py et archivés dans Drive Archives/VMS/) des
+    nb_semaines dernières semaines complètes précédant la semaine de
+    date_reference, puis divise par nb_semaines. Retourne {gencod: vms}.
+
+    Une semaine dont le fichier n'est pas trouvé (pas encore généré, Drive
+    inaccessible, …) est ignorée dans le cumul.
+    """
+    lundi_courant = date_reference - timedelta(days=date_reference.weekday())
+
+    numeros_semaine = [(lundi_courant - timedelta(weeks=i)).isocalendar()[1]
+                       for i in range(1, nb_semaines + 1)]
+    print(f"\nCalcul VMS ({nb_semaines} dernières semaines : "
+          f"{', '.join(f'S{n:02d}' for n in reversed(numeros_semaine))}) …")
+
+    cumul = {}
+    for numero in numeros_semaine:
+        nom_csv = f"ventes_S{numero:02d}.csv"
+        chemin_local = os.path.join(WORK_DIR, nom_csv)
+        if not os.path.exists(chemin_local):
+            telecharger_fichier_archive("VMS", nom_csv, chemin_local)
+        if not os.path.exists(chemin_local):
+            print(f"  {nom_csv} introuvable — semaine ignorée dans le calcul VMS.")
+            continue
+        v_semaine, _ = _charger_ventes_csv(chemin_local)
+        for gencod, qty in v_semaine.items():
+            cumul[gencod] = cumul.get(gencod, 0) + qty
+
+    return {g: cumul.get(g, 0) / nb_semaines for g in gencods}
+
+
 # ─────────────────────────────────────────────────────────────────
 # Téléchargement BDC depuis Drive (fallback)
 # ─────────────────────────────────────────────────────────────────
@@ -644,11 +678,11 @@ def upload_drive(local_path):
 # PDF des écarts + envoi email
 # ─────────────────────────────────────────────────────────────────
 
-def _construire_pdf_tableau(rows, titre_html, nom_pdf, complet=True):
+def _construire_pdf_tableau(rows, titre_html, nom_pdf, complet=True, vms_map=None):
     """Génère un PDF tableau pour la liste de lignes fournie. Retourne le chemin ou None.
 
     complet=True  : code-barres, libellé, J-1, ventes, théo, J, écart.
-    complet=False : code-barres, libellé, stock du jour uniquement.
+    complet=False : code-barres, libellé, stock du jour (+ VMS si vms_map fourni).
     """
     try:
         from reportlab.lib.pagesizes import A4
@@ -688,6 +722,9 @@ def _construire_pdf_tableau(rows, titre_html, nom_pdf, complet=True):
     if complet:
         col_widths = [108, 246, 33, 40, 33, 33, 34]  # ≈ 527 pt (marges 3mm, sans colonne gencod)
         hdr_txts = ['Code-barres', 'Libellé', 'J-1', 'Ventes', 'Théo', 'J', 'Écart']
+    elif vms_map is not None:
+        col_widths = [108, 296, 53, 70]  # ≈ 527 pt
+        hdr_txts = ['Code-barres', 'Libellé', 'Stock du jour', 'VMS']
     else:
         col_widths = [108, 366, 53]  # ≈ 527 pt
         hdr_txts = ['Code-barres', 'Libellé', 'Stock du jour']
@@ -724,11 +761,10 @@ def _construire_pdf_tableau(rows, titre_html, nom_pdf, complet=True):
                 Paragraph(f"{int(ecart):+d}", small),
             ])
         else:
-            data.append([
-                bc_cell,
-                Paragraph(lib, small),
-                Paragraph(str(int(s_j)), small),
-            ])
+            ligne = [bc_cell, Paragraph(lib, small), Paragraph(str(int(s_j)), small)]
+            if vms_map is not None:
+                ligne.append(Paragraph(f"{vms_map.get(gencod, 0.0):.1f}", small))
+            data.append(ligne)
 
     BLEU = colors.HexColor('#006797')
     style = TableStyle([
@@ -773,7 +809,7 @@ def generer_pdf_ecarts(compares, date_j1, date_debut=None):
     return _construire_pdf_tableau(ecarts, titre_html, nom_pdf)
 
 
-def generer_pdf_stock_insuffisant(stock_bas, date_courante):
+def generer_pdf_stock_insuffisant(stock_bas, date_courante, vms_map=None):
     """Génère un PDF listant tous les produits dont le stock J est <= SEUIL_STOCK_BAS.
     Retourne le chemin ou None."""
     if not stock_bas:
@@ -782,7 +818,7 @@ def generer_pdf_stock_insuffisant(stock_bas, date_courante):
     nom_pdf = f"stock_insuffisant_{date_courante.strftime('%Y%m%d')}.pdf"
     titre_html = (f"<b>Stocks insuffisant Drive - {date_courante.strftime('%d/%m/%Y')}</b>"
                   f"&nbsp;&nbsp;({len(stock_bas)} produit{'s' if len(stock_bas) > 1 else ''})")
-    return _construire_pdf_tableau(stock_bas, titre_html, nom_pdf, complet=False)
+    return _construire_pdf_tableau(stock_bas, titre_html, nom_pdf, complet=False, vms_map=vms_map)
 
 
 def envoyer_email_pdf(pdf_ecarts, pdf_stock_bas, date_j1, nb_ecart, manquant, surplus,
@@ -1074,8 +1110,9 @@ def main():
     date_courante = date.today()
     nom_pdf_stock_bas = None
     if stock_bas:
+        vms_map = calculer_vms([r[0] for r in stock_bas], date_courante)
         print("\nGénération PDF stocks insuffisants …")
-        nom_pdf_stock_bas = generer_pdf_stock_insuffisant(stock_bas, date_courante)
+        nom_pdf_stock_bas = generer_pdf_stock_insuffisant(stock_bas, date_courante, vms_map)
 
     if nom_pdf_ecarts or nom_pdf_stock_bas:
         print("\nEnvoi email …")
