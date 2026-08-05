@@ -1022,9 +1022,6 @@ def main():
 
         s_j   = stock_j.get(gencod, 0.0)
 
-        if s_j1 == 0 and s_j == 0:
-            continue
-
         ecart = s_j - s_theo
         # Priorité : dict coursesu > xlsx > théo/pdftotext
         lib = (libelles_dict.get(gencod)
@@ -1041,10 +1038,17 @@ def main():
             statut = "OK" if abs(ecart) < 0.001 else "ECART"
         # tuple : gencod, s_j1, v, s_theo, s_j, ecart, statut, libelle
         row = (gencod, s_j1, v, s_theo, s_j, ecart, statut, lib)
-        (orphelins if absents else compares).append(row)
 
         if present_j and s_j <= SEUIL_STOCK_BAS:
             stock_bas.append(row)
+
+        # Stock à 0 deux jours de suite : écart non significatif, on ne le
+        # remonte pas dans le rapport d'écarts (mais il reste dans stock_bas
+        # ci-dessus, car c'est justement le cas de rupture le plus critique).
+        if s_j1 == 0 and s_j == 0:
+            continue
+
+        (orphelins if absents else compares).append(row)
 
     compares.sort(key=lambda r: abs(r[5]), reverse=True)
     orphelins.sort(key=lambda r: r[0])
