@@ -17,7 +17,7 @@ def get_access_token(token):
         "grant_type":    "refresh_token",
     }).encode()
     resp = json.loads(urllib.request.urlopen(
-        urllib.request.Request("https://oauth2.googleapis.com/token", data=data)
+        urllib.request.Request("https://oauth2.googleapis.com/token", data=data), timeout=30
     ).read())
     return resp["access_token"]
 
@@ -30,12 +30,12 @@ def drive_list(access_token, folder_id):
     })
     url = f"https://www.googleapis.com/drive/v3/files?{params}"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {access_token}"})
-    return json.loads(urllib.request.urlopen(req).read()).get("files", [])
+    return json.loads(urllib.request.urlopen(req, timeout=30).read()).get("files", [])
 
 def drive_download(access_token, file_id, dest):
     url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {access_token}"})
-    with urllib.request.urlopen(req) as resp, open(dest, "wb") as f:
+    with urllib.request.urlopen(req, timeout=30) as resp, open(dest, "wb") as f:
         f.write(resp.read())
 
 def find_in_archive(access_token, controle_folder_id, subfolder, filename):
@@ -49,7 +49,7 @@ def find_in_archive(access_token, controle_folder_id, subfolder, filename):
             })
             url = f"https://www.googleapis.com/drive/v3/files?{params}"
             req = urllib.request.Request(url, headers={"Authorization": f"Bearer {access_token}"})
-            files = json.loads(urllib.request.urlopen(req).read()).get("files", [])
+            files = json.loads(urllib.request.urlopen(req, timeout=30).read()).get("files", [])
             return files[0]["id"] if files else None
 
         archives_id = _find_folder(controle_folder_id, "Archives")
@@ -76,7 +76,7 @@ def charger_config(access_token):
         sys.exit(1)
     url = f"https://www.googleapis.com/drive/v3/files/{index['config.json']}?alt=media"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {access_token}"})
-    return json.loads(urllib.request.urlopen(req).read())
+    return json.loads(urllib.request.urlopen(req, timeout=30).read())
 
 def main():
     args = sys.argv[1:]

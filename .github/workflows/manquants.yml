@@ -10,6 +10,7 @@ concurrency:
 jobs:
   generer-pdf:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -47,7 +48,7 @@ jobs:
               "grant_type":    "refresh_token",
           }).encode()
           resp = json.loads(urllib.request.urlopen(
-              urllib.request.Request("https://oauth2.googleapis.com/token", data=data)
+              urllib.request.Request("https://oauth2.googleapis.com/token", data=data), timeout=30
           ).read())
           access = resp["access_token"]
           headers = {"Authorization": f"Bearer {access}"}
@@ -62,7 +63,7 @@ jobs:
               urllib.request.Request(
                   f"https://www.googleapis.com/drive/v3/files?q={q2}&fields=files(id,name)",
                   headers=headers
-              )
+              ), timeout=30
           ).read())["files"]
           if not files:
               print("ERREUR : gen_rupture_sbs.py introuvable dans Programmes/.")
@@ -72,7 +73,7 @@ jobs:
               urllib.request.Request(
                   f"https://www.googleapis.com/drive/v3/files/{files[0]['id']}?alt=media",
                   headers=headers
-              )
+              ), timeout=30
           ).read()
           with open("gen_rupture_sbs.py", "wb") as f:
               f.write(content)

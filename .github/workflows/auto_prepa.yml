@@ -10,6 +10,7 @@ concurrency:
 jobs:
   auto-prepa:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Récupérer le code
@@ -27,7 +28,7 @@ jobs:
           def urlopen_retry(req, max_attempts=3):
               for attempt in range(max_attempts):
                   try:
-                      return urllib.request.urlopen(req)
+                      return urllib.request.urlopen(req, timeout=30)
                   except Exception as e:
                       if attempt == max_attempts - 1:
                           raise
@@ -64,13 +65,13 @@ jobs:
                       "fields": "files(id)",
                   })
                   list_resp = json.loads(urllib.request.urlopen(
-                      urllib.request.Request(list_url, headers=headers)
+                      urllib.request.Request(list_url, headers=headers), timeout=30
                   ).read())
                   files = list_resp.get("files", [])
                   if files:
                       dl_url = f"https://www.googleapis.com/drive/v3/files/{files[0]['id']}?alt=media"
                       dl_resp = urllib.request.urlopen(
-                          urllib.request.Request(dl_url, headers=headers)
+                          urllib.request.Request(dl_url, headers=headers), timeout=30
                       ).read()
                       cfg = json.loads(dl_resp.decode("utf-8"))
                       print("  gmail_filters.json chargé depuis Drive")
@@ -95,7 +96,7 @@ jobs:
               })
               try:
                   res = json.loads(urllib.request.urlopen(
-                      urllib.request.Request(url, headers=headers)
+                      urllib.request.Request(url, headers=headers), timeout=30
                   ).read())
                   if res.get("messages"):
                       has_new = True

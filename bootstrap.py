@@ -18,7 +18,7 @@ _RETRYABLE = {429, 500, 502, 503, 504}
 def _urlopen_retry(req, max_attempts=4):
     for attempt in range(max_attempts):
         try:
-            return urllib.request.urlopen(req)
+            return urllib.request.urlopen(req, timeout=30)
         except urllib.error.HTTPError as e:
             if e.code not in _RETRYABLE or attempt == max_attempts - 1:
                 raise
