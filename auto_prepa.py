@@ -14,11 +14,15 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 _TZ = ZoneInfo("Europe/Paris")
 
+import httplib2
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
+from google_auth_httplib2 import AuthorizedHttp
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
+
+_HTTP_TIMEOUT = 30
 
 _BASE = os.path.dirname(os.path.abspath(__file__))
 WORK_DIR  = os.environ.get("WORK_DIR",  os.path.join(_BASE, "v 4.0.0"))
@@ -779,8 +783,9 @@ def _main():
     os.makedirs(CACHE_DIR, exist_ok=True)
 
     creds = get_credentials()
-    drive_svc = build("drive", "v3", credentials=creds)
-    gmail_svc = build("gmail", "v1", credentials=creds)
+    http = AuthorizedHttp(creds, http=httplib2.Http(timeout=_HTTP_TIMEOUT))
+    drive_svc = build("drive", "v3", http=http)
+    gmail_svc = build("gmail", "v1", http=http)
 
     _charger_config(drive_svc)
     _charger_gmail_filters(drive_svc)

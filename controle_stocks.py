@@ -388,15 +388,18 @@ def calculer_vms(gencods, date_reference, nb_semaines=5):
 
 def _get_drive_service():
     try:
+        import httplib2
         from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request
+        from google_auth_httplib2 import AuthorizedHttp
         from googleapiclient.discovery import build
         if not os.path.exists(TOKEN_FILE):
             return None
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
         if creds.expired and creds.refresh_token:
             creds.refresh(Request())
-        return build("drive", "v3", credentials=creds)
+        http = AuthorizedHttp(creds, http=httplib2.Http(timeout=30))
+        return build("drive", "v3", http=http)
     except Exception as e:
         print(f"  Drive inaccessible : {e}")
         return None
@@ -404,8 +407,10 @@ def _get_drive_service():
 
 def _get_gmail_service():
     try:
+        import httplib2
         from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request
+        from google_auth_httplib2 import AuthorizedHttp
         from googleapiclient.discovery import build
         if not os.path.exists(TOKEN_FILE):
             return None
@@ -413,7 +418,8 @@ def _get_gmail_service():
             TOKEN_FILE, ["https://www.googleapis.com/auth/gmail.modify"])
         if creds.expired and creds.refresh_token:
             creds.refresh(Request())
-        return build("gmail", "v1", credentials=creds)
+        http = AuthorizedHttp(creds, http=httplib2.Http(timeout=30))
+        return build("gmail", "v1", http=http)
     except Exception as e:
         print(f"  Gmail inaccessible : {e}")
         return None
