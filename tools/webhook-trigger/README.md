@@ -72,6 +72,29 @@ Enregistrer ce lien en favori / raccourci sur le téléphone. L'ouvrir affiche
 une page avec un bouton **"Lancer le contrôle"** ; le workflow démarre au
 clic et apparaît dans l'onglet **Actions** du dépôt GitHub.
 
+## 6. (Optionnel) Un lien court à partager
+
+Pour éviter d'exposer le secret en clair dans le lien partagé (SMS, WhatsApp,
+raccourci écran d'accueil...), `stocks-1e24c6eb.php` fait une simple
+redirection vers le lien complet, en lisant le secret côté serveur.
+
+1. Uploader `stocks-1e24c6eb.php` à la racine du site, **à côté** du dossier
+   `prepa/` (donc dans `httpdocs/`, pas dans `httpdocs/prepa/`).
+2. Le lien à partager devient :
+
+   ```
+   https://enbmobile.nl/stocks-1e24c6eb.php
+   ```
+
+Important : le nom de ce fichier fait office de secret à la place du
+paramètre `key=...` — il n'est plus dans l'URL, mais il faut donc garder
+**ce nom de fichier** aussi confidentiel que l'était l'ancien lien complet.
+Ne pas le renommer en quelque chose de devinable comme `controle-stocks.php`.
+Après avoir ouvert ce raccourci, le navigateur affiche quand même l'URL
+complète (avec le secret) dans la barre d'adresse une fois arrivé sur la
+page de confirmation — ce mécanisme cache seulement le secret dans le lien
+qu'on partage/enregistre, pas dans la barre d'adresse une fois dessus.
+
 ## Sécurité
 
 - Le lien complet (avec `key=...`) équivaut à un mot de passe : ne le
