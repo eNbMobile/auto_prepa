@@ -600,19 +600,21 @@ def _get_or_create_subfolder_drive(svc, parent_id, name):
         return None
 
 
-def upload_to_archive(local_path, subfolder, filename=None):
-    """Upload dans DRIVE_CONTROLE_FOLDER_ID/Archives/{subfolder}/ (écrase si existant).
+def upload_to_archive(local_path, subfolder, filename=None, root_id=None):
+    """Upload dans {root_id}/Archives/{subfolder}/ (écrase si existant).
 
+    root_id  : dossier Drive racine (défaut : DRIVE_CONTROLE_FOLDER_ID).
     filename : nom cible sur Drive (défaut : basename de local_path).
     """
-    if not DRIVE_CONTROLE_FOLDER_ID:
+    root_id = root_id or DRIVE_CONTROLE_FOLDER_ID
+    if not root_id:
         return False
     try:
         from googleapiclient.http import MediaFileUpload
         svc = _get_drive_service()
         if not svc:
             return False
-        archives_id = _get_or_create_subfolder_drive(svc, DRIVE_CONTROLE_FOLDER_ID, "Archives")
+        archives_id = _get_or_create_subfolder_drive(svc, root_id, "Archives")
         if not archives_id:
             return False
         sub_id = _get_or_create_subfolder_drive(svc, archives_id, subfolder)
@@ -979,7 +981,8 @@ def main():
     print(f"Lecture stock J   : {fichier_j}")
     stock_j, libelles_stock_j = lire_stock(fichier_j)
     print(f"  → {len(stock_j)} gencods")
-    upload_to_archive(fichier_j, "stocks", f"stock_{date.today().strftime('%d_%m_%Y')}_j.xlsx")
+    upload_to_archive(fichier_j, "stocks", f"stock_{date.today().strftime('%d_%m_%Y')}_j.xlsx",
+                       root_id=DRIVE_CONFIG_FOLDER_ID)
     for g, l in libelles_stock_j.items():
         if g not in libelles_stock:
             libelles_stock[g] = l
@@ -1107,7 +1110,7 @@ def main():
 
     print("\nUpload Drive …")
     upload_drive(nom_sortie)
-    upload_to_archive(nom_sortie, "écarts")
+    upload_to_archive(nom_sortie, "écarts", root_id=DRIVE_CONFIG_FOLDER_ID)
 
     nom_pdf_ecarts = None
     if nb_ecart > 0:
