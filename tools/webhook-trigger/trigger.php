@@ -75,29 +75,36 @@ $payload = [
     ),
 ];
 
-$ch = curl_init(sprintf(
+$url = sprintf(
     'https://api.github.com/repos/%s/%s/actions/workflows/%s/dispatches',
     REPO_OWNER,
     REPO_NAME,
     WORKFLOW_FILE
-));
-curl_setopt_array($ch, [
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_CUSTOMREQUEST => 'POST',
-    CURLOPT_POSTFIELDS => json_encode($payload),
-    CURLOPT_HTTPHEADER => [
-        'Authorization: Bearer ' . GH_TOKEN,
-        'Accept: application/vnd.github+json',
-        'X-GitHub-Api-Version: 2022-11-28',
-        'User-Agent: enbmobile-trigger',
-        'Content-Type: application/json',
+);
+
+// Pas de dépendance à l'extension cURL (souvent désactivée sur les hébergements
+// mutualisés) : on passe par les flux HTTP natifs de PHP.
+$context = stream_context_create([
+    'http' => [
+        'method' => 'POST',
+        'header' => implode("\r\n", [
+            'Authorization: Bearer ' . GH_TOKEN,
+            'Accept: application/vnd.github+json',
+            'X-GitHub-Api-Version: 2022-11-28',
+            'User-Agent: enbmobile-trigger',
+            'Content-Type: application/json',
+        ]),
+        'content' => json_encode($payload),
+        'timeout' => 15,
+        'ignore_errors' => true, // pour récupérer le corps/statut même sur 4xx/5xx
     ],
-    CURLOPT_TIMEOUT => 15,
 ]);
-$response = curl_exec($ch);
-$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-$curlError = curl_error($ch);
-curl_close($ch);
+
+$body = @file_get_contents($url, false, $context);
+$httpCode = 0;
+if (isset($http_response_header[0]) && preg_match('#HTTP/\S+\s(\d{3})#', $http_response_header[0], $m)) {
+    $httpCode = (int) $m[1];
+}
 
 if ($httpCode === 204) {
     render_page(
@@ -106,6 +113,6 @@ if ($httpCode === 204) {
         'success'
     );
 } else {
-    error_log("trigger.php controle_stocks: HTTP $httpCode - $response - $curlError");
+    error_log("trigger.php controle_stocks: HTTP $httpCode - " . ($body === false ? '(échec file_get_contents, allow_url_fopen désactivé ?)' : $body));
     render_page('Erreur', 'Le déclenchement a échoué (code ' . $httpCode . '). Contacte l\'administrateur.', 'error');
 }

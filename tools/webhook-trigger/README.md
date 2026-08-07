@@ -45,8 +45,9 @@ Garder cette chaîne : c'est le mot de passe qui ira dans l'URL.
 3. Uploader `trigger.php` et `config.php` dans ce dossier (par FTP ou via le
    gestionnaire de fichiers Plesk).
 4. Vérifier dans Plesk → **PHP Settings** du domaine que PHP est activé
-   (version 8.x) et que l'extension **cURL** est active (elle l'est par
-   défaut sur la plupart des hébergements Plesk).
+   (version 8.x). Le script n'a pas besoin de l'extension cURL : il utilise
+   les flux HTTP natifs de PHP (`allow_url_fopen`), activés par défaut sur
+   la quasi-totalité des hébergements — y compris quand cURL est désactivé.
 
 Optionnel mais recommandé : si Plesk le permet, place `config.php` dans un
 dossier situé **au-dessus** de `httpdocs` (donc non accessible publiquement
