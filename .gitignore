@@ -17,3 +17,5 @@ gmail_filters_local.json
 *.xlsx
 
 controle_stocks_*.csv
+
+tools/webhook-trigger/config.php
