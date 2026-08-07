@@ -40,6 +40,7 @@ _config_drive_cache = {}     # {nom: contenu texte}
 TOKEN_FILE         = os.path.expanduser("~/.auto_prepa_token.json")
 SCOPES             = ["https://www.googleapis.com/auth/drive"]
 EMAIL_DESTINATAIRE = ""  # chargé depuis config.json
+EMAIL_COPIE_STOCK  = "superu.arnage.coursesu@systeme-u.fr"  # copie systématique sur l'email de contrôle de stocks
 
 def _col_index(ref):
     """Convertit une référence Excel type 'AB' en index 0-based."""
@@ -837,6 +838,7 @@ def envoyer_email_pdf(pdf_ecarts, pdf_stock_bas, date_j1, nb_ecart, manquant, su
 
         msg = MIMEMultipart()
         msg['To']      = EMAIL_DESTINATAIRE
+        msg['Cc']      = EMAIL_COPIE_STOCK
         label_dates = (f"{date_debut.strftime('%d/%m/%Y')} & {date_j1.strftime('%d/%m/%Y')}"
                        if date_debut and date_debut < date_j1
                        else date_j1.strftime('%d/%m/%Y'))
@@ -874,7 +876,7 @@ def envoyer_email_pdf(pdf_ecarts, pdf_stock_bas, date_j1, nb_ecart, manquant, su
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         svc.users().messages().send(userId='me', body={'raw': raw}).execute()
-        print(f"  Email envoyé → {EMAIL_DESTINATAIRE}")
+        print(f"  Email envoyé → {EMAIL_DESTINATAIRE} (cc: {EMAIL_COPIE_STOCK})")
     except Exception as e:
         print(f"  Email échoué : {e}")
 
