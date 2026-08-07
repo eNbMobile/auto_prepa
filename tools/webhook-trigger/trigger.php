@@ -109,7 +109,7 @@ if (isset($http_response_header[0]) && preg_match('#HTTP/\S+\s(\d{3})#', $http_r
 if ($httpCode === 204) {
     render_page(
         'Contrôle Stocks lancé ✅',
-        'Le workflow a été déclenché sur GitHub Actions. Suis son avancement dans l\'onglet Actions du dépôt.',
+        'Le contrôle a bien été lancé. Le mail avec le résultat arrivera dans quelques minutes.',
         'success'
     );
 } else {
