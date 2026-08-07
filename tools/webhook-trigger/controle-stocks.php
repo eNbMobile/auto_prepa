@@ -4,18 +4,16 @@ declare(strict_types=1);
 
 /**
  * Page à héberger sur enbmobile.nl pour lancer le workflow GitHub Actions
- * "Contrôle Stocks" depuis un simple lien, sans connexion GitHub.
- *
- * Le jeton GitHub reste côté serveur (config.php) : la personne qui clique
- * le lien n'a besoin que du secret dans l'URL, jamais d'un accès GitHub.
+ * "Contrôle Stocks" depuis un simple lien, sans cron et sans connexion
+ * GitHub côté utilisateur. Pas de secret dans l'URL : le lien est public.
  *
  * Un simple GET (ouverture du lien) affiche seulement une page de
- * confirmation ; le déclenchement réel se fait sur le POST du formulaire.
- * Ça évite qu'un aperçu de lien automatique (mail, messagerie) déclenche le
- * workflow tout seul en préchargeant l'URL.
+ * confirmation ; le déclenchement réel se fait sur le POST du formulaire,
+ * pour éviter qu'un aperçu automatique de lien (mail, messagerie) ne
+ * déclenche le workflow tout seul en préchargeant l'URL.
  */
 
-require __DIR__ . '/config.php'; // définit GH_TOKEN et LINK_SECRET
+require __DIR__ . '/config.php'; // définit GH_TOKEN
 
 const REPO_OWNER = 'eNbMobile';
 const REPO_NAME = 'auto_prepa';
@@ -33,12 +31,6 @@ function render_page(string $title, string $message, string $status = 'info'): v
         . '<body style="font-family: system-ui, sans-serif; max-width: 480px; margin: 10vh auto; text-align:center; color:' . $color . '">'
         . '<h1>' . htmlspecialchars($title) . '</h1><p>' . $message . '</p>'
         . '</body></html>';
-}
-
-$key = (string) ($_GET['key'] ?? $_POST['key'] ?? '');
-if ($key === '' || !hash_equals(LINK_SECRET, $key)) {
-    render_page('Accès refusé', 'Lien invalide.', 'error');
-    exit;
 }
 
 $joursRaw = (string) ($_GET['jours'] ?? $_POST['jours'] ?? '1');
@@ -59,7 +51,6 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
         . ($date !== '' ? ' — Date : <strong>' . htmlspecialchars($date) . '</strong>' : '')
         . '</p>'
         . '<form method="post">'
-        . '<input type="hidden" name="key" value="' . htmlspecialchars($key) . '">'
         . '<input type="hidden" name="jours" value="' . htmlspecialchars($jours) . '">'
         . '<input type="hidden" name="date" value="' . htmlspecialchars($date) . '">'
         . '<button type="submit" style="font-size:1.2em; padding: 0.6em 1.4em; cursor:pointer">Lancer le contrôle</button>'
@@ -113,6 +104,6 @@ if ($httpCode === 204) {
         'success'
     );
 } else {
-    error_log("trigger.php controle_stocks: HTTP $httpCode - " . ($body === false ? '(échec file_get_contents, allow_url_fopen désactivé ?)' : $body));
+    error_log("controle-stocks.php: HTTP $httpCode - " . ($body === false ? '(échec file_get_contents, allow_url_fopen désactivé ?)' : $body));
     render_page('Erreur', 'Le déclenchement a échoué (code ' . $httpCode . '). Contacte l\'administrateur.', 'error');
 }
