@@ -25,6 +25,16 @@ _TZ = ZoneInfo("Europe/Paris")
 _VISUELS_BASE_URL = "http://enbmobile.nl/mobUDrive/visuels/"
 _PHOTO_EXTENSIONS = (".jpg", ".png")
 
+# Lettres d'anticipation dont le rayon est connu : format PDF dedie (photo,
+# code-barres, prix, ...) au lieu du .txt. Les lettres absentes d'ici (rayon
+# pas encore defini) restent dans le anticipation_JJ_MM.txt.
+RAYONS_LETTRE = {
+    "A": "Bazar",
+    "B": "Boucherie",
+    "C": "BVP",
+    "F": "Fromage à la coupe",
+}
+
 # Format des lignes de bon_anticipation.txt (16 champs separes par ';') :
 # 0 gencod ; 1 libelle ; 2 prix ; 3 prix au kg/L ; 4 qte ; 5 substitution ;
 # 6-8 sans interet ; 9 jour de commande + heure + autres infos ; 10 sacs ;
@@ -189,19 +199,20 @@ def _charger_ordre_chemin_prepa(drive_svc):
     return ordre
 
 
-def _grouper_produits_a(produits_a):
+def _grouper_produits(produits):
     """Regroupe les lignes portant le meme gencod (produit identique commande
     dans plusieurs commandes) : commande et quantite sont empilees, le reste
-    (libelle, adresse) est partage. Retourne une liste de dicts
-    {gencod, libelle, adresse, lignes: [(commande, qte), ...]}."""
+    (libelle, prix, adresse) est partage. Retourne une liste de dicts
+    {gencod, libelle, prix, adresse, lignes: [(commande, qte), ...]}."""
     groupes = {}
     ordre_gencods = []
-    for p in produits_a:
+    for p in produits:
         gencod = p["gencod"]
         if gencod not in groupes:
             groupes[gencod] = {
                 "gencod":  gencod,
                 "libelle": p["libelle"],
+                "prix":    p["prix"],
                 "adresse": p["adresse"],
                 "lignes":  [],
             }
@@ -216,19 +227,19 @@ def _grouper_produits_a(produits_a):
     return resultat
 
 
-def _generer_pdf_lettre_a(drive_svc, produits_a, dossier_jj_mm, annee):
-    """Genere le PDF Lettre A (Bazar) : une ligne par produit (gencod) avec
-    commande(s), photo, code-barres EAN13 + gencod, libelle et quantite(s).
-    Les produits identiques provenant de plusieurs commandes sont regroupes
-    sur une seule ligne (commande/qte empiles dans la meme case), et les
-    lignes sont triees selon l'ordre du chemin de preparation
-    (chemin_prepa_ramasse.csv). Retourne le chemin local du PDF, ou None si
-    reportlab est indisponible / liste vide."""
-    if not produits_a:
+def _generer_pdf_rayon(produits, lettre, nom_rayon, dossier_jj_mm, date_complete, ordre_chemin):
+    """Genere le PDF d'un rayon (lettre d'anticipation) : une ligne par
+    produit (gencod) avec commande(s), photo, code-barres EAN13 + gencod,
+    libelle, prix et quantite(s). Les produits identiques provenant de
+    plusieurs commandes sont regroupes sur une seule ligne (commande/qte
+    empiles dans la meme case), et les lignes sont triees selon l'ordre du
+    chemin de preparation (chemin_prepa_ramasse.csv, via ordre_chemin).
+    Retourne le chemin local du PDF, ou None si reportlab est indisponible /
+    liste vide."""
+    if not produits:
         return None
 
-    groupes = _grouper_produits_a(produits_a)
-    ordre_chemin = _charger_ordre_chemin_prepa(drive_svc)
+    groupes = _grouper_produits(produits)
     fin_chemin = len(ordre_chemin)
     groupes.sort(key=lambda g: (ordre_chemin.get(g["adresse"], fin_chemin), g["gencod"]))
 
@@ -241,10 +252,10 @@ def _generer_pdf_lettre_a(drive_svc, produits_a, dossier_jj_mm, annee):
         from reportlab.platypus import (Image as RLImage, Paragraph, SimpleDocTemplate,
                                         Spacer, Table, TableStyle)
     except Exception as e:
-        print(f"  PDF lettre A ignore : {e}")
+        print(f"  PDF {nom_rayon} ignore : {e}")
         return None
 
-    nom_pdf = f"anticipation_A_{dossier_jj_mm}.pdf"
+    nom_pdf = f"anticipation_{lettre}_{dossier_jj_mm}.pdf"
     doc = SimpleDocTemplate(nom_pdf, pagesize=A4,
                             topMargin=8 * mm, bottomMargin=8 * mm,
                             leftMargin=5 * mm, rightMargin=5 * mm)
@@ -255,15 +266,13 @@ def _generer_pdf_lettre_a(drive_svc, produits_a, dossier_jj_mm, annee):
     tiny_c   = ParagraphStyle('tiny_c', fontSize=7, leading=8, alignment=1)
 
     elements = [
-        Paragraph(f"<b>Anticipation Lettre A (Bazar) — {dossier_jj_mm}/{annee}</b>"
-                  f"&nbsp;&nbsp;({len(groupes)} produit(s), {len(produits_a)} ligne(s) commande)",
-                  styles['Title']),
+        Paragraph(f"Anticipation {nom_rayon} {date_complete}", styles['Title']),
         Spacer(1, 5 * mm),
     ]
 
-    col_widths = [60, 60, 100, 314, 32]
+    col_widths = [60, 55, 95, 246, 55, 30]
     hdr = [Paragraph(t, header_s) for t in
-           ('Commande', 'Photo', 'Code-barres', 'Libellé', 'Qté')]
+           ('Commande', 'Photo', 'Code-barres', 'Libellé', 'Prix', 'Qté')]
     data = [hdr]
 
     cache_photos = {}
@@ -310,6 +319,7 @@ def _generer_pdf_lettre_a(drive_svc, produits_a, dossier_jj_mm, annee):
             photo_cell,
             bc_cell,
             Paragraph(g['libelle'], small),
+            Paragraph(g['prix'], small),
             qte_cell,
         ])
 
@@ -321,7 +331,7 @@ def _generer_pdf_lettre_a(drive_svc, produits_a, dossier_jj_mm, annee):
         ('ALIGN',          (0, 0), (-1, 0), 'CENTER'),
         ('FONTSIZE',       (0, 1), (-1, -1), 8),
         ('ALIGN',          (0, 1), (0, -1), 'CENTER'),
-        ('ALIGN',          (4, 1), (4, -1), 'CENTER'),
+        ('ALIGN',          (4, 1), (5, -1), 'CENTER'),
         ('VALIGN',         (0, 0), (-1, -1), 'MIDDLE'),
         ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#EEF6FB')]),
         ('GRID',           (0, 0), (-1, -1), 0.3, colors.lightgrey),
@@ -333,7 +343,7 @@ def _generer_pdf_lettre_a(drive_svc, produits_a, dossier_jj_mm, annee):
     table.setStyle(style)
     elements.append(table)
     doc.build(elements)
-    print(f"  → {nom_pdf} ({len(groupes)} produit(s), {len(produits_a)} ligne(s) commande)")
+    print(f"  → {nom_pdf} ({len(groupes)} produit(s), {len(produits)} ligne(s) commande)")
     return nom_pdf
 
 
@@ -369,8 +379,9 @@ def main():
     for p in tous_produits:
         par_lettre[p["lettre"]].append(p)
 
-    # Lettre A (Bazar) : format PDF dedie, pas dans le .txt.
-    produits_a = par_lettre.pop("A", [])
+    # Lettres avec rayon connu (RAYONS_LETTRE) : format PDF dedie, pas dans le .txt.
+    produits_pdf = {lettre: par_lettre.pop(lettre)
+                    for lettre in list(par_lettre.keys()) if lettre in RAYONS_LETTRE}
 
     sections = []
     for lettre in sorted(par_lettre.keys()):
@@ -382,12 +393,16 @@ def main():
         )
         sections.append(entete_section + corps_lignes + "\n")
 
+    mentions_pdf = "".join(
+        f"Lettre {lettre} ({RAYONS_LETTRE[lettre]}) : voir anticipation_{lettre}_{dossier_jj_mm}.pdf\n"
+        for lettre in sorted(produits_pdf.keys())
+    )
     entete = (
         f"Produits anticipables du {dossier_jj_mm}/{maintenant.strftime('%Y')}\n"
         f"{len(fichiers)} commande(s) avec anticipation, "
         f"{len(tous_produits)} produit(s) anticipable(s)\n"
         f"Colonnes : commande;gencod;libelle;prix;qte;heure;adresse\n"
-        + (f"Lettre A : voir anticipation_A_{dossier_jj_mm}.pdf\n" if produits_a else "")
+        + mentions_pdf
         + "=" * 50 + "\n\n"
     )
     corps = "\n".join(sections) if sections else "(aucun produit anticipable aujourd'hui)\n"
@@ -406,16 +421,22 @@ def main():
     print(f"\n{nom_fichier} => Drive OK "
           f"({len(fichiers)} commande(s) avec produits anticipables)")
 
-    if produits_a:
-        print(f"\nGeneration du PDF Lettre A ({len(produits_a)} produit(s)) ...")
-        annee = maintenant.strftime("%Y")
-        chemin_pdf = _generer_pdf_lettre_a(drive_svc, produits_a, dossier_jj_mm, annee)
-        if chemin_pdf:
-            try:
-                ap.upload_bon(drive_svc, chemin_pdf)
-            finally:
-                if os.path.exists(chemin_pdf):
-                    os.remove(chemin_pdf)
+    if produits_pdf:
+        date_complete = maintenant.strftime("%d/%m/%Y")
+        ordre_chemin = _charger_ordre_chemin_prepa(drive_svc)
+        for lettre in sorted(produits_pdf.keys()):
+            nom_rayon = RAYONS_LETTRE[lettre]
+            produits_lettre = produits_pdf[lettre]
+            print(f"\nGeneration du PDF {nom_rayon} (lettre {lettre}, "
+                  f"{len(produits_lettre)} produit(s)) ...")
+            chemin_pdf = _generer_pdf_rayon(produits_lettre, lettre, nom_rayon,
+                                            dossier_jj_mm, date_complete, ordre_chemin)
+            if chemin_pdf:
+                try:
+                    ap.upload_bon(drive_svc, chemin_pdf)
+                finally:
+                    if os.path.exists(chemin_pdf):
+                        os.remove(chemin_pdf)
 
 
 if __name__ == "__main__":
