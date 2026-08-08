@@ -302,6 +302,7 @@ def traiter_modifications_clients(drive_svc, gmail_svc, traites):
                             if contenu_antici:
                                 _envoyer_email_anticipation(gmail_svc, num_ancien, contenu_antici)
                 _supprimer_bons_drive(drive_svc, num_ancien)
+                _supprimer_anticipation_archive_drive(drive_svc, num_ancien)
                 _supprimer_bdc_drive(drive_svc, num_ancien)
                 _uploader_annulation_drive(drive_svc, num_ancien)
                 traites.add(f"BonDeCommande_{num_ancien}.pdf")
@@ -309,6 +310,7 @@ def traiter_modifications_clients(drive_svc, gmail_svc, traites):
                 num_annule = match_annul.group(1)
                 print(f"  Annulation : cde {num_annule} supprimee")
                 _supprimer_bons_drive(drive_svc, num_annule)
+                _supprimer_anticipation_archive_drive(drive_svc, num_annule)
                 _supprimer_bdc_drive(drive_svc, num_annule)
                 _uploader_annulation_drive(drive_svc, num_annule)
                 traites.add(f"BonDeCommande_{num_annule}.pdf")
@@ -452,6 +454,57 @@ def archiver_pdf_drive(drive_svc, pdf_path, dossier_jj_mm, dossier_mm_aaaa=""):
     except Exception as e:
         path = f"BDC/{dossier_mm_aaaa}/{dossier_jj_mm}" if dossier_mm_aaaa else f"BDC/{dossier_jj_mm}"
         print(f"    Archivage Drive {path}/ echoue : {e}")
+
+def archiver_anticipation_drive(drive_svc, anticipation_path, dossier_jj_mm, dossier_mm_aaaa):
+    """Copie bon_anticipation_NUMERO.txt dans Drive GITHUB/Anticipation/MM_AAAA/JJ_MM/."""
+    if not dossier_jj_mm or not dossier_mm_aaaa:
+        return
+    filename = os.path.basename(anticipation_path)
+    path = f"GITHUB/Anticipation/{dossier_mm_aaaa}/{dossier_jj_mm}"
+    try:
+        github_id = _get_or_create_subfolder(drive_svc, "root", "GITHUB")
+        if not github_id:
+            return
+        anticipation_id = _get_or_create_subfolder(drive_svc, github_id, "Anticipation")
+        if not anticipation_id:
+            return
+        mois_id = _get_or_create_subfolder(drive_svc, anticipation_id, dossier_mm_aaaa)
+        if not mois_id:
+            return
+        subfolder_id = _get_or_create_subfolder(drive_svc, mois_id, dossier_jj_mm)
+        if not subfolder_id:
+            return
+        res = drive_svc.files().list(
+            q=f"name='{filename}' and '{subfolder_id}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        if res.get("files"):
+            return
+        media = MediaFileUpload(anticipation_path, mimetype="text/plain", resumable=False)
+        drive_svc.files().create(
+            body={"name": filename, "parents": [subfolder_id]},
+            media_body=media,
+            fields="id",
+        ).execute()
+        print(f"    {filename} => Drive {path}/ OK")
+    except Exception as e:
+        print(f"    Archivage Drive {path}/ echoue : {e}")
+
+def _supprimer_anticipation_archive_drive(drive_svc, numero):
+    """Supprime la copie de bon_anticipation_NUMERO.txt archivee sous GITHUB/Anticipation/."""
+    nom = f"bon_anticipation_{numero}.txt"
+    try:
+        res = drive_svc.files().list(
+            q=f"name='{nom}' and trashed=false",
+            fields="files(id,parents)",
+        ).execute()
+        for f in res.get("files", []):
+            if DRIVE_BONS_FOLDER_ID and DRIVE_BONS_FOLDER_ID in (f.get("parents") or []):
+                continue
+            drive_svc.files().delete(fileId=f["id"]).execute()
+            print(f"    Supprime Drive GITHUB/Anticipation : {nom}")
+    except Exception as e:
+        print(f"    Suppression archive GITHUB/Anticipation {nom} echouee : {e}")
 
 def _supprimer_bdc_drive(drive_svc, numero):
     """Supprime BonDeCommande_NUMERO.pdf du dossier Drive BDC (tous sous-dossiers)."""
@@ -946,6 +999,10 @@ def _main():
             dst_f = os.path.join(WORK_DIR, dst_name)
             if os.path.exists(src_f):
                 os.rename(src_f, dst_f)
+
+        anticipation_dst = os.path.join(WORK_DIR, f"bon_anticipation_{order_num}.txt")
+        if os.path.exists(anticipation_dst):
+            archiver_anticipation_drive(drive_svc, anticipation_dst, dossier_jj_mm, dossier_mm_aaaa)
 
         for fname in [f"bon_prepa_{order_num}.txt",
                       f"bon_anticipation_{order_num}.txt"]:
