@@ -37,12 +37,14 @@ RAYONS_LETTRE = {
 
 # Format des lignes de bon_anticipation.txt (16 champs separes par ';') :
 # 0 gencod ; 1 libelle ; 2 prix ; 3 prix au kg/L ; 4 qte ; 5 substitution ;
-# 6-8 sans interet ; 9 jour de commande + heure + autres infos ; 10 sacs ;
+# 6 poids (nombre decimal, utilise pour la lettre B/Boucherie) ; 7-8 sans
+# interet ; 9 jour de commande + heure + autres infos ; 10 sacs ;
 # 11 adresse ; 12-14 sans interet ; 15 (dernier champ) lettre d'anticipation
 _IDX_GENCOD  = 0
 _IDX_LIBELLE = 1
 _IDX_PRIX    = 2
 _IDX_QTE     = 4
+_IDX_POIDS   = 6
 _IDX_JOUR_HEURE = 9
 _IDX_ADRESSE = 11
 _NB_CHAMPS_MIN = 16
@@ -54,7 +56,8 @@ _RE_HEURE = re.compile(r'([01]?\d|2[0-3])[:h]([0-5]\d)')
 def _parser_lignes_anticipation(contenu, numero_commande):
     """Parse le contenu d'un bon_anticipation.txt et ne garde que les champs utiles.
 
-    Retourne une liste de dicts : commande, gencod, libelle, prix, qte, heure, adresse, lettre.
+    Retourne une liste de dicts : commande, gencod, libelle, prix, qte, poids,
+    heure, adresse, lettre.
     """
     produits = []
     for ligne in contenu.splitlines():
@@ -76,6 +79,7 @@ def _parser_lignes_anticipation(contenu, numero_commande):
             "libelle":  champs[_IDX_LIBELLE].strip(),
             "prix":     champs[_IDX_PRIX].strip(),
             "qte":      champs[_IDX_QTE].strip(),
+            "poids":    champs[_IDX_POIDS].strip(),
             "heure":    heure,
             "adresse":  champs[_IDX_ADRESSE].strip(),
             "lettre":   champs[-1].strip().upper() or "?",
@@ -202,8 +206,8 @@ def _charger_ordre_chemin_prepa(drive_svc):
 def _grouper_produits(produits):
     """Regroupe les lignes portant le meme gencod (produit identique commande
     dans plusieurs commandes) : commande et quantite sont empilees, le reste
-    (libelle, prix, adresse) est partage. Retourne une liste de dicts
-    {gencod, libelle, prix, adresse, lignes: [(commande, qte), ...]}."""
+    (libelle, prix, poids, adresse) est partage. Retourne une liste de dicts
+    {gencod, libelle, prix, poids, adresse, lignes: [(commande, qte), ...]}."""
     groupes = {}
     ordre_gencods = []
     for p in produits:
@@ -213,6 +217,7 @@ def _grouper_produits(produits):
                 "gencod":  gencod,
                 "libelle": p["libelle"],
                 "prix":    p["prix"],
+                "poids":   p["poids"],
                 "adresse": p["adresse"],
                 "lignes":  [],
             }
@@ -270,9 +275,18 @@ def _generer_pdf_rayon(produits, lettre, nom_rayon, dossier_jj_mm, date_complete
         Spacer(1, 5 * mm),
     ]
 
-    col_widths = [60, 55, 95, 246, 55, 30]
-    hdr = [Paragraph(t, header_s) for t in
-           ('Commande', 'Photo', 'Code-barres', 'Libellé', 'Prix', 'Qté')]
+    # Boucherie (lettre B) : colonne Poids en plus, juste avant le Prix.
+    avec_poids = (lettre == "B")
+    largeur_code_barres = 95
+    if avec_poids:
+        col_widths = [60, 55, largeur_code_barres, 201, 45, 55, 30]
+        hdr_txts = ('Commande', 'Photo', 'Code-barres', 'Libellé', 'Poids', 'Prix', 'Qté')
+    else:
+        col_widths = [60, 55, largeur_code_barres, 246, 55, 30]
+        hdr_txts = ('Commande', 'Photo', 'Code-barres', 'Libellé', 'Prix', 'Qté')
+    derniere_col = len(hdr_txts) - 1
+
+    hdr = [Paragraph(t, header_s) for t in hdr_txts]
     data = [hdr]
 
     cache_photos = {}
@@ -290,14 +304,14 @@ def _generer_pdf_rayon(produits, lettre, nom_rayon, dossier_jj_mm, date_complete
         bc = None
         if len(gencod) == 13 and gencod.isdigit():
             try:
-                bc = createBarcodeDrawing('EAN13', value=gencod, width=95, height=28,
+                bc = createBarcodeDrawing('EAN13', value=gencod, width=largeur_code_barres, height=28,
                                           humanReadable=False)
             except Exception:
                 bc = None
         if bc:
             bc_cell = Table(
                 [[bc], [Paragraph(gencod, tiny_c)]],
-                colWidths=[100],
+                colWidths=[largeur_code_barres],
                 style=TableStyle([
                     ('ALIGN',         (0, 0), (-1, -1), 'CENTER'),
                     ('TOPPADDING',    (0, 0), (-1, -1), 0),
@@ -314,14 +328,12 @@ def _generer_pdf_rayon(produits, lettre, nom_rayon, dossier_jj_mm, date_complete
         commande_cell = Paragraph("<br/>".join(c for c, _ in g['lignes']), small)
         qte_cell      = Paragraph("<br/>".join(q for _, q in g['lignes']), small)
 
-        data.append([
-            commande_cell,
-            photo_cell,
-            bc_cell,
-            Paragraph(g['libelle'], small),
-            Paragraph(g['prix'], small),
-            qte_cell,
-        ])
+        row = [commande_cell, photo_cell, bc_cell, Paragraph(g['libelle'], small)]
+        if avec_poids:
+            row.append(Paragraph(g['poids'], small))
+        row.append(Paragraph(g['prix'], small))
+        row.append(qte_cell)
+        data.append(row)
 
     BLEU = colors.HexColor('#006797')
     style = TableStyle([
@@ -330,8 +342,8 @@ def _generer_pdf_rayon(produits, lettre, nom_rayon, dossier_jj_mm, date_complete
         ('FONTSIZE',       (0, 0), (-1, 0), 8),
         ('ALIGN',          (0, 0), (-1, 0), 'CENTER'),
         ('FONTSIZE',       (0, 1), (-1, -1), 8),
-        ('ALIGN',          (0, 1), (0, -1), 'CENTER'),
-        ('ALIGN',          (4, 1), (5, -1), 'CENTER'),
+        ('ALIGN',          (0, 1), (2, -1), 'CENTER'),
+        ('ALIGN',          (4, 1), (derniere_col, -1), 'CENTER'),
         ('VALIGN',         (0, 0), (-1, -1), 'MIDDLE'),
         ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#EEF6FB')]),
         ('GRID',           (0, 0), (-1, -1), 0.3, colors.lightgrey),
