@@ -16,8 +16,58 @@ jobs:
       - name: Récupérer le code
         uses: actions/checkout@v4
 
+      - name: Déterminer la fenêtre d'exécution
+        id: check_window
+        run: |
+          export TZ='Europe/Paris'
+          weekday=$(date +%u)   # 1=lundi ... 7=dimanche
+          hour=$(date +%-H)
+          minute=$(date +%-M)
+          hm=$((hour * 60 + minute))
+
+          in_band() {
+            # $1=début (min depuis minuit) $2=fin (min depuis minuit)
+            local s=$1 e=$2
+            if [ "$s" -le "$e" ]; then
+              [ "$hm" -ge "$s" ] && [ "$hm" -lt "$e" ]
+            else
+              [ "$hm" -ge "$s" ] || [ "$hm" -lt "$e" ]
+            fi
+          }
+
+          # Lundi-samedi : 5h-17h30 chaque minute, 17h30-23h toutes les 5min, 23h-5h 1x/heure
+          # Dimanche     : 5h-23h toutes les 5min, 23h-5h 1x/heure
+          if [ "$weekday" -eq 7 ]; then
+            if in_band $((5 * 60)) $((23 * 60)); then
+              interval=5
+            else
+              interval=60
+            fi
+          else
+            if in_band $((5 * 60)) $((17 * 60 + 30)); then
+              interval=1
+            elif in_band $((17 * 60 + 30)) $((23 * 60)); then
+              interval=5
+            else
+              interval=60
+            fi
+          fi
+
+          run_window=false
+          if [ "$interval" -eq 1 ]; then
+            run_window=true
+          elif [ "$interval" -eq 5 ] && [ $((minute % 5)) -eq 0 ]; then
+            run_window=true
+          elif [ "$interval" -eq 60 ] && [ "$minute" -eq 0 ]; then
+            run_window=true
+          fi
+
+          echo "$(date '+%A %d/%m %H:%M') Paris — intervalle=${interval}min — run_window=$run_window"
+          echo "run_window=$run_window" >> "$GITHUB_OUTPUT"
+
       - name: Vérifier nouveaux emails Gmail
         id: check_pdfs
+        if: steps.check_window.outputs.run_window == 'true'
         env:
           GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
           DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
