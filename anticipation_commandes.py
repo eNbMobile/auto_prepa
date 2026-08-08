@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 Reprend tous les BonDeCommande archives du jour sur Drive (BDC/MM_AAAA/JJ_MM),
-relance la generation (prepa_drive_degrade) pour chacun et agrege les produits
-anticipables (bon_anticipation.txt) dans un seul fichier uploade sur Drive.
+relance la generation (prepa_drive_degrade) pour chacun et archive le resultat
+de chaque commande (bon_anticipation_NUMERO.txt) sous
+GITHUB/Anticipation/MM_AAAA/JJ_MM sur Drive.
 """
 
 import os
 import re
 import subprocess
-from collections import defaultdict
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -17,53 +17,6 @@ from googleapiclient.discovery import build
 import auto_prepa as ap
 
 _TZ = ZoneInfo("Europe/Paris")
-
-# Format des lignes de bon_anticipation.txt (16 champs separes par ';') :
-# 0 gencod ; 1 libelle ; 2 prix ; 3 prix au kg/L ; 4 qte ; 5 substitution ;
-# 6-8 sans interet ; 9 jour de commande + heure + autres infos ; 10 sacs ;
-# 11 adresse ; 12-14 sans interet ; 15 (dernier champ) lettre d'anticipation
-_IDX_GENCOD  = 0
-_IDX_LIBELLE = 1
-_IDX_PRIX    = 2
-_IDX_QTE     = 4
-_IDX_JOUR_HEURE = 9
-_IDX_ADRESSE = 11
-_NB_CHAMPS_MIN = 16
-
-_RE_LEADING_SEQ = re.compile(r'^(?:-\d+)?;(\d{13};)')
-_RE_HEURE = re.compile(r'([01]?\d|2[0-3])[:h]([0-5]\d)')
-
-
-def _parser_lignes_anticipation(contenu, numero_commande):
-    """Parse le contenu d'un bon_anticipation.txt et ne garde que les champs utiles.
-
-    Retourne une liste de dicts : commande, gencod, libelle, prix, qte, heure, adresse, lettre.
-    """
-    produits = []
-    for ligne in contenu.splitlines():
-        ligne = ligne.rstrip('\n')
-        if not ligne.strip():
-            continue
-        ligne = _RE_LEADING_SEQ.sub(r'\1', ligne)
-        champs = ligne.split(';')
-        if len(champs) < _NB_CHAMPS_MIN:
-            print(f"    [{numero_commande}] ligne ignoree ({len(champs)} champ(s)) : {ligne[:120]}")
-            continue
-
-        m_heure = _RE_HEURE.search(champs[_IDX_JOUR_HEURE])
-        heure = f"{m_heure.group(1)}:{m_heure.group(2)}" if m_heure else ""
-
-        produits.append({
-            "commande": numero_commande,
-            "gencod":   champs[_IDX_GENCOD].strip(),
-            "libelle":  champs[_IDX_LIBELLE].strip(),
-            "prix":     champs[_IDX_PRIX].strip(),
-            "qte":      champs[_IDX_QTE].strip(),
-            "heure":    heure,
-            "adresse":  champs[_IDX_ADRESSE].strip(),
-            "lettre":   champs[-1].strip() or "?",
-        })
-    return produits
 
 TEMP_FILES = [
     "bon_prepa.txt", "bon_anticipation.txt", "bon_prepa_NEW.txt", "bon_prepa_dlc.txt",
@@ -175,56 +128,28 @@ def main():
 
     print(f"{len(pdfs)} commande(s) trouvee(s).")
 
-    tous_produits = []
     nb_avec_anticipation = 0
     for file_id, filename in sorted(pdfs, key=lambda p: p[1]):
         numero = _extraire_numero(filename)
         print(f"  [{numero}] Generation...", end="", flush=True)
         contenu = _generer_anticipation_pour_pdf(drive_svc, file_id, filename)
-        produits = _parser_lignes_anticipation(contenu, numero) if contenu.strip() else []
-        if produits:
-            nb_avec_anticipation += 1
-            tous_produits.extend(produits)
-            print(f" OK ({len(produits)} produit(s))")
-        else:
+        if not contenu.strip():
             print(" aucun produit anticipable")
+            continue
 
-    par_lettre = defaultdict(list)
-    for p in tous_produits:
-        par_lettre[p["lettre"]].append(p)
+        nb_avec_anticipation += 1
+        chemin_local = os.path.join(ap.WORK_DIR, f"bon_anticipation_{numero}.txt")
+        with open(chemin_local, "w", encoding="utf-8") as f:
+            f.write(contenu)
+        try:
+            ap.archiver_anticipation_drive(drive_svc, chemin_local, dossier_jj_mm, dossier_mm_aaaa)
+        finally:
+            if os.path.exists(chemin_local):
+                os.remove(chemin_local)
+        print(" OK")
 
-    sections = []
-    for lettre in sorted(par_lettre.keys()):
-        produits_lettre = sorted(par_lettre[lettre], key=lambda p: (p["commande"], p["gencod"]))
-        entete_section = f"=== Lettre {lettre} ({len(produits_lettre)} produit(s)) ===\n"
-        corps_lignes = "\n".join(
-            f"{p['commande']};{p['gencod']};{p['libelle']};{p['prix']};{p['qte']};{p['heure']};{p['adresse']}"
-            for p in produits_lettre
-        )
-        sections.append(entete_section + corps_lignes + "\n")
-
-    entete = (
-        f"Produits anticipables du {dossier_jj_mm}/{maintenant.strftime('%Y')}\n"
-        f"{len(pdfs)} commande(s) analysee(s), {nb_avec_anticipation} avec anticipation, "
-        f"{len(tous_produits)} produit(s) anticipable(s)\n"
-        f"Colonnes : commande;gencod;libelle;prix;qte;heure;adresse\n"
-        + "=" * 50 + "\n\n"
-    )
-    corps = "\n".join(sections) if sections else "(aucun produit anticipable aujourd'hui)\n"
-    contenu_final = entete + corps
-
-    nom_fichier = f"anticipation_{dossier_jj_mm}.txt"
-    chemin_local = os.path.join(ap.WORK_DIR, nom_fichier)
-    with open(chemin_local, "w", encoding="utf-8") as f:
-        f.write(contenu_final)
-    try:
-        ap.upload_bon(drive_svc, chemin_local)
-    finally:
-        if os.path.exists(chemin_local):
-            os.remove(chemin_local)
-
-    print(f"\n{nom_fichier} => Drive OK "
-          f"({nb_avec_anticipation}/{len(pdfs)} commande(s) avec produits anticipables)")
+    print(f"\n{nb_avec_anticipation}/{len(pdfs)} commande(s) avec produits anticipables "
+          f"=> Drive GITHUB/Anticipation/{dossier_mm_aaaa}/{dossier_jj_mm}/")
 
 
 if __name__ == "__main__":
