@@ -161,12 +161,76 @@ def _telecharger_photo(gencod, cache):
     return None
 
 
-def _generer_pdf_lettre_a(produits_a, dossier_jj_mm, annee):
-    """Genere le PDF Lettre A (Bazar) : une ligne par produit avec commande,
-    photo, code-barres EAN13 + gencod, libelle et quantite. Retourne le
-    chemin local du PDF, ou None si reportlab est indisponible / liste vide."""
+def _charger_ordre_chemin_prepa(drive_svc):
+    """Telecharge chemin_prepa_ramasse.csv (config Drive) : une adresse par
+    ligne, dans l'ordre du chemin de preparation. Retourne {adresse: index}."""
+    if not ap.DRIVE_CONFIG_FOLDER_ID:
+        return {}
+    try:
+        res = drive_svc.files().list(
+            q=(f"name='chemin_prepa_ramasse.csv' and '{ap.DRIVE_CONFIG_FOLDER_ID}' "
+               f"in parents and trashed=false"),
+            fields="files(id)",
+        ).execute()
+        files = res.get("files", [])
+        if not files:
+            print("  chemin_prepa_ramasse.csv introuvable sur Drive — tri par chemin de prepa ignore.")
+            return {}
+        contenu = _telecharger_texte(drive_svc, files[0]["id"])
+    except Exception as e:
+        print(f"  Impossible de charger chemin_prepa_ramasse.csv : {e}")
+        return {}
+
+    ordre = {}
+    for i, ligne in enumerate(contenu.splitlines()):
+        adresse = ligne.strip()
+        if adresse and adresse not in ordre:
+            ordre[adresse] = i
+    return ordre
+
+
+def _grouper_produits_a(produits_a):
+    """Regroupe les lignes portant le meme gencod (produit identique commande
+    dans plusieurs commandes) : commande et quantite sont empilees, le reste
+    (libelle, adresse) est partage. Retourne une liste de dicts
+    {gencod, libelle, adresse, lignes: [(commande, qte), ...]}."""
+    groupes = {}
+    ordre_gencods = []
+    for p in produits_a:
+        gencod = p["gencod"]
+        if gencod not in groupes:
+            groupes[gencod] = {
+                "gencod":  gencod,
+                "libelle": p["libelle"],
+                "adresse": p["adresse"],
+                "lignes":  [],
+            }
+            ordre_gencods.append(gencod)
+        groupes[gencod]["lignes"].append((p["commande"], p["qte"]))
+
+    resultat = []
+    for gencod in ordre_gencods:
+        g = groupes[gencod]
+        g["lignes"].sort(key=lambda t: t[0])
+        resultat.append(g)
+    return resultat
+
+
+def _generer_pdf_lettre_a(drive_svc, produits_a, dossier_jj_mm, annee):
+    """Genere le PDF Lettre A (Bazar) : une ligne par produit (gencod) avec
+    commande(s), photo, code-barres EAN13 + gencod, libelle et quantite(s).
+    Les produits identiques provenant de plusieurs commandes sont regroupes
+    sur une seule ligne (commande/qte empiles dans la meme case), et les
+    lignes sont triees selon l'ordre du chemin de preparation
+    (chemin_prepa_ramasse.csv). Retourne le chemin local du PDF, ou None si
+    reportlab est indisponible / liste vide."""
     if not produits_a:
         return None
+
+    groupes = _grouper_produits_a(produits_a)
+    ordre_chemin = _charger_ordre_chemin_prepa(drive_svc)
+    fin_chemin = len(ordre_chemin)
+    groupes.sort(key=lambda g: (ordre_chemin.get(g["adresse"], fin_chemin), g["gencod"]))
 
     try:
         from reportlab.lib import colors
@@ -192,7 +256,8 @@ def _generer_pdf_lettre_a(produits_a, dossier_jj_mm, annee):
 
     elements = [
         Paragraph(f"<b>Anticipation Lettre A (Bazar) — {dossier_jj_mm}/{annee}</b>"
-                  f"&nbsp;&nbsp;({len(produits_a)} produit(s))", styles['Title']),
+                  f"&nbsp;&nbsp;({len(groupes)} produit(s), {len(produits_a)} ligne(s) commande)",
+                  styles['Title']),
         Spacer(1, 5 * mm),
     ]
 
@@ -202,8 +267,8 @@ def _generer_pdf_lettre_a(produits_a, dossier_jj_mm, annee):
     data = [hdr]
 
     cache_photos = {}
-    for p in produits_a:
-        gencod = p['gencod']
+    for g in groupes:
+        gencod = g['gencod']
 
         photo_cell = ''
         photo_bytes = _telecharger_photo(gencod, cache_photos) if gencod else None
@@ -235,12 +300,17 @@ def _generer_pdf_lettre_a(produits_a, dossier_jj_mm, annee):
         else:
             bc_cell = Paragraph(gencod, small)
 
+        # Produit identique dans plusieurs commandes : commande et qte
+        # empilees l'une sous l'autre, dans la meme case.
+        commande_cell = Paragraph("<br/>".join(c for c, _ in g['lignes']), small)
+        qte_cell      = Paragraph("<br/>".join(q for _, q in g['lignes']), small)
+
         data.append([
-            Paragraph(p['commande'], small),
+            commande_cell,
             photo_cell,
             bc_cell,
-            Paragraph(p['libelle'], small),
-            Paragraph(p['qte'], small),
+            Paragraph(g['libelle'], small),
+            qte_cell,
         ])
 
     BLEU = colors.HexColor('#006797')
@@ -263,7 +333,7 @@ def _generer_pdf_lettre_a(produits_a, dossier_jj_mm, annee):
     table.setStyle(style)
     elements.append(table)
     doc.build(elements)
-    print(f"  → {nom_pdf} ({len(produits_a)} ligne(s))")
+    print(f"  → {nom_pdf} ({len(groupes)} produit(s), {len(produits_a)} ligne(s) commande)")
     return nom_pdf
 
 
@@ -300,7 +370,7 @@ def main():
         par_lettre[p["lettre"]].append(p)
 
     # Lettre A (Bazar) : format PDF dedie, pas dans le .txt.
-    produits_a = sorted(par_lettre.pop("A", []), key=lambda p: (p["commande"], p["gencod"]))
+    produits_a = par_lettre.pop("A", [])
 
     sections = []
     for lettre in sorted(par_lettre.keys()):
@@ -339,7 +409,7 @@ def main():
     if produits_a:
         print(f"\nGeneration du PDF Lettre A ({len(produits_a)} produit(s)) ...")
         annee = maintenant.strftime("%Y")
-        chemin_pdf = _generer_pdf_lettre_a(produits_a, dossier_jj_mm, annee)
+        chemin_pdf = _generer_pdf_lettre_a(drive_svc, produits_a, dossier_jj_mm, annee)
         if chemin_pdf:
             try:
                 ap.upload_bon(drive_svc, chemin_pdf)
