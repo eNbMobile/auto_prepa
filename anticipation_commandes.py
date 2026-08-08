@@ -249,7 +249,7 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
     try:
         from reportlab.lib import colors
         from reportlab.lib.pagesizes import A4
-        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.lib.styles import ParagraphStyle
         from reportlab.lib.units import mm
         from reportlab.graphics.barcode import createBarcodeDrawing
         from reportlab.platypus import (Image as RLImage, PageBreak, Paragraph,
@@ -258,10 +258,11 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
         print(f"  PDF anticipation ignore : {e}")
         return None
 
-    styles   = getSampleStyleSheet()
     small    = ParagraphStyle('small', fontSize=8, leading=10)
     header_s = ParagraphStyle('hdr', fontSize=8, leading=10, textColor=colors.white)
     tiny_c   = ParagraphStyle('tiny_c', fontSize=7, leading=8, alignment=1)
+    titre_s  = ParagraphStyle('titre', fontName='Helvetica-Bold', fontSize=13,
+                              leading=16, alignment=1)
     BLEU     = colors.HexColor('#006797')
 
     def _elements_rayon(produits, lettre, nom_rayon):
@@ -270,8 +271,8 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
         groupes.sort(key=lambda g: (ordre_chemin.get(g["adresse"], fin_chemin), g["gencod"]))
 
         elements = [
-            Paragraph(f"Anticipation {nom_rayon} {date_complete}<br/>À préparer avant 7h30",
-                      styles['Title']),
+            Paragraph(f"Anticipation {nom_rayon} {date_complete} — À préparer avant 7h30",
+                      titre_s),
             Spacer(1, 5 * mm),
         ]
 
