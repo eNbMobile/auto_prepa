@@ -9,6 +9,7 @@ trie par lettre d'anticipation, uploade sur Drive.
 import io
 import os
 import re
+import urllib.request
 from collections import defaultdict
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -19,6 +20,10 @@ from googleapiclient.http import MediaIoBaseDownload
 import auto_prepa as ap
 
 _TZ = ZoneInfo("Europe/Paris")
+
+# Photos produits : servies par nom de gencod, extension inconnue a priori.
+_VISUELS_BASE_URL = "http://enbmobile.nl/mobUDrive/visuels/"
+_PHOTO_EXTENSIONS = (".jpg", ".png")
 
 # Format des lignes de bon_anticipation.txt (16 champs separes par ';') :
 # 0 gencod ; 1 libelle ; 2 prix ; 3 prix au kg/L ; 4 qte ; 5 substitution ;
@@ -63,7 +68,7 @@ def _parser_lignes_anticipation(contenu, numero_commande):
             "qte":      champs[_IDX_QTE].strip(),
             "heure":    heure,
             "adresse":  champs[_IDX_ADRESSE].strip(),
-            "lettre":   champs[-1].strip() or "?",
+            "lettre":   champs[-1].strip().upper() or "?",
         })
     return produits
 
@@ -134,6 +139,134 @@ def _telecharger_texte(drive_svc, file_id):
     return buf.getvalue().decode("utf-8", errors="replace")
 
 
+def _telecharger_photo(gencod, cache):
+    """Recupere la photo produit (jpg ou png) depuis enbmobile.nl/mobUDrive/visuels/.
+
+    Retourne les octets de l'image, ou None si introuvable. Resultat mis en
+    cache par gencod pour eviter de re-telecharger le meme visuel plusieurs
+    fois dans un meme PDF."""
+    if gencod in cache:
+        return cache[gencod]
+    for ext in _PHOTO_EXTENSIONS:
+        url = f"{_VISUELS_BASE_URL}{gencod}{ext}"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = resp.read()
+            cache[gencod] = data
+            return data
+        except Exception:
+            continue
+    cache[gencod] = None
+    return None
+
+
+def _generer_pdf_lettre_a(produits_a, dossier_jj_mm, annee):
+    """Genere le PDF Lettre A (Bazar) : une ligne par produit avec commande,
+    photo, code-barres EAN13 + gencod, libelle et quantite. Retourne le
+    chemin local du PDF, ou None si reportlab est indisponible / liste vide."""
+    if not produits_a:
+        return None
+
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.lib.units import mm
+        from reportlab.graphics.barcode import createBarcodeDrawing
+        from reportlab.platypus import (Image as RLImage, Paragraph, SimpleDocTemplate,
+                                        Spacer, Table, TableStyle)
+    except Exception as e:
+        print(f"  PDF lettre A ignore : {e}")
+        return None
+
+    nom_pdf = f"anticipation_A_{dossier_jj_mm}.pdf"
+    doc = SimpleDocTemplate(nom_pdf, pagesize=A4,
+                            topMargin=8 * mm, bottomMargin=8 * mm,
+                            leftMargin=5 * mm, rightMargin=5 * mm)
+
+    styles   = getSampleStyleSheet()
+    small    = ParagraphStyle('small', fontSize=8, leading=10)
+    header_s = ParagraphStyle('hdr', fontSize=8, leading=10, textColor=colors.white)
+    tiny_c   = ParagraphStyle('tiny_c', fontSize=7, leading=8, alignment=1)
+
+    elements = [
+        Paragraph(f"<b>Anticipation Lettre A (Bazar) — {dossier_jj_mm}/{annee}</b>"
+                  f"&nbsp;&nbsp;({len(produits_a)} produit(s))", styles['Title']),
+        Spacer(1, 5 * mm),
+    ]
+
+    col_widths = [60, 60, 100, 314, 32]
+    hdr = [Paragraph(t, header_s) for t in
+           ('Commande', 'Photo', 'Code-barres', 'Libellé', 'Qté')]
+    data = [hdr]
+
+    cache_photos = {}
+    for p in produits_a:
+        gencod = p['gencod']
+
+        photo_cell = ''
+        photo_bytes = _telecharger_photo(gencod, cache_photos) if gencod else None
+        if photo_bytes:
+            try:
+                photo_cell = RLImage(io.BytesIO(photo_bytes), width=18 * mm, height=18 * mm, kind='bound')
+            except Exception:
+                photo_cell = ''
+
+        bc = None
+        if len(gencod) == 13 and gencod.isdigit():
+            try:
+                bc = createBarcodeDrawing('EAN13', value=gencod, width=95, height=28,
+                                          humanReadable=False)
+            except Exception:
+                bc = None
+        if bc:
+            bc_cell = Table(
+                [[bc], [Paragraph(gencod, tiny_c)]],
+                colWidths=[100],
+                style=TableStyle([
+                    ('ALIGN',         (0, 0), (-1, -1), 'CENTER'),
+                    ('TOPPADDING',    (0, 0), (-1, -1), 0),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+                    ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+                    ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+                ]),
+            )
+        else:
+            bc_cell = Paragraph(gencod, small)
+
+        data.append([
+            Paragraph(p['commande'], small),
+            photo_cell,
+            bc_cell,
+            Paragraph(p['libelle'], small),
+            Paragraph(p['qte'], small),
+        ])
+
+    BLEU = colors.HexColor('#006797')
+    style = TableStyle([
+        ('BACKGROUND',     (0, 0), (-1, 0), BLEU),
+        ('FONTNAME',       (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE',       (0, 0), (-1, 0), 8),
+        ('ALIGN',          (0, 0), (-1, 0), 'CENTER'),
+        ('FONTSIZE',       (0, 1), (-1, -1), 8),
+        ('ALIGN',          (0, 1), (0, -1), 'CENTER'),
+        ('ALIGN',          (4, 1), (4, -1), 'CENTER'),
+        ('VALIGN',         (0, 0), (-1, -1), 'MIDDLE'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#EEF6FB')]),
+        ('GRID',           (0, 0), (-1, -1), 0.3, colors.lightgrey),
+        ('TOPPADDING',     (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING',  (0, 0), (-1, -1), 6),
+    ])
+
+    table = Table(data, colWidths=col_widths, repeatRows=1)
+    table.setStyle(style)
+    elements.append(table)
+    doc.build(elements)
+    print(f"  → {nom_pdf} ({len(produits_a)} ligne(s))")
+    return nom_pdf
+
+
 def main():
     os.makedirs(ap.WORK_DIR, exist_ok=True)
 
@@ -166,6 +299,9 @@ def main():
     for p in tous_produits:
         par_lettre[p["lettre"]].append(p)
 
+    # Lettre A (Bazar) : format PDF dedie, pas dans le .txt.
+    produits_a = sorted(par_lettre.pop("A", []), key=lambda p: (p["commande"], p["gencod"]))
+
     sections = []
     for lettre in sorted(par_lettre.keys()):
         produits_lettre = sorted(par_lettre[lettre], key=lambda p: (p["commande"], p["gencod"]))
@@ -181,6 +317,7 @@ def main():
         f"{len(fichiers)} commande(s) avec anticipation, "
         f"{len(tous_produits)} produit(s) anticipable(s)\n"
         f"Colonnes : commande;gencod;libelle;prix;qte;heure;adresse\n"
+        + (f"Lettre A : voir anticipation_A_{dossier_jj_mm}.pdf\n" if produits_a else "")
         + "=" * 50 + "\n\n"
     )
     corps = "\n".join(sections) if sections else "(aucun produit anticipable aujourd'hui)\n"
@@ -198,6 +335,17 @@ def main():
 
     print(f"\n{nom_fichier} => Drive OK "
           f"({len(fichiers)} commande(s) avec produits anticipables)")
+
+    if produits_a:
+        print(f"\nGeneration du PDF Lettre A ({len(produits_a)} produit(s)) ...")
+        annee = maintenant.strftime("%Y")
+        chemin_pdf = _generer_pdf_lettre_a(produits_a, dossier_jj_mm, annee)
+        if chemin_pdf:
+            try:
+                ap.upload_bon(drive_svc, chemin_pdf)
+            finally:
+                if os.path.exists(chemin_pdf):
+                    os.remove(chemin_pdf)
 
 
 if __name__ == "__main__":
