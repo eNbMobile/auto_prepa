@@ -232,21 +232,19 @@ def _grouper_produits(produits):
     return resultat
 
 
-def _generer_pdf_rayon(produits, lettre, nom_rayon, dossier_jj_mm, date_complete, ordre_chemin):
-    """Genere le PDF d'un rayon (lettre d'anticipation) : une ligne par
-    produit (gencod) avec commande(s), photo, code-barres EAN13 + gencod,
-    libelle, prix et quantite(s). Les produits identiques provenant de
-    plusieurs commandes sont regroupes sur une seule ligne (commande/qte
-    empiles dans la meme case), et les lignes sont triees selon l'ordre du
-    chemin de preparation (chemin_prepa_ramasse.csv, via ordre_chemin).
-    Retourne le chemin local du PDF, ou None si reportlab est indisponible /
-    liste vide."""
-    if not produits:
+def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin):
+    """Genere un unique PDF reunissant tous les rayons fournis (produits_pdf :
+    {lettre: [produit, ...]}), chaque rayon demarrant en haut d'une nouvelle
+    page. Pour chaque rayon : une ligne par produit (gencod) avec
+    commande(s), photo, code-barres EAN13 + gencod, libelle, prix et
+    quantite(s) (+ poids pour la Boucherie). Les produits identiques
+    provenant de plusieurs commandes sont regroupes sur une seule ligne
+    (commande/qte empiles dans la meme case), et les lignes sont triees
+    selon l'ordre du chemin de preparation (chemin_prepa_ramasse.csv, via
+    ordre_chemin). Retourne le chemin local du PDF, ou None si reportlab est
+    indisponible / produits_pdf est vide."""
+    if not produits_pdf:
         return None
-
-    groupes = _grouper_produits(produits)
-    fin_chemin = len(ordre_chemin)
-    groupes.sort(key=lambda g: (ordre_chemin.get(g["adresse"], fin_chemin), g["gencod"]))
 
     try:
         from reportlab.lib import colors
@@ -254,108 +252,126 @@ def _generer_pdf_rayon(produits, lettre, nom_rayon, dossier_jj_mm, date_complete
         from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
         from reportlab.lib.units import mm
         from reportlab.graphics.barcode import createBarcodeDrawing
-        from reportlab.platypus import (Image as RLImage, Paragraph, SimpleDocTemplate,
-                                        Spacer, Table, TableStyle)
+        from reportlab.platypus import (Image as RLImage, PageBreak, Paragraph,
+                                        SimpleDocTemplate, Spacer, Table, TableStyle)
     except Exception as e:
-        print(f"  PDF {nom_rayon} ignore : {e}")
+        print(f"  PDF anticipation ignore : {e}")
         return None
-
-    nom_pdf = f"anticipation_{lettre}_{dossier_jj_mm}.pdf"
-    doc = SimpleDocTemplate(nom_pdf, pagesize=A4,
-                            topMargin=8 * mm, bottomMargin=8 * mm,
-                            leftMargin=5 * mm, rightMargin=5 * mm)
 
     styles   = getSampleStyleSheet()
     small    = ParagraphStyle('small', fontSize=8, leading=10)
     header_s = ParagraphStyle('hdr', fontSize=8, leading=10, textColor=colors.white)
     tiny_c   = ParagraphStyle('tiny_c', fontSize=7, leading=8, alignment=1)
+    BLEU     = colors.HexColor('#006797')
 
-    elements = [
-        Paragraph(f"Anticipation {nom_rayon} {date_complete}", styles['Title']),
-        Spacer(1, 5 * mm),
-    ]
+    def _elements_rayon(produits, lettre, nom_rayon):
+        groupes = _grouper_produits(produits)
+        fin_chemin = len(ordre_chemin)
+        groupes.sort(key=lambda g: (ordre_chemin.get(g["adresse"], fin_chemin), g["gencod"]))
 
-    # Boucherie (lettre B) : colonne Poids en plus, juste avant le Prix.
-    avec_poids = (lettre == "B")
-    largeur_code_barres = 95
-    if avec_poids:
-        col_widths = [60, 55, largeur_code_barres, 201, 45, 55, 30]
-        hdr_txts = ('Commande', 'Photo', 'Code-barres', 'Libellé', 'Poids', 'Prix', 'Qté')
-    else:
-        col_widths = [60, 55, largeur_code_barres, 246, 55, 30]
-        hdr_txts = ('Commande', 'Photo', 'Code-barres', 'Libellé', 'Prix', 'Qté')
-    derniere_col = len(hdr_txts) - 1
+        elements = [
+            Paragraph(f"Anticipation {nom_rayon} {date_complete}<br/>À préparer avant 7h30",
+                      styles['Title']),
+            Spacer(1, 5 * mm),
+        ]
 
-    hdr = [Paragraph(t, header_s) for t in hdr_txts]
-    data = [hdr]
-
-    cache_photos = {}
-    for g in groupes:
-        gencod = g['gencod']
-
-        photo_cell = ''
-        photo_bytes = _telecharger_photo(gencod, cache_photos) if gencod else None
-        if photo_bytes:
-            try:
-                photo_cell = RLImage(io.BytesIO(photo_bytes), width=18 * mm, height=18 * mm, kind='bound')
-            except Exception:
-                photo_cell = ''
-
-        bc = None
-        if len(gencod) == 13 and gencod.isdigit():
-            try:
-                bc = createBarcodeDrawing('EAN13', value=gencod, width=largeur_code_barres, height=28,
-                                          humanReadable=False)
-            except Exception:
-                bc = None
-        if bc:
-            bc_cell = Table(
-                [[bc], [Paragraph(gencod, tiny_c)]],
-                colWidths=[largeur_code_barres],
-                style=TableStyle([
-                    ('ALIGN',         (0, 0), (-1, -1), 'CENTER'),
-                    ('TOPPADDING',    (0, 0), (-1, -1), 0),
-                    ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-                    ('LEFTPADDING',   (0, 0), (-1, -1), 0),
-                    ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
-                ]),
-            )
-        else:
-            bc_cell = Paragraph(gencod, small)
-
-        # Produit identique dans plusieurs commandes : commande et qte
-        # empilees l'une sous l'autre, dans la meme case.
-        commande_cell = Paragraph("<br/>".join(c for c, _ in g['lignes']), small)
-        qte_cell      = Paragraph("<br/>".join(q for _, q in g['lignes']), small)
-
-        row = [commande_cell, photo_cell, bc_cell, Paragraph(g['libelle'], small)]
+        # Boucherie (lettre B) : colonne Poids en plus, juste avant le Prix.
+        avec_poids = (lettre == "B")
+        largeur_code_barres = 95
         if avec_poids:
-            row.append(Paragraph(g['poids'], small))
-        row.append(Paragraph(g['prix'], small))
-        row.append(qte_cell)
-        data.append(row)
+            col_widths = [60, 55, largeur_code_barres, 214, 45, 42, 30]
+            hdr_txts = ('Commande', 'Photo', 'Code-barres', 'Libellé', 'Poids', 'Prix', 'Qté')
+        else:
+            col_widths = [60, 55, largeur_code_barres, 259, 42, 30]
+            hdr_txts = ('Commande', 'Photo', 'Code-barres', 'Libellé', 'Prix', 'Qté')
+        derniere_col = len(hdr_txts) - 1
 
-    BLEU = colors.HexColor('#006797')
-    style = TableStyle([
-        ('BACKGROUND',     (0, 0), (-1, 0), BLEU),
-        ('FONTNAME',       (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE',       (0, 0), (-1, 0), 8),
-        ('ALIGN',          (0, 0), (-1, 0), 'CENTER'),
-        ('FONTSIZE',       (0, 1), (-1, -1), 8),
-        ('ALIGN',          (0, 1), (2, -1), 'CENTER'),
-        ('ALIGN',          (4, 1), (derniere_col, -1), 'CENTER'),
-        ('VALIGN',         (0, 0), (-1, -1), 'MIDDLE'),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#EEF6FB')]),
-        ('GRID',           (0, 0), (-1, -1), 0.3, colors.lightgrey),
-        ('TOPPADDING',     (0, 0), (-1, -1), 6),
-        ('BOTTOMPADDING',  (0, 0), (-1, -1), 6),
-    ])
+        hdr = [Paragraph(t, header_s) for t in hdr_txts]
+        data = [hdr]
 
-    table = Table(data, colWidths=col_widths, repeatRows=1)
-    table.setStyle(style)
-    elements.append(table)
-    doc.build(elements)
-    print(f"  → {nom_pdf} ({len(groupes)} produit(s), {len(produits)} ligne(s) commande)")
+        cache_photos = {}
+        for g in groupes:
+            gencod = g['gencod']
+
+            photo_cell = ''
+            photo_bytes = _telecharger_photo(gencod, cache_photos) if gencod else None
+            if photo_bytes:
+                try:
+                    photo_cell = RLImage(io.BytesIO(photo_bytes), width=18 * mm, height=18 * mm, kind='bound')
+                except Exception:
+                    photo_cell = ''
+
+            bc = None
+            if len(gencod) == 13 and gencod.isdigit():
+                try:
+                    bc = createBarcodeDrawing('EAN13', value=gencod, width=largeur_code_barres, height=28,
+                                              humanReadable=False)
+                except Exception:
+                    bc = None
+            if bc:
+                bc_cell = Table(
+                    [[bc], [Paragraph(gencod, tiny_c)]],
+                    colWidths=[largeur_code_barres],
+                    style=TableStyle([
+                        ('ALIGN',         (0, 0), (-1, -1), 'CENTER'),
+                        ('TOPPADDING',    (0, 0), (-1, -1), 0),
+                        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+                        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+                        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+                    ]),
+                )
+            else:
+                bc_cell = Paragraph(gencod, small)
+
+            # Produit identique dans plusieurs commandes : commande et qte
+            # empilees l'une sous l'autre, dans la meme case.
+            commande_cell = Paragraph("<br/>".join(c for c, _ in g['lignes']), small)
+            qte_cell      = Paragraph("<br/>".join(q for _, q in g['lignes']), small)
+
+            row = [commande_cell, photo_cell, bc_cell, Paragraph(g['libelle'], small)]
+            if avec_poids:
+                poids_txt = f"{g['poids']} Kg" if g['poids'] else ''
+                row.append(Paragraph(poids_txt, small))
+            prix_txt = f"{g['prix']} €" if g['prix'] else ''
+            row.append(Paragraph(prix_txt, small))
+            row.append(qte_cell)
+            data.append(row)
+
+        style = TableStyle([
+            ('BACKGROUND',     (0, 0), (-1, 0), BLEU),
+            ('FONTNAME',       (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE',       (0, 0), (-1, 0), 8),
+            ('ALIGN',          (0, 0), (-1, 0), 'CENTER'),
+            ('FONTSIZE',       (0, 1), (-1, -1), 8),
+            ('ALIGN',          (0, 1), (2, -1), 'CENTER'),
+            ('ALIGN',          (4, 1), (derniere_col, -1), 'CENTER'),
+            ('VALIGN',         (0, 0), (-1, -1), 'MIDDLE'),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#EEF6FB')]),
+            ('GRID',           (0, 0), (-1, -1), 0.3, colors.lightgrey),
+            ('TOPPADDING',     (0, 0), (-1, -1), 6),
+            ('BOTTOMPADDING',  (0, 0), (-1, -1), 6),
+        ])
+
+        table = Table(data, colWidths=col_widths, repeatRows=1)
+        table.setStyle(style)
+        elements.append(table)
+        print(f"  {nom_rayon} (lettre {lettre}) : {len(groupes)} produit(s), "
+              f"{len(produits)} ligne(s) commande")
+        return elements
+
+    nom_pdf = f"anticipation_{dossier_jj_mm}.pdf"
+    doc = SimpleDocTemplate(nom_pdf, pagesize=A4,
+                            topMargin=8 * mm, bottomMargin=8 * mm,
+                            leftMargin=5 * mm, rightMargin=5 * mm)
+
+    elements_total = []
+    for i, lettre in enumerate(sorted(produits_pdf.keys())):
+        if i > 0:
+            elements_total.append(PageBreak())
+        elements_total.extend(_elements_rayon(produits_pdf[lettre], lettre, RAYONS_LETTRE[lettre]))
+
+    doc.build(elements_total)
+    print(f"  → {nom_pdf} ({len(produits_pdf)} rayon(s))")
     return nom_pdf
 
 
@@ -405,10 +421,10 @@ def main():
         )
         sections.append(entete_section + corps_lignes + "\n")
 
-    mentions_pdf = "".join(
-        f"Lettre {lettre} ({RAYONS_LETTRE[lettre]}) : voir anticipation_{lettre}_{dossier_jj_mm}.pdf\n"
-        for lettre in sorted(produits_pdf.keys())
-    )
+    mentions_pdf = (
+        "Lettre(s) " + ", ".join(f"{l} ({RAYONS_LETTRE[l]})" for l in sorted(produits_pdf.keys()))
+        + f" : voir anticipation_{dossier_jj_mm}.pdf\n"
+    ) if produits_pdf else ""
     entete = (
         f"Produits anticipables du {dossier_jj_mm}/{maintenant.strftime('%Y')}\n"
         f"{len(fichiers)} commande(s) avec anticipation, "
@@ -436,19 +452,14 @@ def main():
     if produits_pdf:
         date_complete = maintenant.strftime("%d/%m/%Y")
         ordre_chemin = _charger_ordre_chemin_prepa(drive_svc)
-        for lettre in sorted(produits_pdf.keys()):
-            nom_rayon = RAYONS_LETTRE[lettre]
-            produits_lettre = produits_pdf[lettre]
-            print(f"\nGeneration du PDF {nom_rayon} (lettre {lettre}, "
-                  f"{len(produits_lettre)} produit(s)) ...")
-            chemin_pdf = _generer_pdf_rayon(produits_lettre, lettre, nom_rayon,
-                                            dossier_jj_mm, date_complete, ordre_chemin)
-            if chemin_pdf:
-                try:
-                    ap.upload_bon(drive_svc, chemin_pdf)
-                finally:
-                    if os.path.exists(chemin_pdf):
-                        os.remove(chemin_pdf)
+        print(f"\nGeneration du PDF anticipation ({len(produits_pdf)} rayon(s)) ...")
+        chemin_pdf = _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin)
+        if chemin_pdf:
+            try:
+                ap.upload_bon(drive_svc, chemin_pdf)
+            finally:
+                if os.path.exists(chemin_pdf):
+                    os.remove(chemin_pdf)
 
 
 if __name__ == "__main__":
