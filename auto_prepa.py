@@ -361,7 +361,8 @@ def upload_bon(drive_svc, local_path):
     except Exception:
         existing = []
 
-    media = MediaFileUpload(local_path, mimetype="text/plain", resumable=False)
+    mimetype = "application/pdf" if filename.lower().endswith(".pdf") else "text/plain"
+    media = MediaFileUpload(local_path, mimetype=mimetype, resumable=False)
     try:
         if existing:
             drive_svc.files().update(
