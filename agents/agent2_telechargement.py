@@ -144,6 +144,20 @@ _IMG_RE = re.compile(r'https://static\.coursesu\.com[^"\'>\s]+demandware[^"\'>\s
 _MSG_AUCUNE_CORRESPONDANCE = "produits similaires à votre recherche"
 
 
+def _base_et_cle(ean):
+    """Famille produit (6 chiffres après le 0 de tête) et clé de contrôle
+    EAN-13 recalculée pour le code générique famille+000000+clé."""
+    base = ean[1:7]
+    radical = "0" + base + "00000"
+    total = sum(int(d) * (1 if i % 2 == 0 else 3) for i, d in enumerate(radical))
+    cle = (10 - total % 10) % 10
+    return base, cle
+
+
+def _est_poids_variable(ean):
+    return len(ean) == 13 and ean.startswith("0")
+
+
 def _codes_recherche(ean):
     """Les EAN poids variable (13 chiffres, préfixe 0) encodent un prix/poids
     variable dans les positions 8-12 : ça ne correspond à aucun produit sur
@@ -153,13 +167,22 @@ def _codes_recherche(ean):
     par une vraie clé de contrôle EAN-13 recalculée — pas de règle fixe, donc
     on essaie les deux variantes dans l'ordre.
     Ex : 0253082080037 → 253082000000 puis 253082000004."""
-    if len(ean) == 13 and ean.startswith("0"):
-        base = ean[1:7]
-        radical = "0" + base + "00000"
-        total = sum(int(d) * (1 if i % 2 == 0 else 3) for i, d in enumerate(radical))
-        cle = (10 - total % 10) % 10
+    if _est_poids_variable(ean):
+        base, cle = _base_et_cle(ean)
         return [base + "000000", base + "00000" + str(cle)]
     return [ean]
+
+
+def _ean_normalise(ean):
+    """EAN canonique à utiliser pour le stockage/la déduplication d'un
+    produit poids variable : préfixe 0 conservé, positions médianes à 0,
+    clé de contrôle EAN-13 réelle en dernière position (pas la variante
+    tout-à-zéro, qui n'est qu'un artefact de recherche côté coursesu.com).
+    Ex : 0253071051437 → 0253071000008."""
+    if _est_poids_variable(ean):
+        base, cle = _base_et_cle(ean)
+        return "0" + base + "00000" + str(cle)
+    return ean
 
 
 def deja_sur_enbmobile(session, ean):
@@ -225,8 +248,13 @@ def chercher_image(session, ean):
 
 
 def telecharger_visuel(session, ean):
-    if deja_sur_enbmobile(session, ean):
-        return "deja_present", None, URL_VERIF.format(ean=ean)
+    # Pour un produit poids variable, l'image doit être stockée/recherchée
+    # sous l'EAN générique de la famille, pas sous l'EAN de l'instance
+    # scannée (qui varie selon le poids/prix).
+    cle_stockage = _ean_normalise(ean)
+
+    if deja_sur_enbmobile(session, cle_stockage):
+        return "deja_present", None, URL_VERIF.format(ean=cle_stockage)
 
     url_image = chercher_image(session, ean)
     if not url_image:
@@ -244,7 +272,7 @@ def telecharger_visuel(session, ean):
     if r.status_code != 200 or len(r.content) < 500:
         return "absent", None, None
 
-    dest = VISUELS_DIR / f"{ean}.png"
+    dest = VISUELS_DIR / f"{cle_stockage}.png"
     try:
         from PIL import Image
         import io
