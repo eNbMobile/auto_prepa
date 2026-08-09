@@ -245,12 +245,7 @@ def telecharger_visuel(session, ean):
         return "absent", None, None
 
     ctype = r.headers.get("Content-Type", "").lower()
-    if "jpeg" in ctype or "jpg" in ctype:
-        ext = ".jpg"
-    elif "webp" in ctype:
-        ext = ".webp"
-    else:
-        ext = ".png"
+    ext = ".jpg" if ("jpeg" in ctype or "jpg" in ctype) else ".png"
     dest = VISUELS_DIR / f"{ean}{ext}"
     dest.write_bytes(r.content)
     return "ok", str(dest), url_image
