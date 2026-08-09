@@ -912,6 +912,13 @@ def _main():
                     montant_pdf = _m.group(1).replace(',', '.')
                 break
 
+        heure_pdf = heure_cron
+        for _ligne in pt.stdout.splitlines():
+            _m = re.search(r'[Gg]énéré le \d{2}/\d{2}/\d{4} à (\d{1,2}):(\d{2})', _ligne)
+            if _m:
+                heure_pdf = f"{int(_m.group(1)):02d}h{_m.group(2)}"
+                break
+
         print(f"  [{order_num}] Generation...", end="", flush=True)
         r = subprocess.run(["./prepa_drive_degrade"], cwd=WORK_DIR,
                            capture_output=True, text=True, timeout=120)
@@ -955,7 +962,7 @@ def _main():
         if lignes:
             if montant_pdf:
                 lignes[0] = lignes[0].rstrip('\n') + ',' + montant_pdf
-            lignes[0] = lignes[0].rstrip('\n') + ',' + heure_cron + '\n'
+            lignes[0] = lignes[0].rstrip('\n') + ',' + heure_pdf + '\n'
             lignes[1:] = [re.sub(r'^(?:-\d+)?;(\d{13};)', r'\1', l) for l in lignes[1:]]
         with open(bon_prepa_path, 'w', encoding='utf-8') as f:
             f.writelines(lignes)
