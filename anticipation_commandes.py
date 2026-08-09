@@ -6,6 +6,7 @@ auto_prepa.py) et les assemble dans un seul fichier anticipation_JJ_MM.txt,
 trie par lettre d'anticipation, uploade sur Drive.
 """
 
+import base64
 import io
 import os
 import re
@@ -20,6 +21,9 @@ from googleapiclient.http import MediaIoBaseDownload
 import auto_prepa as ap
 
 _TZ = ZoneInfo("Europe/Paris")
+
+# Destinataire du resultat final de l'anticipation du jour (txt + pdf).
+_EMAIL_RESULTAT_ANTICIPATION = "superu.arnage.drive@systeme-u.fr"
 
 # Photos produits : servies par nom de gencod, extension inconnue a priori.
 _VISUELS_BASE_URL = "http://enbmobile.nl/mobUDrive/visuels/"
@@ -376,11 +380,43 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
     return nom_pdf
 
 
+def _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_txt, chemin_pdf):
+    """Envoie par email le resultat de l'anticipation du jour (txt + pdf eventuel)."""
+    from email.mime.application import MIMEApplication
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    try:
+        msg = MIMEMultipart()
+        msg["To"] = _EMAIL_RESULTAT_ANTICIPATION
+        msg["Subject"] = f"Anticipation {dossier_jj_mm}"
+        msg.attach(MIMEText(
+            f"Bonjour,\n\nCi-joint le resultat de l'anticipation du {dossier_jj_mm}.\n",
+            "plain", "utf-8"))
+
+        for chemin in (chemin_txt, chemin_pdf):
+            if not chemin or not os.path.exists(chemin):
+                continue
+            with open(chemin, "rb") as f:
+                data = f.read()
+            sous_type = "pdf" if chemin.lower().endswith(".pdf") else "octet-stream"
+            part = MIMEApplication(data, sous_type)
+            part.add_header("Content-Disposition", "attachment", filename=os.path.basename(chemin))
+            msg.attach(part)
+
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
+        print(f"  Email anticipation envoye => {_EMAIL_RESULTAT_ANTICIPATION}")
+    except Exception as e:
+        print(f"  Envoi email anticipation echoue : {e}")
+
+
 def main():
     os.makedirs(ap.WORK_DIR, exist_ok=True)
 
     creds = ap.get_credentials()
     drive_svc = build("drive", "v3", credentials=creds)
+    gmail_svc = build("gmail", "v1", credentials=creds)
 
     ap._charger_config(drive_svc)
 
@@ -441,26 +477,28 @@ def main():
     chemin_local = os.path.join(ap.WORK_DIR, nom_fichier)
     with open(chemin_local, "w", encoding="utf-8") as f:
         f.write(contenu_final)
-    try:
-        ap.upload_bon(drive_svc, chemin_local)
-    finally:
-        if os.path.exists(chemin_local):
-            os.remove(chemin_local)
 
-    print(f"\n{nom_fichier} => Drive OK "
-          f"({len(fichiers)} commande(s) avec produits anticipables)")
-
+    chemin_pdf = None
     if produits_pdf:
         date_complete = maintenant.strftime("%d/%m/%Y")
         ordre_chemin = _charger_ordre_chemin_prepa(drive_svc)
         print(f"\nGeneration du PDF anticipation ({len(produits_pdf)} rayon(s)) ...")
         chemin_pdf = _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin)
+
+    try:
+        ap.archiver_resultat_anticipation_drive(drive_svc, chemin_local, dossier_mm_aaaa, dossier_jj_mm)
         if chemin_pdf:
-            try:
-                ap.upload_bon(drive_svc, chemin_pdf)
-            finally:
-                if os.path.exists(chemin_pdf):
-                    os.remove(chemin_pdf)
+            ap.archiver_resultat_anticipation_drive(drive_svc, chemin_pdf, dossier_mm_aaaa, dossier_jj_mm)
+
+        print(f"\n{nom_fichier} => Drive Anticipation/archives OK "
+              f"({len(fichiers)} commande(s) avec produits anticipables)")
+
+        _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_local, chemin_pdf)
+    finally:
+        if os.path.exists(chemin_local):
+            os.remove(chemin_local)
+        if chemin_pdf and os.path.exists(chemin_pdf):
+            os.remove(chemin_pdf)
 
 
 if __name__ == "__main__":

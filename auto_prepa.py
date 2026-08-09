@@ -491,6 +491,50 @@ def archiver_anticipation_drive(drive_svc, anticipation_path, dossier_jj_mm, dos
     except Exception as e:
         print(f"    Archivage Drive {path}/ echoue : {e}")
 
+def archiver_resultat_anticipation_drive(drive_svc, local_path, dossier_mm_aaaa, dossier_jj_mm):
+    """Depose le resultat final de l'anticipation du jour (anticipation_JJ_MM.txt/.pdf)
+    dans Drive GITHUB/Anticipation/archives/MM_AAAA/JJ_MM/, ecrase s'il existe deja."""
+    filename = os.path.basename(local_path)
+    path = f"GITHUB/Anticipation/archives/{dossier_mm_aaaa}/{dossier_jj_mm}"
+    try:
+        github_id = _get_or_create_subfolder(drive_svc, "root", "GITHUB")
+        if not github_id:
+            return False
+        anticipation_id = _get_or_create_subfolder(drive_svc, github_id, "Anticipation")
+        if not anticipation_id:
+            return False
+        archives_id = _get_or_create_subfolder(drive_svc, anticipation_id, "archives")
+        if not archives_id:
+            return False
+        mois_id = _get_or_create_subfolder(drive_svc, archives_id, dossier_mm_aaaa)
+        if not mois_id:
+            return False
+        subfolder_id = _get_or_create_subfolder(drive_svc, mois_id, dossier_jj_mm)
+        if not subfolder_id:
+            return False
+
+        res = drive_svc.files().list(
+            q=f"name='{filename}' and '{subfolder_id}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        existing = res.get("files", [])
+
+        mimetype = "application/pdf" if filename.lower().endswith(".pdf") else "text/plain"
+        media = MediaFileUpload(local_path, mimetype=mimetype, resumable=False)
+        if existing:
+            drive_svc.files().update(fileId=existing[0]["id"], media_body=media).execute()
+        else:
+            drive_svc.files().create(
+                body={"name": filename, "parents": [subfolder_id]},
+                media_body=media,
+                fields="id",
+            ).execute()
+        print(f"    {filename} => Drive {path}/ OK")
+        return True
+    except Exception as e:
+        print(f"    Archivage Drive {path}/ echoue : {e}")
+        return False
+
 def _supprimer_anticipation_archive_drive(drive_svc, numero):
     """Supprime la copie de bon_anticipation_NUMERO.txt archivee sous GITHUB/Anticipation/."""
     nom = f"bon_anticipation_{numero}.txt"
