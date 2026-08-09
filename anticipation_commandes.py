@@ -22,9 +22,6 @@ import auto_prepa as ap
 
 _TZ = ZoneInfo("Europe/Paris")
 
-# Destinataire du resultat final de l'anticipation du jour (txt + pdf).
-_EMAIL_RESULTAT_ANTICIPATION = "superu.arnage.drive@systeme-u.fr"
-
 # Photos produits : servies par nom de gencod, extension inconnue a priori.
 _VISUELS_BASE_URL = "http://enbmobile.nl/mobUDrive/visuels/"
 _PHOTO_EXTENSIONS = (".jpg", ".png")
@@ -381,14 +378,20 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
 
 
 def _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_txt, chemin_pdf):
-    """Envoie par email le resultat de l'anticipation du jour (txt + pdf eventuel)."""
+    """Envoie par email le resultat de l'anticipation du jour (txt + pdf eventuel)
+    au destinataire configure sur Drive (config.json / email_anticipation_archive)."""
+    destinataire = ap.EMAIL_ANTICIPATION_ARCHIVE
+    if not destinataire:
+        print("  Envoi email anticipation ignore : email_anticipation_archive absent de config.json")
+        return
+
     from email.mime.application import MIMEApplication
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
 
     try:
         msg = MIMEMultipart()
-        msg["To"] = _EMAIL_RESULTAT_ANTICIPATION
+        msg["To"] = destinataire
         msg["Subject"] = f"Anticipation {dossier_jj_mm}"
         msg.attach(MIMEText(
             f"Bonjour,\n\nCi-joint le resultat de l'anticipation du {dossier_jj_mm}.\n",
@@ -406,7 +409,7 @@ def _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_txt, chemin_pdf):
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
-        print(f"  Email anticipation envoye => {_EMAIL_RESULTAT_ANTICIPATION}")
+        print(f"  Email anticipation envoye => {destinataire}")
     except Exception as e:
         print(f"  Envoi email anticipation echoue : {e}")
 
