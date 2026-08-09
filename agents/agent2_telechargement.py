@@ -15,7 +15,7 @@ DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
 VISUELS_DIR = Path(os.environ.get("VISUELS_DIR", os.path.expanduser("~/visuels")))
 BASE_URL = os.environ.get("COURSESU_URL", "https://www.coursesu.com")
 DELAY = float(os.environ.get("DELAY_DL", "1.5"))
-BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "50"))
+BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "0"))  # 0 = pas de limite, traite tout à chaque passage
 TRAITES_CACHE = Path(os.path.expanduser("~/.agent2_traites.json"))
 IMAGE_SIZE = int(os.environ.get("IMAGE_SIZE", "400"))
 URL_VERIF = os.environ.get("URL_VERIF", "https://enbmobile.nl/mobUDrive/visuels/{ean}.png")
@@ -144,19 +144,22 @@ _IMG_RE = re.compile(r'https://static\.coursesu\.com[^"\'>\s]+demandware[^"\'>\s
 _MSG_AUCUNE_CORRESPONDANCE = "produits similaires à votre recherche"
 
 
-def _code_recherche(ean):
+def _codes_recherche(ean):
     """Les EAN poids variable (13 chiffres, préfixe 0) encodent un prix/poids
     variable dans les positions 8-12 : ça ne correspond à aucun produit sur
     coursesu.com. Il faut interroger le code générique de la famille produit :
-    préfixe 0 retiré, positions 7-11 remises à 0, clé de contrôle recalculée.
-    Ex : 0253082080037 → 253082000004."""
+    préfixe 0 retiré, positions 7-11 remises à 0. Selon les produits, le code
+    de référence stocké chez coursesu.com se termine soit par des zéros, soit
+    par une vraie clé de contrôle EAN-13 recalculée — pas de règle fixe, donc
+    on essaie les deux variantes dans l'ordre.
+    Ex : 0253082080037 → 253082000000 puis 253082000004."""
     if len(ean) == 13 and ean.startswith("0"):
         base = ean[1:7]
         radical = "0" + base + "00000"
         total = sum(int(d) * (1 if i % 2 == 0 else 3) for i, d in enumerate(radical))
         cle = (10 - total % 10) % 10
-        return base + "00000" + str(cle)
-    return ean
+        return [base + "000000", base + "00000" + str(cle)]
+    return [ean]
 
 
 def deja_sur_enbmobile(session, ean):
@@ -184,8 +187,7 @@ def _ajuster_taille(url):
     return url
 
 
-def chercher_image(session, ean):
-    code = _code_recherche(ean)
+def _chercher_avec_code(session, code):
     url = f"{BASE_URL.rstrip('/')}/recherche?q={code}"
     headers = {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
@@ -205,11 +207,20 @@ def chercher_image(session, ean):
 
     for brut in _IMG_RE.findall(r.text):
         candidat = _ajuster_taille(_nettoyer_url(brut))
-        # Le nom de fichier commence par le code recherché : filtre les
-        # dernières suggestions résiduelles qui ne correspondraient pas.
+        # Le nom de fichier commence par le code recherché (avec ou sans le
+        # zéro de tête, selon le produit) : filtre les suggestions résiduelles
+        # sans rapport.
         nom_fichier = candidat.rsplit("/", 1)[-1]
-        if nom_fichier.startswith(code):
+        if nom_fichier.startswith(code) or nom_fichier.startswith("0" + code):
             return candidat
+    return None
+
+
+def chercher_image(session, ean):
+    for code in _codes_recherche(ean):
+        url_image = _chercher_avec_code(session, code)
+        if url_image:
+            return url_image
     return None
 
 
@@ -255,7 +266,9 @@ def traiter_batch(service, session):
         return 0
 
     traites = _charger_traites()
-    a_traiter = [e for e in tous_eans if e["ean"] not in traites][:BATCH_SIZE]
+    a_traiter = [e for e in tous_eans if e["ean"] not in traites]
+    if BATCH_SIZE > 0:
+        a_traiter = a_traiter[:BATCH_SIZE]
 
     if not a_traiter:
         return 0

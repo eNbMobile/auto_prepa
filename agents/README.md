@@ -61,7 +61,9 @@ Variables d'environnement :
 - `DRIVE_CONFIG_FOLDER_ID` : même ID que le secret GitHub
 - `VISUELS_DIR` : dossier de destination (défaut : `~/visuels`)
 - `DELAY_DL` : délai entre téléchargements en secondes (défaut : 1.5)
-- `BATCH_SIZE` : nombre d'EAN par passe (défaut : 50)
+- `BATCH_SIZE` : nombre d'EAN par passe, `0` = pas de limite (défaut : `0`)
+- `IMAGE_SIZE` : taille en pixels des visuels téléchargés (défaut : 400)
+- `URL_VERIF` : URL à vérifier avant de chercher sur coursesu.com, `{ean}` est remplacé par le gencod (défaut : `https://enbmobile.nl/mobUDrive/visuels/{ean}.png`)
 
 Prérequis : `~/.credentials_drive.json` + Firefox connecté à coursesu.com
 
