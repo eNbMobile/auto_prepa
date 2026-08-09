@@ -17,6 +17,8 @@ BASE_URL = os.environ.get("COURSESU_URL", "https://www.coursesu.com")
 DELAY = float(os.environ.get("DELAY_DL", "1.5"))
 BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "50"))
 TRAITES_CACHE = Path(os.path.expanduser("~/.agent2_traites.json"))
+IMAGE_SIZE = int(os.environ.get("IMAGE_SIZE", "400"))
+URL_VERIF = os.environ.get("URL_VERIF", "https://enbmobile.nl/mobUDrive/visuels/{ean}.png")
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -134,29 +136,113 @@ def _get_session():
 # ──────────────────────────────────────────────────────────────────
 # Téléchargement visuel
 # ──────────────────────────────────────────────────────────────────
+# coursesu.com tourne sur Salesforce Commerce Cloud : il n'y a pas
+# d'URL d'image prévisible à partir de l'EAN seul, il faut passer par
+# la recherche du site et en extraire l'URL réelle sur static.coursesu.com.
 
-_PATTERNS = [
-    "/media/catalog/product/{e0}/{e1}/{ean}.jpg",
-    "/media/catalog/product/{e0}/{e1}/{ean}.png",
-    "/media/catalog/product/{e0}/{e1}/{ean}_1.jpg",
-    "/img/produits/{ean}.jpg",
-]
+_IMG_RE = re.compile(r'https://static\.coursesu\.com[^"\'>\s]+demandware[^"\'>\s]+')
+_MSG_AUCUNE_CORRESPONDANCE = "produits similaires à votre recherche"
+
+
+def _code_recherche(ean):
+    """Les EAN poids variable (13 chiffres, préfixe 0) encodent un prix/poids
+    variable dans les positions 8-12 : ça ne correspond à aucun produit sur
+    coursesu.com. Il faut interroger le code générique de la famille produit :
+    préfixe 0 retiré, positions 7-11 remises à 0, clé de contrôle recalculée.
+    Ex : 0253082080037 → 253082000004."""
+    if len(ean) == 13 and ean.startswith("0"):
+        base = ean[1:7]
+        radical = "0" + base + "00000"
+        total = sum(int(d) * (1 if i % 2 == 0 else 3) for i, d in enumerate(radical))
+        cle = (10 - total % 10) % 10
+        return base + "00000" + str(cle)
+    return ean
+
+
+def deja_sur_enbmobile(session, ean):
+    url = URL_VERIF.format(ean=ean)
+    try:
+        r = session.head(url, timeout=8)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def _nettoyer_url(url):
+    if url.count("https://") > 1:
+        url = url.split("https://", 1)[1]
+        url = "https://" + url.split("https://")[0]
+    m = re.search(r'(.*?sm=fit)', url)
+    if m:
+        url = m.group(1)
+    return url.replace("&amp;", "&")
+
+
+def _ajuster_taille(url):
+    url = re.sub(r'sw=\d+', f'sw={IMAGE_SIZE}', url)
+    url = re.sub(r'sh=\d+', f'sh={IMAGE_SIZE}', url)
+    return url
+
+
+def chercher_image(session, ean):
+    code = _code_recherche(ean)
+    url = f"{BASE_URL.rstrip('/')}/recherche?q={code}"
+    headers = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "fr-FR,fr;q=0.9",
+        "Referer": BASE_URL.rstrip("/") + "/",
+    }
+    try:
+        r = session.get(url, headers=headers, timeout=15)
+    except Exception:
+        return None
+    if r.status_code != 200:
+        return None
+    if _MSG_AUCUNE_CORRESPONDANCE in r.text.lower():
+        # coursesu affiche des suggestions sans rapport quand le code exact
+        # n'est pas trouvé — pas de résultat exploitable.
+        return None
+
+    for brut in _IMG_RE.findall(r.text):
+        candidat = _ajuster_taille(_nettoyer_url(brut))
+        # Le nom de fichier commence par le code recherché : filtre les
+        # dernières suggestions résiduelles qui ne correspondraient pas.
+        nom_fichier = candidat.rsplit("/", 1)[-1]
+        if nom_fichier.startswith(code):
+            return candidat
+    return None
 
 
 def telecharger_visuel(session, ean):
-    e0, e1 = ean[0], ean[1]
-    for pattern in _PATTERNS:
-        url = BASE_URL.rstrip("/") + pattern.format(ean=ean, e0=e0, e1=e1)
-        try:
-            r = session.get(url, timeout=15)
-            if r.status_code == 200 and len(r.content) > 500:
-                ext = ".jpg" if "jpeg" in r.headers.get("Content-Type", "").lower() else ".png"
-                dest = VISUELS_DIR / f"{ean}{ext}"
-                dest.write_bytes(r.content)
-                return "ok", str(dest), url
-        except Exception:
-            continue
-    return "absent", None, None
+    if deja_sur_enbmobile(session, ean):
+        return "deja_present", None, URL_VERIF.format(ean=ean)
+
+    url_image = chercher_image(session, ean)
+    if not url_image:
+        return "absent", None, None
+
+    headers = {
+        "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+        "Referer": BASE_URL.rstrip("/") + "/",
+        "Accept-Language": "fr-FR,fr;q=0.9",
+    }
+    try:
+        r = session.get(url_image, headers=headers, timeout=15)
+    except Exception:
+        return "absent", None, None
+    if r.status_code != 200 or len(r.content) < 500:
+        return "absent", None, None
+
+    ctype = r.headers.get("Content-Type", "").lower()
+    if "jpeg" in ctype or "jpg" in ctype:
+        ext = ".jpg"
+    elif "webp" in ctype:
+        ext = ".webp"
+    else:
+        ext = ".png"
+    dest = VISUELS_DIR / f"{ean}{ext}"
+    dest.write_bytes(r.content)
+    return "ok", str(dest), url_image
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -176,7 +262,7 @@ def traiter_batch(service, session):
 
     print(f"  {len(a_traiter)} EAN à traiter (sur {len(tous_eans)} au total)")
     VISUELS_DIR.mkdir(parents=True, exist_ok=True)
-    ok = absent = 0
+    ok = deja = absent = 0
 
     for item in a_traiter:
         ean = item["ean"]
@@ -185,14 +271,18 @@ def traiter_batch(service, session):
         if statut == "ok":
             print(f"    ✓ {ean} → {chemin}")
             ok += 1
+        elif statut == "deja_present":
+            print(f"    ⏭ {ean} → déjà présent sur enbmobile.nl")
+            deja += 1
+            continue  # pas de requête coursesu.com, pas besoin de temporiser
         else:
             print(f"    ✗ {ean} → introuvable")
             absent += 1
         time.sleep(DELAY)
 
     _sauvegarder_traites(traites)
-    print(f"  Résultat : {ok} ok, {absent} absents")
-    return ok + absent
+    print(f"  Résultat : {ok} ok, {deja} déjà présents, {absent} absents")
+    return ok + deja + absent
 
 
 def main():
