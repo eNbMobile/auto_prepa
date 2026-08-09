@@ -244,10 +244,14 @@ def telecharger_visuel(session, ean):
     if r.status_code != 200 or len(r.content) < 500:
         return "absent", None, None
 
-    ctype = r.headers.get("Content-Type", "").lower()
-    ext = ".jpg" if ("jpeg" in ctype or "jpg" in ctype) else ".png"
-    dest = VISUELS_DIR / f"{ean}{ext}"
-    dest.write_bytes(r.content)
+    dest = VISUELS_DIR / f"{ean}.png"
+    try:
+        from PIL import Image
+        import io
+        with Image.open(io.BytesIO(r.content)) as img:
+            img.convert("RGBA").save(dest, "PNG")
+    except Exception:
+        return "absent", None, None
     return "ok", str(dest), url_image
 
 
