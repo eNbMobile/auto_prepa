@@ -280,6 +280,7 @@ def traiter_batch(service, session):
         ean = item["ean"]
         statut, chemin, url = telecharger_visuel(session, ean)
         traites[ean] = {"statut": statut, "chemin": chemin, "bdc": item.get("bdc_numero")}
+        _sauvegarder_traites(traites)  # à chaque EAN : un Ctrl+C ne perd que l'EAN en cours
         if statut == "ok":
             print(f"    ✓ {ean} → {chemin}")
             ok += 1
@@ -292,7 +293,6 @@ def traiter_batch(service, session):
             absent += 1
         time.sleep(DELAY)
 
-    _sauvegarder_traites(traites)
     print(f"  Résultat : {ok} ok, {deja} déjà présents, {absent} absents")
     return ok + deja + absent
 
