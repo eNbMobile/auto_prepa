@@ -47,7 +47,6 @@ DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
 DRIVE_BONS_FOLDER_ID = ""
 DRIVE_BDC_FOLDER_ID  = ""
 EMAIL_ANTICIPATION   = ""
-EMAIL_ANTICIPATION_ARCHIVE = ""  # destinataire du resultat final anticipation_JJ_MM (config Drive)
 
 CONFIG_FILES = [
     "chemin_prepa_mono.csv",
@@ -817,7 +816,7 @@ def main():
 
 def _charger_config(drive_svc):
     """Charge config.json depuis DRIVE_CONFIG_FOLDER_ID et initialise les globals."""
-    global DRIVE_BONS_FOLDER_ID, DRIVE_BDC_FOLDER_ID, EMAIL_ANTICIPATION, EMAIL_ANTICIPATION_ARCHIVE
+    global DRIVE_BONS_FOLDER_ID, DRIVE_BDC_FOLDER_ID, EMAIL_ANTICIPATION
     if not DRIVE_CONFIG_FOLDER_ID:
         print("ERREUR : secret DRIVE_CONFIG_FOLDER_ID manquant.")
         sys.exit(1)
@@ -839,7 +838,6 @@ def _charger_config(drive_svc):
         DRIVE_BONS_FOLDER_ID = cfg["drive_bons_folder_id"]
         DRIVE_BDC_FOLDER_ID  = cfg["drive_bdc_folder_id"]
         EMAIL_ANTICIPATION   = cfg.get("email_destinataire", "")
-        EMAIL_ANTICIPATION_ARCHIVE = cfg.get("email_anticipation_archive", "")
     except Exception as e:
         print(f"ERREUR chargement config Drive : {e}")
         sys.exit(1)
