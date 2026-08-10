@@ -379,10 +379,10 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
 
 def _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_txt, chemin_pdf):
     """Envoie par email le resultat de l'anticipation du jour (txt + pdf eventuel)
-    au destinataire configure sur Drive (config.json / email_anticipation_archive)."""
-    destinataire = ap.EMAIL_ANTICIPATION_ARCHIVE
+    au destinataire configure sur Drive (config.json / email_destinataire)."""
+    destinataire = ap.EMAIL_ANTICIPATION
     if not destinataire:
-        print("  Envoi email anticipation ignore : email_anticipation_archive absent de config.json")
+        print("  Envoi email anticipation ignore : email_destinataire absent de config.json")
         return
 
     from email.mime.application import MIMEApplication
