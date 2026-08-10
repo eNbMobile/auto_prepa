@@ -353,9 +353,10 @@ def calculer_vms(gencods, date_reference, nb_semaines=5):
     """Calcule la Vente Moyenne Semaine (VMS) pour les gencods fournis.
 
     Cumule les cumuls hebdomadaires (ventes_SXX.csv, générés par
-    cumul_ventes_semaine.py et archivés dans Drive Archives/VMS/) des
-    nb_semaines dernières semaines complètes précédant la semaine de
-    date_reference, puis divise par nb_semaines. Retourne {gencod: vms}.
+    cumul_ventes_semaine.py et archivés dans Drive MobuDrive_Config_archives
+    (DRIVE_CONFIG_FOLDER_ID) / Archives/VMS/) des nb_semaines dernières
+    semaines complètes précédant la semaine de date_reference, puis divise
+    par nb_semaines. Retourne {gencod: vms}.
 
     Une semaine dont le fichier n'est pas trouvé (pas encore généré, Drive
     inaccessible, …) est ignorée dans le cumul.
@@ -372,7 +373,7 @@ def calculer_vms(gencods, date_reference, nb_semaines=5):
         nom_csv = f"ventes_S{numero:02d}.csv"
         chemin_local = os.path.join(WORK_DIR, nom_csv)
         if not os.path.exists(chemin_local):
-            telecharger_fichier_archive("VMS", nom_csv, chemin_local)
+            telecharger_fichier_archive("VMS", nom_csv, chemin_local, root_id=DRIVE_CONFIG_FOLDER_ID)
         if not os.path.exists(chemin_local):
             print(f"  {nom_csv} introuvable — semaine ignorée dans le calcul VMS.")
             continue
@@ -531,12 +532,14 @@ def telecharger_fichier_controle(nom, dest=None):
         return None
 
 
-def telecharger_fichier_archive(subfolder, nom, dest=None):
-    """Télécharge 'nom' depuis DRIVE_CONTROLE_FOLDER_ID/Archives/{subfolder}/.
+def telecharger_fichier_archive(subfolder, nom, dest=None, root_id=None):
+    """Télécharge 'nom' depuis {root_id}/Archives/{subfolder}/.
 
+    root_id  : dossier Drive racine (défaut : DRIVE_CONTROLE_FOLDER_ID).
     Retourne le chemin local ou None (dossier/fichier absent, Drive inaccessible).
     """
-    if not DRIVE_CONTROLE_FOLDER_ID:
+    root_id = root_id or DRIVE_CONTROLE_FOLDER_ID
+    if not root_id:
         return None
     try:
         import io
@@ -544,7 +547,7 @@ def telecharger_fichier_archive(subfolder, nom, dest=None):
         svc = _get_drive_service()
         if not svc:
             return None
-        archives_id = _trouver_dossier_drive(svc, DRIVE_CONTROLE_FOLDER_ID, "Archives")
+        archives_id = _trouver_dossier_drive(svc, root_id, "Archives")
         if not archives_id:
             return None
         sub_id = _trouver_dossier_drive(svc, archives_id, subfolder)

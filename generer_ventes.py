@@ -45,7 +45,7 @@ def main():
             writer.writerow([gencod, qty, libelles.get(gencod, "")])
 
     print(f"Ventes sauvegardées : {chemin_ventes} ({len(ventes)} gencods)")
-    cs.upload_to_archive(chemin_ventes, "ventes")
+    cs.upload_to_archive(chemin_ventes, "ventes", root_id=cs.DRIVE_CONFIG_FOLDER_ID)
 
 
 if __name__ == "__main__":
