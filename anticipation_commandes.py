@@ -2,8 +2,8 @@
 """
 Recupere tous les bon_anticipation_NUMERO.txt deja archives dans la journee
 sur Drive (GITHUB/Anticipation/MM_AAAA/JJ_MM, deposes au fil de l'eau par
-auto_prepa.py) et les assemble dans un seul fichier anticipation_JJ_MM.txt,
-trie par lettre d'anticipation, uploade sur Drive.
+auto_prepa.py), les regroupe par lettre d'anticipation et genere le PDF
+anticipation_JJ_MM.pdf (un rayon par page), uploade sur Drive.
 """
 
 import base64
@@ -27,8 +27,8 @@ _VISUELS_BASE_URL = "http://enbmobile.nl/mobUDrive/visuels/"
 _PHOTO_EXTENSIONS = (".jpg", ".png")
 
 # Lettres d'anticipation dont le rayon est connu : format PDF dedie (photo,
-# code-barres, prix, ...) au lieu du .txt. Les lettres absentes d'ici (rayon
-# pas encore defini) restent dans le anticipation_JJ_MM.txt.
+# code-barres, prix, ...). Les lettres absentes d'ici (rayon pas encore
+# defini) sont ignorees (pas de PDF possible pour elles).
 RAYONS_LETTRE = {
     "A": "Bazar",
     "B": "Boucherie",
@@ -377,12 +377,14 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
     return nom_pdf
 
 
-def _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_txt, chemin_pdf):
-    """Envoie par email le resultat de l'anticipation du jour (txt + pdf eventuel)
-    au destinataire configure sur Drive (config.json / email_destinataire)."""
+def _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf):
+    """Envoie par email le PDF d'anticipation du jour au destinataire
+    configure sur Drive (config.json / email_destinataire)."""
     destinataire = ap.EMAIL_ANTICIPATION
     if not destinataire:
         print("  Envoi email anticipation ignore : email_destinataire absent de config.json")
+        return
+    if not chemin_pdf or not os.path.exists(chemin_pdf):
         return
 
     from email.mime.application import MIMEApplication
@@ -397,15 +399,11 @@ def _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_txt, chemin_pdf):
             f"Bonjour,\n\nCi-joint le resultat de l'anticipation du {dossier_jj_mm}.\n",
             "plain", "utf-8"))
 
-        for chemin in (chemin_txt, chemin_pdf):
-            if not chemin or not os.path.exists(chemin):
-                continue
-            with open(chemin, "rb") as f:
-                data = f.read()
-            sous_type = "pdf" if chemin.lower().endswith(".pdf") else "octet-stream"
-            part = MIMEApplication(data, sous_type)
-            part.add_header("Content-Disposition", "attachment", filename=os.path.basename(chemin))
-            msg.attach(part)
+        with open(chemin_pdf, "rb") as f:
+            data = f.read()
+        part = MIMEApplication(data, "pdf")
+        part.add_header("Content-Disposition", "attachment", filename=os.path.basename(chemin_pdf))
+        msg.attach(part)
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
@@ -447,59 +445,30 @@ def main():
     for p in tous_produits:
         par_lettre[p["lettre"]].append(p)
 
-    # Lettres avec rayon connu (RAYONS_LETTRE) : format PDF dedie, pas dans le .txt.
+    # Lettres avec rayon connu (RAYONS_LETTRE) : format PDF dedie.
     produits_pdf = {lettre: par_lettre.pop(lettre)
                     for lettre in list(par_lettre.keys()) if lettre in RAYONS_LETTRE}
 
-    sections = []
     for lettre in sorted(par_lettre.keys()):
-        produits_lettre = sorted(par_lettre[lettre], key=lambda p: (p["commande"], p["gencod"]))
-        entete_section = f"=== Lettre {lettre} ({len(produits_lettre)} produit(s)) ===\n"
-        corps_lignes = "\n".join(
-            f"{p['commande']};{p['gencod']};{p['libelle']};{p['prix']};{p['qte']};{p['heure']};{p['adresse']}"
-            for p in produits_lettre
-        )
-        sections.append(entete_section + corps_lignes + "\n")
+        print(f"  Lettre {lettre} ({len(par_lettre[lettre])} produit(s)) : "
+              f"rayon non defini, ignoree (pas de PDF)")
 
-    mentions_pdf = (
-        "Lettre(s) " + ", ".join(f"{l} ({RAYONS_LETTRE[l]})" for l in sorted(produits_pdf.keys()))
-        + f" : voir anticipation_{dossier_jj_mm}.pdf\n"
-    ) if produits_pdf else ""
-    entete = (
-        f"Produits anticipables du {dossier_jj_mm}/{maintenant.strftime('%Y')}\n"
-        f"{len(fichiers)} commande(s) avec anticipation, "
-        f"{len(tous_produits)} produit(s) anticipable(s)\n"
-        f"Colonnes : commande;gencod;libelle;prix;qte;heure;adresse\n"
-        + mentions_pdf
-        + "=" * 50 + "\n\n"
-    )
-    corps = "\n".join(sections) if sections else "(aucun produit anticipable aujourd'hui)\n"
-    contenu_final = entete + corps
+    if not produits_pdf:
+        print("Aucun produit anticipable avec rayon defini aujourd'hui.")
+        return
 
-    nom_fichier = f"anticipation_{dossier_jj_mm}.txt"
-    chemin_local = os.path.join(ap.WORK_DIR, nom_fichier)
-    with open(chemin_local, "w", encoding="utf-8") as f:
-        f.write(contenu_final)
-
-    chemin_pdf = None
-    if produits_pdf:
-        date_complete = maintenant.strftime("%d/%m/%Y")
-        ordre_chemin = _charger_ordre_chemin_prepa(drive_svc)
-        print(f"\nGeneration du PDF anticipation ({len(produits_pdf)} rayon(s)) ...")
-        chemin_pdf = _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin)
+    date_complete = maintenant.strftime("%d/%m/%Y")
+    ordre_chemin = _charger_ordre_chemin_prepa(drive_svc)
+    print(f"\nGeneration du PDF anticipation ({len(produits_pdf)} rayon(s)) ...")
+    chemin_pdf = _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin)
 
     try:
-        ap.archiver_resultat_anticipation_drive(drive_svc, chemin_local, dossier_mm_aaaa, dossier_jj_mm)
         if chemin_pdf:
             ap.archiver_resultat_anticipation_drive(drive_svc, chemin_pdf, dossier_mm_aaaa, dossier_jj_mm)
-
-        print(f"\n{nom_fichier} => Drive Anticipation/archives OK "
-              f"({len(fichiers)} commande(s) avec produits anticipables)")
-
-        _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_local, chemin_pdf)
+            print(f"\nanticipation_{dossier_jj_mm}.pdf => Drive Anticipation/archives OK "
+                  f"({len(fichiers)} commande(s) avec produits anticipables)")
+            _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf)
     finally:
-        if os.path.exists(chemin_local):
-            os.remove(chemin_local)
         if chemin_pdf and os.path.exists(chemin_pdf):
             os.remove(chemin_pdf)
 
