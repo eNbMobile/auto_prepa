@@ -3,7 +3,7 @@
 Cumule les ventes de la semaine en cours (lundi → dernier jour de vente, samedi
 par défaut : le dimanche n'a jamais de ventes, comme dans controle_stocks.py).
 Sauvegarde ventes_SXX.csv (XX = numéro de semaine sur 2 chiffres) et l'archive
-sur Drive dans Controles Stock > Archives > VMS.
+sur Drive dans MobuDrive_Config_archives > Archives > VMS.
 """
 import csv
 import os
@@ -53,7 +53,8 @@ def main():
         nom_csv = f"ventes_{jour.strftime('%d_%m')}.csv"
         chemin_local = os.path.join(cs.WORK_DIR, nom_csv)
         if not os.path.exists(chemin_local):
-            cs.telecharger_fichier_archive("ventes", nom_csv, chemin_local)
+            cs.telecharger_fichier_archive("ventes", nom_csv, chemin_local,
+                                            root_id=cs.DRIVE_CONFIG_FOLDER_ID)
         v_jour, l_jour = cs.generer_ventes(jour)
         for gencod, qty in v_jour.items():
             ventes[gencod] = ventes.get(gencod, 0) + qty
@@ -74,7 +75,7 @@ def main():
 
     print(f"\nCumul semaine {numero_semaine:02d} sauvegardé : {chemin_ventes} "
           f"({len(ventes)} gencods, {sum(ventes.values())} produits)")
-    cs.upload_to_archive(chemin_ventes, "VMS")
+    cs.upload_to_archive(chemin_ventes, "VMS", root_id=cs.DRIVE_CONFIG_FOLDER_ID)
 
 
 if __name__ == "__main__":
