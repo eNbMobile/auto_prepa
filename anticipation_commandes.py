@@ -53,6 +53,14 @@ _NB_CHAMPS_MIN = 16
 _RE_LEADING_SEQ = re.compile(r'^(?:-\d+)?;(\d{13};)')
 _RE_HEURE = re.compile(r'([01]?\d|2[0-3])[:h]([0-5]\d)')
 
+_MOIS_FR = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet",
+            "août", "septembre", "octobre", "novembre", "décembre"]
+
+
+def _date_fr(dt):
+    """Formate une date en francais complet, ex: '11 août 2026'."""
+    return f"{dt.day} {_MOIS_FR[dt.month - 1]} {dt.year}"
+
 
 def _parser_lignes_anticipation(contenu, numero_commande):
     """Parse le contenu d'un bon_anticipation.txt et ne garde que les champs utiles.
@@ -266,6 +274,37 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
                               leading=16, alignment=1)
     BLEU     = colors.HexColor('#006797')
 
+    def _cellule_libelle(libelle):
+        """Cellule Libelle : le texte produit en haut, puis en dessous deux
+        petites cases a cocher (Rupture / Substitution) a remplir a la main
+        lors de la preparation."""
+        cases = Table(
+            [['', 'Rupture', '', 'Substitution']],
+            colWidths=[10, 44, 10, 58], rowHeights=[10],
+            style=TableStyle([
+                ('BOX',           (0, 0), (0, 0), 0.5, colors.black),
+                ('BOX',           (2, 0), (2, 0), 0.5, colors.black),
+                ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+                ('TOPPADDING',    (0, 0), (-1, -1), 0),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+                ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+                ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+                ('LEFTPADDING',   (1, 0), (1, 0), 4),
+                ('LEFTPADDING',   (2, 0), (2, 0), 12),
+                ('LEFTPADDING',   (3, 0), (3, 0), 4),
+            ]),
+        )
+        return Table(
+            [[Paragraph(libelle, small)], [cases]],
+            style=TableStyle([
+                ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+                ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+                ('TOPPADDING',    (0, 0), (-1, -1), 0),
+                ('BOTTOMPADDING', (0, 0), (0, 0), 8),
+                ('BOTTOMPADDING', (0, 1), (0, 1), 0),
+            ]),
+        )
+
     def _elements_rayon(produits, lettre, nom_rayon):
         groupes = _grouper_produits(produits)
         fin_chemin = len(ordre_chemin)
@@ -330,7 +369,7 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
             commande_cell = Paragraph("<br/>".join(c for c, _ in g['lignes']), small)
             qte_cell      = Paragraph("<br/>".join(q for _, q in g['lignes']), small)
 
-            row = [commande_cell, photo_cell, bc_cell, Paragraph(g['libelle'], small)]
+            row = [commande_cell, photo_cell, bc_cell, _cellule_libelle(g['libelle'])]
             if avec_poids:
                 poids_txt = f"{g['poids']} Kg" if g['poids'] else ''
                 row.append(Paragraph(poids_txt, small))
@@ -348,6 +387,7 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
             ('ALIGN',          (0, 1), (2, -1), 'CENTER'),
             ('ALIGN',          (4, 1), (derniere_col, -1), 'CENTER'),
             ('VALIGN',         (0, 0), (-1, -1), 'MIDDLE'),
+            ('VALIGN',         (3, 1), (3, -1), 'TOP'),
             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#EEF6FB')]),
             ('GRID',           (0, 0), (-1, -1), 0.3, colors.lightgrey),
             ('TOPPADDING',     (0, 0), (-1, -1), 6),
@@ -377,7 +417,7 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
     return nom_pdf
 
 
-def _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf):
+def _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf, date_fr):
     """Envoie par email le PDF d'anticipation du jour au destinataire
     configure sur Drive (config.json / email_destinataire)."""
     destinataire = ap.EMAIL_ANTICIPATION
@@ -396,7 +436,7 @@ def _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf):
         msg["To"] = destinataire
         msg["Subject"] = f"Anticipation {dossier_jj_mm}"
         msg.attach(MIMEText(
-            f"Bonjour,\n\nCi-joint le resultat de l'anticipation du {dossier_jj_mm}.\n",
+            f"Bonjour, ci-joint l'anticipation pour la journée du {date_fr}.\n",
             "plain", "utf-8"))
 
         with open(chemin_pdf, "rb") as f:
@@ -467,7 +507,7 @@ def main():
             ap.archiver_resultat_anticipation_drive(drive_svc, chemin_pdf, dossier_mm_aaaa, dossier_jj_mm)
             print(f"\nanticipation_{dossier_jj_mm}.pdf => Drive Anticipation/archives OK "
                   f"({len(fichiers)} commande(s) avec produits anticipables)")
-            _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf)
+            _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf, _date_fr(maintenant))
     finally:
         if chemin_pdf and os.path.exists(chemin_pdf):
             os.remove(chemin_pdf)
