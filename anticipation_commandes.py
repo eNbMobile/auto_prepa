@@ -270,7 +270,7 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
     small    = ParagraphStyle('small', fontSize=8, leading=10)
     header_s = ParagraphStyle('hdr', fontSize=8, leading=10, textColor=colors.white)
     tiny_c   = ParagraphStyle('tiny_c', fontSize=7, leading=8, alignment=1)
-    tiny     = ParagraphStyle('tiny', fontSize=7, leading=8)
+    tiny     = ParagraphStyle('tiny', fontSize=5, leading=6)
     titre_s  = ParagraphStyle('titre', fontName='Helvetica-Bold', fontSize=13,
                               leading=16, alignment=1)
     BLEU     = colors.HexColor('#006797')
