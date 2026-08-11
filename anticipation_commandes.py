@@ -270,6 +270,7 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
     small    = ParagraphStyle('small', fontSize=8, leading=10)
     header_s = ParagraphStyle('hdr', fontSize=8, leading=10, textColor=colors.white)
     tiny_c   = ParagraphStyle('tiny_c', fontSize=7, leading=8, alignment=1)
+    tiny     = ParagraphStyle('tiny', fontSize=7, leading=8)
     titre_s  = ParagraphStyle('titre', fontName='Helvetica-Bold', fontSize=13,
                               leading=16, alignment=1)
     BLEU     = colors.HexColor('#006797')
@@ -279,8 +280,9 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
         petites cases a cocher (Rupture / Substitution) a remplir a la main
         lors de la preparation."""
         cases = Table(
-            [['', 'Rupture', '', 'Substitution']],
-            colWidths=[10, 44, 10, 58], rowHeights=[10],
+            [[Paragraph('', tiny_c), Paragraph('Rupture', tiny),
+              Paragraph('', tiny_c), Paragraph('Substitution', tiny)]],
+            colWidths=[9, 50, 9, 44], rowHeights=[9],
             style=TableStyle([
                 ('BOX',           (0, 0), (0, 0), 0.5, colors.black),
                 ('BOX',           (2, 0), (2, 0), 0.5, colors.black),
@@ -289,9 +291,9 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
                 ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
                 ('LEFTPADDING',   (0, 0), (-1, -1), 0),
                 ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
-                ('LEFTPADDING',   (1, 0), (1, 0), 4),
-                ('LEFTPADDING',   (2, 0), (2, 0), 12),
-                ('LEFTPADDING',   (3, 0), (3, 0), 4),
+                ('LEFTPADDING',   (1, 0), (1, 0), 3),
+                ('RIGHTPADDING',  (1, 0), (1, 0), 16),
+                ('LEFTPADDING',   (3, 0), (3, 0), 3),
             ]),
         )
         return Table(
