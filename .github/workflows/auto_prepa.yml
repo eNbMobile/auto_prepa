@@ -2,6 +2,11 @@ name: aut_prep
 
 on:
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Forcer la vérification immédiate (ignore la fenêtre horaire)"
+        type: boolean
+        default: false
 
 concurrency:
   group: aut_prep
@@ -18,7 +23,15 @@ jobs:
 
       - name: Déterminer la fenêtre d'exécution
         id: check_window
+        env:
+          FORCE_RUN: ${{ github.event.inputs.force }}
         run: |
+          if [ "$FORCE_RUN" = "true" ]; then
+            echo "Déclenchement manuel forcé — fenêtre horaire ignorée"
+            echo "run_window=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           export TZ='Europe/Paris'
           weekday=$(date +%u)   # 1=lundi ... 7=dimanche
           hour=$(date +%-H)
