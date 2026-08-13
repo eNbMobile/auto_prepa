@@ -21,6 +21,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 
+import livraison_drive
+
 _BASE = os.path.dirname(os.path.abspath(__file__))
 WORK_DIR  = os.environ.get("WORK_DIR",  os.path.join(_BASE, "v 4.0.0"))
 CACHE_DIR = os.environ.get("CACHE_DIR", os.path.join(_BASE, "pdf_cache"))
@@ -48,6 +50,7 @@ DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
 DRIVE_BONS_FOLDER_ID = ""
 DRIVE_BDC_FOLDER_ID  = ""
 EMAIL_ANTICIPATION   = ""
+LIVRAISON_SPREADSHEET_ID = ""
 
 CONFIG_FILES = [
     "chemin_prepa_mono.csv",
@@ -904,7 +907,7 @@ def main():
 
 def _charger_config(drive_svc):
     """Charge config.json depuis DRIVE_CONFIG_FOLDER_ID et initialise les globals."""
-    global DRIVE_BONS_FOLDER_ID, DRIVE_BDC_FOLDER_ID, EMAIL_ANTICIPATION
+    global DRIVE_BONS_FOLDER_ID, DRIVE_BDC_FOLDER_ID, EMAIL_ANTICIPATION, LIVRAISON_SPREADSHEET_ID
     if not DRIVE_CONFIG_FOLDER_ID:
         print("ERREUR : secret DRIVE_CONFIG_FOLDER_ID manquant.")
         sys.exit(1)
@@ -926,6 +929,8 @@ def _charger_config(drive_svc):
         DRIVE_BONS_FOLDER_ID = cfg["drive_bons_folder_id"]
         DRIVE_BDC_FOLDER_ID  = cfg["drive_bdc_folder_id"]
         EMAIL_ANTICIPATION   = cfg.get("email_destinataire", "")
+        LIVRAISON_SPREADSHEET_ID = (cfg.get("livraison_spreadsheet_id", "").strip()
+                                     or livraison_drive.LIVRAISON_SPREADSHEET_ID_DEFAUT)
     except Exception as e:
         print(f"ERREUR chargement config Drive : {e}")
         sys.exit(1)
@@ -967,6 +972,7 @@ def _main():
     creds = get_credentials()
     drive_svc = build("drive", "v3", credentials=creds)
     gmail_svc = build("gmail", "v1", credentials=creds)
+    sheets_svc = build("sheets", "v4", credentials=creds)
 
     _charger_config(drive_svc)
     _charger_gmail_filters(drive_svc)
@@ -1094,6 +1100,11 @@ def _main():
 
         with open(bon_prepa_path, 'r', encoding='utf-8') as f:
             lignes = f.readlines()
+
+        if len(lignes) > 1 and ',Livraison,' in lignes[1]:
+            livraison_drive.traiter_commande_livraison(
+                sheets_svc, LIVRAISON_SPREADSHEET_ID, nom, prenom, date_cde)
+
         if lignes:
             if montant_pdf:
                 lignes[0] = lignes[0].rstrip('\n') + ',' + montant_pdf
