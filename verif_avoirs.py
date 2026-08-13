@@ -3,10 +3,11 @@
 Workflow "vav" : pour chaque commande listee dans Drive GITHUB/Avoir/
 "Commandes en cours" (civilite, nom, prenom, date, creneau), verifie si le
 client a un avoir jaune (du, pas encore deduit) dans le classeur Google
-Sheets "Avoir/Demarque" — un avoir n'etant valable que 3 mois, seuls les
-onglets du mois courant et des deux mois precedents sont regardes. Envoie un
-mail par avoir trouve, puis vide "Commandes en cours" (hors en-tete) pour ne
-pas retraiter ces commandes au prochain declenchement.
+Sheets "Avoir/Demarque" — un avoir etant valable 3 mois a compter de sa
+DATE DEBUT, les onglets du mois courant et des 3 mois precedents sont
+regardes (cf. _onglets_a_verifier). Envoie un mail par avoir trouve, puis
+vide "Commandes en cours" (hors en-tete) pour ne pas retraiter ces
+commandes au prochain declenchement.
 """
 import base64
 import io
@@ -96,9 +97,12 @@ def _formatter_montant(brut):
         return brut if '€' in brut else f"{brut} €"
 
 
-def _onglets_a_verifier(date_ref, nb_mois=3):
+def _onglets_a_verifier(date_ref, nb_mois=4):
     """Noms d'onglets (normalises) des nb_mois derniers mois, mois courant
-    inclus — inutile de regarder plus loin, un avoir n'est valable que 3 mois."""
+    inclus. Un avoir est valable 3 mois a compter de sa DATE DEBUT ; un avoir
+    saisi en toute fin de mois (ex. 31 mai) reste donc valide jusqu'a fin du
+    4e mois (31 aout) — d'ou nb_mois=4 pour ne rater aucun onglet contenant
+    encore des avoirs valides. Le filtre precis reste _date_fin_valide()."""
     onglets = []
     y, m = date_ref.year, date_ref.month
     for i in range(nb_mois):
@@ -160,7 +164,8 @@ def _charger_config_avoir(drive_svc):
 
 
 def _lire_avoirs_jaunes(sheets_svc, spreadsheet_id, date_ref):
-    """Lit les lignes a fond jaune (avoir du) des onglets des 3 derniers mois."""
+    """Lit les lignes a fond jaune (avoir du) des onglets des derniers mois
+    (cf. _onglets_a_verifier)."""
     onglets_cibles = _onglets_a_verifier(date_ref)
     meta = sheets_svc.spreadsheets().get(
         spreadsheetId=spreadsheet_id, fields="sheets.properties.title").execute()
@@ -300,7 +305,8 @@ def main():
     aujourdhui = datetime.now(_TZ).date()
     print(f"Lecture des avoirs jaunes ({aujourdhui.strftime('%d/%m/%Y')}) …")
     avoirs_jaunes = _lire_avoirs_jaunes(sheets_svc, avoir_spreadsheet_id, aujourdhui)
-    print(f"→ {len(avoirs_jaunes)} avoir(s) jaune(s) (du) sur les 3 derniers mois.")
+    print(f"→ {len(avoirs_jaunes)} avoir(s) jaune(s) (du) sur les onglets "
+          f"{', '.join(_onglets_a_verifier(aujourdhui))}.")
 
     fichier = _trouver_fichier_commandes(drive_svc)
     if not fichier:
@@ -319,14 +325,23 @@ def main():
     gmail_svc = cs._get_gmail_service()
     nb_envoyes = 0
     for civilite, nom, prenom, date_cde, creneau in commandes:
+        print(f"\nVerification : {civilite} {nom} {prenom} (commande du {date_cde}, {creneau})")
+        trouve = False
         for avoir in avoirs_jaunes:
             if not (_champs_correspondent(nom, avoir["nom"])
                     and _champs_correspondent(prenom, avoir["prenom"])):
                 continue
+            trouve = True
             if not _date_fin_valide(avoir["date_fin"], aujourdhui):
+                print(f"  Avoir trouve ({avoir['onglet']}, {avoir['nom']} {avoir['prenom']}) "
+                      f"mais expire (date fin {avoir['date_fin']}) — ignore.")
                 continue
+            print(f"  Avoir trouve ({avoir['onglet']}, {avoir['nom']} {avoir['prenom']}, "
+                  f"{avoir['montant']}) — envoi du mail.")
             _envoyer_email_avoir(gmail_svc, email_destinataire, civilite, avoir, date_cde, creneau)
             nb_envoyes += 1
+        if not trouve:
+            print("  Aucun avoir jaune correspondant.")
 
     print(f"\n{nb_envoyes} email(s) envoye(s).")
 
