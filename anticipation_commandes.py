@@ -10,6 +10,7 @@ import base64
 import io
 import os
 import re
+import sys
 import urllib.request
 from collections import defaultdict
 from datetime import datetime
@@ -421,9 +422,20 @@ def main():
 
     ap._charger_config(drive_svc)
 
-    maintenant = datetime.now(_TZ)
-    dossier_mm_aaaa = maintenant.strftime("%m_%Y")
-    dossier_jj_mm = maintenant.strftime("%d_%m")
+    jour_cible = datetime.now(_TZ)
+    args = sys.argv[1:]
+    if "--date" in args:
+        i = args.index("--date")
+        if i + 1 < len(args):
+            try:
+                j, m, a = args[i + 1].split("/")
+                jour_cible = jour_cible.replace(year=int(a), month=int(m), day=int(j))
+            except Exception:
+                print(f"Format de date invalide : {args[i + 1]} (attendu JJ/MM/AAAA)")
+                sys.exit(1)
+
+    dossier_mm_aaaa = jour_cible.strftime("%m_%Y")
+    dossier_jj_mm = jour_cible.strftime("%d_%m")
 
     print(f"Recherche des anticipations du {dossier_jj_mm}/{dossier_mm_aaaa} "
           f"sur Drive GITHUB/Anticipation...")
@@ -457,7 +469,7 @@ def main():
         print("Aucun produit anticipable avec rayon defini aujourd'hui.")
         return
 
-    date_complete = maintenant.strftime("%d/%m/%Y")
+    date_complete = jour_cible.strftime("%d/%m/%Y")
     ordre_chemin = _charger_ordre_chemin_prepa(drive_svc)
     print(f"\nGeneration du PDF anticipation ({len(produits_pdf)} rayon(s)) ...")
     chemin_pdf = _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin)
