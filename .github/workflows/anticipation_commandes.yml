@@ -2,6 +2,11 @@ name: Anticipation Commandes
 
 on:
   workflow_dispatch:
+    inputs:
+      date:
+        description: "Date (JJ/MM/AAAA) — laisser vide pour aujourd'hui"
+        required: false
+        type: string
 
 concurrency:
   group: anticipation_commandes
@@ -30,7 +35,12 @@ jobs:
           GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
           DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
           WORK_DIR: "v 4.0.0"
-        run: python3 anticipation_commandes.py
+        run: |
+          DATE_ARG=""
+          if [ -n "${{ inputs.date }}" ]; then
+            DATE_ARG="--date ${{ inputs.date }}"
+          fi
+          python3 anticipation_commandes.py $DATE_ARG
 
       - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
         continue-on-error: true
