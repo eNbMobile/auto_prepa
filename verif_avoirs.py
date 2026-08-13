@@ -36,11 +36,22 @@ def _normaliser(texte):
     return ''.join(c for c in d if unicodedata.category(c) != 'Mn')
 
 
+# Couleurs de fond reelles du classeur Avoir/Demarque (verifiees sur le
+# classeur de production) : jaune plein #FFFF00 = avoir du, vert #00B050 =
+# avoir deja deduit. Comparaison a tolerance fine pour absorber les
+# arrondis flottants de l'API Sheets, sans dependre d'une heuristique large
+# qui matcherait d'autres teintes (orange du total, etc.).
+_JAUNE_RGB = (1.0, 1.0, 0.0)
+_TOLERANCE = 0.06
+
+
+def _proche(rgb, cible):
+    return all(abs(c - r) < _TOLERANCE for c, r in zip(rgb, cible))
+
+
 def _est_jaune(rgb):
-    """Distingue un fond jaune (avoir du) d'un fond vert (avoir deja deduit)
-    ou blanc (ligne vide/hors template)."""
-    r, g, b = rgb
-    return r > 0.7 and g > 0.7 and b < min(r, g) - 0.2
+    """Vrai si le fond de la cellule correspond au jaune #FFFF00 (avoir du)."""
+    return _proche(rgb, _JAUNE_RGB)
 
 
 def _civilite_longue(civilite):
