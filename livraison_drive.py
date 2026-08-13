@@ -165,6 +165,104 @@ def _inscrire_en_attente(sheets_svc, spreadsheet_id, cible, nom_complet):
           f"{nom_complet} | {cible.strftime('%d/%m')}")
 
 
+_ROUGE = {"red": 1.0, "green": 0.0, "blue": 0.0}
+
+
+def _sheet_id(sheets_svc, spreadsheet_id, titre_onglet):
+    res = sheets_svc.spreadsheets().get(
+        spreadsheetId=spreadsheet_id, fields="sheets.properties(sheetId,title)").execute()
+    for s in res.get("sheets", []):
+        if s["properties"]["title"] == titre_onglet:
+            return s["properties"]["sheetId"]
+    return None
+
+
+def _chercher_et_colorier(sheets_svc, spreadsheet_id, titre_onglet,
+                           idx_nom, idx_date, nb_colonnes, nom_complet_cible, jour_str):
+    """Cherche, dans les nb_colonnes premieres colonnes de `titre_onglet`, une
+    ligne dont la colonne idx_nom = nom_complet_cible (compare via _normaliser)
+    et la colonne idx_date = jour_str (JJ/MM) ; si trouvee, colore ses
+    nb_colonnes premieres cellules en rouge (le fond jaune existant du
+    classeur signale une livraison a venir, le rouge une livraison annulee).
+    Retourne True si une ligne a ete trouvee et coloriee."""
+    derniere_colonne = chr(ord('A') + nb_colonnes - 1)
+    res = sheets_svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=f"'{titre_onglet}'!A2:{derniere_colonne}{1 + _MAX_LIGNES}").execute()
+    lignes = res.get("values", [])
+    for i, row in enumerate(lignes):
+        nom_val = row[idx_nom].strip() if idx_nom < len(row) and row[idx_nom] else ""
+        date_val = row[idx_date].strip() if idx_date < len(row) and row[idx_date] else ""
+        if not nom_val or not date_val:
+            continue
+        if _normaliser(nom_val) != nom_complet_cible or date_val != jour_str:
+            continue
+        ligne = 2 + i
+        sheet_id = _sheet_id(sheets_svc, spreadsheet_id, titre_onglet)
+        if sheet_id is None:
+            return False
+        sheets_svc.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"requests": [{
+                "repeatCell": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": ligne - 1, "endRowIndex": ligne,
+                        "startColumnIndex": 0, "endColumnIndex": nb_colonnes,
+                    },
+                    "cell": {"userEnteredFormat": {"backgroundColor": _ROUGE}},
+                    "fields": "userEnteredFormat.backgroundColor",
+                },
+            }]}).execute()
+        print(f"    LIVRAISON DRIVE 2026 / {titre_onglet} L{ligne} : "
+              f"{nom_val} annulee -> fond rouge.")
+        return True
+    return False
+
+
+def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde_str):
+    """A appeler pour une commande en LIVRAISON strictement annulee (pas une
+    modification/remplacement, qui ne change pas la date de livraison).
+    Localise la ligne correspondante dans LIVRAISON DRIVE 2026 — d'abord
+    l'onglet du mois de la commande, puis EN ATTENTE si absente du mois — et
+    passe son fond au rouge. La ligne n'est pas supprimee."""
+    if not sheets_svc or not spreadsheet_id:
+        print("    Sheets/LIVRAISON DRIVE 2026 indisponible, annulation livraison ignoree.")
+        return
+    if not (nom or prenom) or not date_cde_str:
+        print("    Nom/prenom/date introuvables, annulation livraison Drive ignoree.")
+        return
+    try:
+        date_cde = datetime.strptime(date_cde_str, "%d/%m/%Y").date()
+    except ValueError:
+        print(f"    Date de commande illisible ({date_cde_str}), annulation livraison Drive ignoree.")
+        return
+
+    nom_complet_cible = _normaliser(f"{nom} {prenom}".strip())
+    jour_str = date_cde.strftime("%d/%m")
+
+    try:
+        mois = MOIS_FR[date_cde.month - 1]
+        onglet_mois = _trouver_onglet(sheets_svc, spreadsheet_id, mois)
+        if onglet_mois and _chercher_et_colorier(
+                sheets_svc, spreadsheet_id, onglet_mois,
+                idx_nom=2, idx_date=1, nb_colonnes=3,
+                nom_complet_cible=nom_complet_cible, jour_str=jour_str):
+            return
+
+        onglet_attente = _trouver_onglet(sheets_svc, spreadsheet_id, ONGLET_EN_ATTENTE)
+        if onglet_attente and _chercher_et_colorier(
+                sheets_svc, spreadsheet_id, onglet_attente,
+                idx_nom=0, idx_date=1, nb_colonnes=2,
+                nom_complet_cible=nom_complet_cible, jour_str=jour_str):
+            return
+
+        print(f"    Aucune ligne LIVRAISON DRIVE 2026 trouvee pour {nom} {prenom} "
+              f"({date_cde_str}), rien a colorier.")
+    except Exception as e:
+        print(f"    Annulation LIVRAISON DRIVE 2026 echouee ({nom} {prenom}) : {e}")
+
+
 def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde_str, maintenant=None):
     """A appeler pour chaque commande en LIVRAISON (detectee via ',Livraison,'
     sur la 2e ligne de bon_prepa.txt). `date_cde_str` est au format

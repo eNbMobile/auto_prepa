@@ -258,7 +258,51 @@ def telecharger_bons_email(gmail_svc, cache_dir, traites):
 
     return nouveaux
 
-def traiter_modifications_clients(drive_svc, gmail_svc, traites):
+def _telecharger_bdc_archive_drive(drive_svc, numero):
+    """Telecharge le BonDeCommande_NUMERO.pdf archive dans Drive BDC (avant sa
+    suppression par _supprimer_bdc_drive), pour en extraire nom/prenom/date.
+    Retourne le chemin local ou None si introuvable."""
+    nom = f"BonDeCommande_{numero}.pdf"
+    try:
+        res = drive_svc.files().list(
+            q=f"name='{nom}' and trashed=false",
+            fields="files(id)",
+        ).execute()
+        files = res.get("files", [])
+        if not files:
+            return None
+        dest = os.path.join(tempfile.gettempdir(), nom)
+        download_pdf(drive_svc, files[0]["id"], dest)
+        return dest
+    except Exception as e:
+        print(f"    Telechargement archive BDC {nom} echoue : {e}")
+        return None
+
+
+def _traiter_annulation_livraison(drive_svc, sheets_svc, numero):
+    """Si la commande annulee etait une LIVRAISON, passe sa ligne dans
+    LIVRAISON DRIVE 2026 au fond rouge (le fond jaune existant du classeur
+    signale une livraison a venir). Nom/prenom/date sont extraits de
+    l'archive BDC Drive, seule source encore disponible a ce stade (le mail
+    d'annulation ne contient que le numero de commande)."""
+    pdf_path = _telecharger_bdc_archive_drive(drive_svc, numero)
+    if not pdf_path:
+        return
+    try:
+        pt = subprocess.run(["pdftotext", "-layout", pdf_path, "-"],
+                            capture_output=True, text=True)
+        if not pt.stdout.strip():
+            print(f"    ECHEC pdftotext sur l'archive BDC {numero}, annulation livraison ignoree.")
+            return
+        civilite, nom, prenom, date_cde, creneau = extraire_client_creneau_pdf(pt.stdout)
+        livraison_drive.annuler_commande_livraison(
+            sheets_svc, LIVRAISON_SPREADSHEET_ID, nom, prenom, date_cde)
+    finally:
+        if os.path.exists(pdf_path):
+            os.remove(pdf_path)
+
+
+def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites):
     """Lit les mails de modification de commande, supprime les anciens bons, archive les mails."""
     try:
         label_id = _get_or_create_gmail_label(gmail_svc, GMAIL_LABEL_NOM)
@@ -313,6 +357,7 @@ def traiter_modifications_clients(drive_svc, gmail_svc, traites):
             elif match_annul:
                 num_annule = match_annul.group(1)
                 print(f"  Annulation : cde {num_annule} supprimee")
+                _traiter_annulation_livraison(drive_svc, sheets_svc, num_annule)
                 _supprimer_bons_drive(drive_svc, num_annule)
                 _supprimer_anticipation_archive_drive(drive_svc, num_annule)
                 _supprimer_bdc_drive(drive_svc, num_annule)
@@ -982,7 +1027,7 @@ def _main():
         upload_bon(drive_svc, chemin_csv)
 
     traites = charger_traites(drive_svc)
-    traiter_modifications_clients(drive_svc, gmail_svc, traites)
+    traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites)
     nouveaux = telecharger_bons_email(gmail_svc, CACHE_DIR, traites)
 
     if not nouveaux:
