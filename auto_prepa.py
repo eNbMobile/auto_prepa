@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import io
 import base64
+import csv
 import tempfile
 import fcntl
 from datetime import date, datetime, timedelta
@@ -759,6 +760,33 @@ def extraire_articles_produits_pdf(texte):
             break
     return articles, produits
 
+_RE_CLIENT = re.compile(r'\b(M\.|Mme)\s+([A-Za-zÀ-ÿ\'\-]+(?: [A-Za-zÀ-ÿ\'\-]+){0,3})')
+_RE_DATE = re.compile(
+    r'\b(?:LUNDI|MARDI|MERCREDI|JEUDI|VENDREDI|SAMEDI|DIMANCHE)\s+(\d{2}/\d{2}/\d{4})')
+_RE_CRENEAU = re.compile(r'\b(\d{1,2}h\d{2}\s*-\s*\d{1,2}h\d{2})\b')
+
+def extraire_client_creneau_pdf(texte):
+    """Extrait (civilite, nom, prenom, date, creneau) depuis le bon d'encaissement
+    (pdftotext -layout) : civilite/nom/prenom sur la ligne client (ex. 'M. DOMMEE
+    FABRICE' ou 'Mme PEYROT SEILLIER ELOANE' - dernier mot = prenom, le reste =
+    nom) ; date et creneau dans l'encadre jour de retrait/livraison (ex. 'VENDREDI
+    14/08/2026' et '10h30 - 11h00'), sur des lignes distinctes du fait de la mise
+    en colonnes (recherches independantes)."""
+    civilite = nom = prenom = date_cde = creneau = ""
+    m_client = _RE_CLIENT.search(texte)
+    if m_client:
+        civilite = m_client.group(1)
+        mots = m_client.group(2).split(' ')
+        prenom = mots[-1]
+        nom = ' '.join(mots[:-1])
+    m_date = _RE_DATE.search(texte)
+    if m_date:
+        date_cde = m_date.group(1)
+    m_creneau = _RE_CRENEAU.search(texte)
+    if m_creneau:
+        creneau = re.sub(r'\s+', ' ', m_creneau.group(1))
+    return civilite, nom, prenom, date_cde, creneau
+
 def log_ecart_drive(drive_svc, numero, articles_pdf, produits_pdf, articles_gen, produits_gen):
     ligne = (f"{datetime.now(_TZ).strftime('%Y-%m-%d %H:%M')} | cde {numero} | "
              f"PDF : {articles_pdf} art. / {produits_pdf} pdt. | "
@@ -797,6 +825,66 @@ def log_ecart_drive(drive_svc, numero, articles_pdf, produits_pdf, articles_gen,
             os.remove(tmp)
     except Exception as e:
         print(f"    Log ecart Drive echoue : {e}")
+
+AVOIR_SHEET_FILENAME = "Commandes en cours"
+
+def inscrire_commande_avoir_drive(drive_svc, civilite, nom, prenom, date_cde, creneau):
+    """Ajoute une ligne (civilite, nom, prenom, date, creneau) au Google Sheet
+    Drive GITHUB/Avoir/Commandes en cours, pour chaque commande geree."""
+    if not (nom or prenom):
+        print("    Civilite/nom/prenom introuvables dans le PDF, ligne Avoir ignoree.")
+        return
+    try:
+        github_id = _get_or_create_subfolder(drive_svc, "root", "GITHUB")
+        if not github_id:
+            return
+        avoir_id = _get_or_create_subfolder(drive_svc, github_id, "Avoir")
+        if not avoir_id:
+            return
+
+        res = drive_svc.files().list(
+            q=(f"name='{AVOIR_SHEET_FILENAME}' and '{avoir_id}' in parents "
+               f"and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"),
+            fields="files(id)",
+        ).execute()
+        existing = res.get("files", [])
+
+        entete = ["Civilité", "Nom", "Prénom", "Date", "Créneau"]
+        lignes = [entete]
+        if existing:
+            buf = io.BytesIO()
+            dl = MediaIoBaseDownload(
+                buf, drive_svc.files().export_media(fileId=existing[0]["id"], mimeType="text/csv"))
+            done = False
+            while not done:
+                _, done = dl.next_chunk()
+            contenu = buf.getvalue().decode("utf-8-sig", errors="replace")
+            lues = [l for l in csv.reader(io.StringIO(contenu)) if l]
+            if lues:
+                lignes = lues
+
+        lignes.append([civilite, nom, prenom, date_cde, creneau])
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv",
+                                         delete=False, encoding="utf-8", newline="") as f:
+            csv.writer(f).writerows(lignes)
+            tmp = f.name
+        try:
+            media = MediaFileUpload(tmp, mimetype="text/csv", resumable=False)
+            if existing:
+                drive_svc.files().update(fileId=existing[0]["id"], media_body=media).execute()
+            else:
+                drive_svc.files().create(
+                    body={"name": AVOIR_SHEET_FILENAME, "parents": [avoir_id],
+                          "mimeType": "application/vnd.google-apps.spreadsheet"},
+                    media_body=media, fields="id",
+                ).execute()
+            print(f"    Avoir/{AVOIR_SHEET_FILENAME} : {civilite} {nom} {prenom} | "
+                  f"{date_cde} | {creneau}")
+        finally:
+            os.remove(tmp)
+    except Exception as e:
+        print(f"    Ecriture Drive GITHUB/Avoir/{AVOIR_SHEET_FILENAME} echouee : {e}")
 
 LOCK_FILE = os.path.expanduser("~/.auto_prepa.lock")
 
@@ -982,6 +1070,9 @@ def _main():
             processed.add(pdf)
             continue
         print(" OK")
+
+        civilite, nom, prenom, date_cde, creneau = extraire_client_creneau_pdf(pt.stdout)
+        inscrire_commande_avoir_drive(drive_svc, civilite, nom, prenom, date_cde, creneau)
 
         avertissements_nomenclature = [
             ligne.rstrip('\n')
