@@ -413,6 +413,17 @@ def _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf):
         print(f"  Envoi email anticipation echoue : {e}")
 
 
+def _supprimer_bons_anticipation_traites(drive_svc, fichiers):
+    """Supprime de Drive les bon_anticipation_NUMERO.txt une fois inclus dans le
+    PDF archive, pour eviter qu'ils ne soient retraites lors d'une relance."""
+    for file_id, filename in fichiers:
+        try:
+            drive_svc.files().delete(fileId=file_id).execute()
+            print(f"    Supprime Drive GITHUB/Anticipation : {filename}")
+        except Exception as e:
+            print(f"    Suppression {filename} echouee : {e}")
+
+
 def main():
     os.makedirs(ap.WORK_DIR, exist_ok=True)
 
@@ -476,10 +487,13 @@ def main():
 
     try:
         if chemin_pdf:
-            ap.archiver_resultat_anticipation_drive(drive_svc, chemin_pdf, dossier_mm_aaaa, dossier_jj_mm)
-            print(f"\nanticipation_{dossier_jj_mm}.pdf => Drive Anticipation/archives OK "
-                  f"({len(fichiers)} commande(s) avec produits anticipables)")
-            _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf)
+            archive_ok = ap.archiver_resultat_anticipation_drive(
+                drive_svc, chemin_pdf, dossier_mm_aaaa, dossier_jj_mm)
+            if archive_ok:
+                print(f"\nanticipation_{dossier_jj_mm}.pdf => Drive Anticipation/archives OK "
+                      f"({len(fichiers)} commande(s) avec produits anticipables)")
+                _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf)
+                _supprimer_bons_anticipation_traites(drive_svc, fichiers)
     finally:
         if chemin_pdf and os.path.exists(chemin_pdf):
             os.remove(chemin_pdf)
