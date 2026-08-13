@@ -36,6 +36,34 @@ def _normaliser(texte):
     return ''.join(c for c in d if unicodedata.category(c) != 'Mn')
 
 
+def _initiale(nom_normalise):
+    """Premiere lettre alphabetique d'un nom deja normalise ('' si aucune)."""
+    for c in nom_normalise:
+        if c.isalpha():
+            return c
+    return ''
+
+
+def _est_initiale(nom_normalise):
+    """Vrai si le nom normalise ne contient qu'une seule lettre (ex. 'R', 'R.')."""
+    return sum(c.isalpha() for c in nom_normalise) == 1
+
+
+def _champs_correspondent(a, b):
+    """Compare un nom ou prenom entre 'Commandes en cours' et l'Avoir, en
+    ignorant casse/accents (_normaliser) et en tolerant qu'un des deux cotes
+    ne soit renseigne que par une initiale (ex. 'R' vs 'RENAUD') — les deux
+    fichiers n'etant pas forcement remplis avec le meme niveau de detail."""
+    a, b = _normaliser(a), _normaliser(b)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if _est_initiale(a) or _est_initiale(b):
+        return _initiale(a) == _initiale(b)
+    return False
+
+
 # Couleurs de fond reelles du classeur Avoir/Demarque (verifiees sur le
 # classeur de production) : jaune plein #FFFF00 = avoir du, vert #00B050 =
 # avoir deja deduit. Comparaison a tolerance fine pour absorber les
@@ -291,9 +319,9 @@ def main():
     gmail_svc = cs._get_gmail_service()
     nb_envoyes = 0
     for civilite, nom, prenom, date_cde, creneau in commandes:
-        nom_n, prenom_n = _normaliser(nom), _normaliser(prenom)
         for avoir in avoirs_jaunes:
-            if _normaliser(avoir["nom"]) != nom_n or _normaliser(avoir["prenom"]) != prenom_n:
+            if not (_champs_correspondent(nom, avoir["nom"])
+                    and _champs_correspondent(prenom, avoir["prenom"])):
                 continue
             if not _date_fin_valide(avoir["date_fin"], aujourdhui):
                 continue
