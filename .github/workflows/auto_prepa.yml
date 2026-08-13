@@ -58,7 +58,7 @@ jobs:
             run_window=true
           elif [ "$interval" -eq 5 ] && [ $((minute % 5)) -eq 0 ]; then
             run_window=true
-          elif [ "$interval" -eq 60 ] && [ "$minute" -eq 0 ]; then
+          elif [ "$interval" -eq 60 ] && [ "$minute" -lt 3 ]; then
             run_window=true
           fi
 
