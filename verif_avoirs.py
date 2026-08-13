@@ -88,13 +88,21 @@ def _civilite_longue(civilite):
     return 'Madame' if c.startswith('MME') or c.startswith('MADAME') else 'Monsieur'
 
 
-def _formatter_montant(brut):
-    """Normalise un montant lu en cellule (ex. '7,98 €', '7.98') en '7,98 €'."""
-    nettoye = brut.replace('€', '').replace('\xa0', ' ').strip().replace(' ', '').replace(',', '.')
+def _formatter_montant(valeur):
+    """Formate un montant (nombre lu en cellule xlsx) en '7,98 €'."""
     try:
-        return f"{float(nettoye):.2f}".replace('.', ',') + " €"
-    except ValueError:
-        return brut if '€' in brut else f"{brut} €"
+        return f"{float(valeur):.2f}".replace('.', ',') + " €"
+    except (TypeError, ValueError):
+        return f"{valeur} €"
+
+
+def _formatter_date(valeur):
+    """Formate une date (datetime lue en cellule xlsx) en 'JJ/MM/AAAA'."""
+    if isinstance(valeur, datetime):
+        return valeur.strftime('%d/%m/%Y')
+    if isinstance(valeur, date):
+        return valeur.strftime('%d/%m/%Y')
+    return str(valeur)
 
 
 def _onglets_a_verifier(date_ref, nb_mois=4):
@@ -113,12 +121,12 @@ def _onglets_a_verifier(date_ref, nb_mois=4):
     return onglets
 
 
-def _date_fin_valide(date_fin_str, aujourdhui):
-    try:
-        j, m, a = date_fin_str.split('/')
-        return date(int(a), int(m), int(j)) >= aujourdhui
-    except Exception:
-        return True  # format inattendu : on ne filtre pas plutot que de perdre un avoir valide
+def _date_fin_valide(date_fin, aujourdhui):
+    if isinstance(date_fin, datetime):
+        date_fin = date_fin.date()
+    if isinstance(date_fin, date):
+        return date_fin >= aujourdhui
+    return True  # type inattendu : on ne filtre pas plutot que de perdre un avoir valide
 
 
 def _get_sheets_service():
@@ -163,15 +171,72 @@ def _charger_config_avoir(drive_svc):
     return avoir_id, email
 
 
-def _lire_avoirs_jaunes(sheets_svc, spreadsheet_id, date_ref):
+def _argb_vers_rgb01(argb):
+    """Convertit une couleur ARGB hex openpyxl (ex. 'FFFFFF00') en tuple RGB
+    0-1. None/format inattendu -> blanc (pas de remplissage)."""
+    if not argb or len(argb) < 6:
+        return (1.0, 1.0, 1.0)
+    hexe = argb[-6:]
+    try:
+        return (int(hexe[0:2], 16) / 255, int(hexe[2:4], 16) / 255, int(hexe[4:6], 16) / 255)
+    except ValueError:
+        return (1.0, 1.0, 1.0)
+
+
+def _couleur_cellule(cell):
+    """Couleur de fond effective d'une cellule openpyxl (blanc si pas de
+    remplissage uni ou couleur de theme non resolue)."""
+    fill = cell.fill
+    if not fill or fill.patternType != 'solid' or not fill.fgColor:
+        return (1.0, 1.0, 1.0)
+    fg = fill.fgColor
+    if getattr(fg, 'type', None) != 'rgb' or not fg.rgb:
+        return (1.0, 1.0, 1.0)
+    return _argb_vers_rgb01(fg.rgb)
+
+
+def _valeur_str(v):
+    return str(v).strip() if v not in (None, "") else ""
+
+
+def _telecharger_avoir_xlsx(drive_svc, spreadsheet_id, chemin):
+    """Exporte le classeur Avoir en xlsx (Drive export). Necessaire pour lire
+    la couleur de fond reellement affichee : le jaune/vert de ce classeur est
+    pose par mise en forme conditionnelle, et effectiveFormat.backgroundColor
+    de l'API Sheets ne la reflete pas (verifie empiriquement : renvoie le
+    remplissage statique sous-jacent, blanc, pas la couleur conditionnelle
+    visible a l'ecran) — l'export xlsx, lui, fige la couleur conditionnelle
+    resolue en remplissage statique."""
+    from googleapiclient.http import MediaIoBaseDownload
+    req = drive_svc.files().export_media(
+        fileId=spreadsheet_id,
+        mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    buf = io.BytesIO()
+    dl = MediaIoBaseDownload(buf, req)
+    done = False
+    while not done:
+        _, done = dl.next_chunk()
+    with open(chemin, "wb") as f:
+        f.write(buf.getvalue())
+
+
+def _lire_avoirs_jaunes(drive_svc, spreadsheet_id, date_ref):
     """Lit les lignes a fond jaune (avoir du) des onglets des derniers mois
-    (cf. _onglets_a_verifier)."""
+    (cf. _onglets_a_verifier), via un export xlsx du classeur (cf.
+    _telecharger_avoir_xlsx)."""
+    import openpyxl
+
     onglets_cibles = _onglets_a_verifier(date_ref)
-    meta = sheets_svc.spreadsheets().get(
-        spreadsheetId=spreadsheet_id, fields="sheets.properties.title").execute()
-    titres = [s["properties"]["title"] for s in meta.get("sheets", [])]
+    chemin = "_tmp_avoir_demarque.xlsx"
+    _telecharger_avoir_xlsx(drive_svc, spreadsheet_id, chemin)
+    try:
+        wb = openpyxl.load_workbook(chemin, data_only=True)
+    finally:
+        if os.path.exists(chemin):
+            os.remove(chemin)
+
     correspondance = {}
-    for titre in titres:
+    for titre in wb.sheetnames:
         norm = _normaliser(titre)
         if norm in onglets_cibles and norm not in correspondance:
             correspondance[norm] = titre
@@ -184,30 +249,19 @@ def _lire_avoirs_jaunes(sheets_svc, spreadsheet_id, date_ref):
         titre = correspondance.get(norm)
         if not titre:
             continue
-        res = sheets_svc.spreadsheets().get(
-            spreadsheetId=spreadsheet_id,
-            ranges=[f"'{titre}'!A3:F1000"],
-            includeGridData=True,
-            fields="sheets.data.rowData.values(formattedValue,effectiveFormat.backgroundColor)",
-        ).execute()
-        row_data = res["sheets"][0]["data"][0].get("rowData", [])
-        for row in row_data:
-            cells = row.get("values", [])
-            if not cells or not cells[0].get("formattedValue", "").strip():
+        ws = wb[titre]
+        for row in ws.iter_rows(min_row=3, max_col=6):
+            nom = _valeur_str(row[0].value)
+            if not nom:
                 continue
-
-            def val(i):
-                return cells[i].get("formattedValue", "").strip() if i < len(cells) else ""
-
-            bg = cells[0].get("effectiveFormat", {}).get("backgroundColor", {})
-            rgb = (bg.get("red", 1.0), bg.get("green", 1.0), bg.get("blue", 1.0))
-            print(f"    [{titre}] {val(0)} {val(1)} — fond rgb={rgb}")
+            rgb = _couleur_cellule(row[0])
+            print(f"    [{titre}] {nom} {_valeur_str(row[1].value)} — fond rgb={rgb}")
             if not _est_jaune(rgb):
                 continue
             avoirs.append({
-                "onglet": titre, "nom": val(0), "prenom": val(1),
-                "montant": val(2), "date_debut": val(3), "date_fin": val(4),
-                "raison": val(5),
+                "onglet": titre, "nom": nom, "prenom": _valeur_str(row[1].value),
+                "montant": row[2].value, "date_debut": row[3].value, "date_fin": row[4].value,
+                "raison": _valeur_str(row[5].value),
             })
     return avoirs
 
@@ -304,7 +358,7 @@ def main():
 
     aujourdhui = datetime.now(_TZ).date()
     print(f"Lecture des avoirs jaunes ({aujourdhui.strftime('%d/%m/%Y')}) …")
-    avoirs_jaunes = _lire_avoirs_jaunes(sheets_svc, avoir_spreadsheet_id, aujourdhui)
+    avoirs_jaunes = _lire_avoirs_jaunes(drive_svc, avoir_spreadsheet_id, aujourdhui)
     print(f"→ {len(avoirs_jaunes)} avoir(s) jaune(s) (du) sur les onglets "
           f"{', '.join(_onglets_a_verifier(aujourdhui))}.")
 
@@ -334,10 +388,10 @@ def main():
             trouve = True
             if not _date_fin_valide(avoir["date_fin"], aujourdhui):
                 print(f"  Avoir trouve ({avoir['onglet']}, {avoir['nom']} {avoir['prenom']}) "
-                      f"mais expire (date fin {avoir['date_fin']}) — ignore.")
+                      f"mais expire (date fin {_formatter_date(avoir['date_fin'])}) — ignore.")
                 continue
             print(f"  Avoir trouve ({avoir['onglet']}, {avoir['nom']} {avoir['prenom']}, "
-                  f"{avoir['montant']}) — envoi du mail.")
+                  f"{_formatter_montant(avoir['montant'])}) — envoi du mail.")
             _envoyer_email_avoir(gmail_svc, email_destinataire, civilite, avoir, date_cde, creneau)
             nb_envoyes += 1
         if not trouve:
