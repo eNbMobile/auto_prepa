@@ -39,7 +39,7 @@ MOIS_FR = ["JANVIER", "FEVRIER", "MARS", "AVRIL", "MAI", "JUIN", "JUILLET",
            "AOUT", "SEPTEMBRE", "OCTOBRE", "NOVEMBRE", "DECEMBRE"]
 
 ONGLET_EN_ATTENTE = "EN ATTENTE"
-PREPARATEUR = "Claude"
+PREPARATEUR = "ER"
 
 _MAX_LIGNES = 500  # profondeur de recherche de ligne libre / lecture EN ATTENTE
 
