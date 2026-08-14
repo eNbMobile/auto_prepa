@@ -8,9 +8,11 @@ Enregistrement des commandes en LIVRAISON dans le classeur Google Sheets
 Règle (demande utilisateur) :
 - commande du jour même                    -> renseignée directement (onglet
                                                du mois, date du jour)
-- commande pour le lendemain, s'il est
-  déjà 14h ou plus le jour même             -> renseignée directement (onglet
-                                               du mois, date du lendemain)
+- commande pour le lendemain ouvré (le
+  lendemain, sauf si on est samedi -> alors
+  le lundi, le dimanche étant fermé), s'il
+  est déjà 14h ou plus le jour même         -> renseignée directement (onglet
+                                               du mois, date du lendemain ouvré)
 - tous les autres cas                       -> onglet "EN ATTENTE" (nom
                                                prénom, jour au format JJ/MM)
 
@@ -42,6 +44,14 @@ ONGLET_EN_ATTENTE = "EN ATTENTE"
 PREPARATEUR = "ER"
 
 _MAX_LIGNES = 500  # profondeur de recherche de ligne libre / lecture EN ATTENTE
+
+
+def _lendemain_ouvre(aujourdhui):
+    """Jour ouvré suivant `aujourdhui` : le lendemain, sauf si `aujourdhui`
+    est un samedi (dimanche fermé), auquel cas c'est le lundi suivant."""
+    if aujourdhui.weekday() == 5:  # samedi
+        return aujourdhui + timedelta(days=2)
+    return aujourdhui + timedelta(days=1)
 
 
 def _normaliser(texte):
@@ -285,7 +295,7 @@ def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
 
     try:
         if date_cde == aujourdhui or (
-                date_cde == aujourdhui + timedelta(days=1) and maintenant.hour >= 14):
+                date_cde == _lendemain_ouvre(aujourdhui) and maintenant.hour >= 14):
             _inscrire_commande(sheets_svc, spreadsheet_id, date_cde, nom_complet)
         else:
             _inscrire_en_attente(sheets_svc, spreadsheet_id, date_cde, nom_complet)
@@ -314,8 +324,9 @@ def _parser_jour(jour_str, aujourdhui):
 
 def traiter_en_attente(sheets_svc, spreadsheet_id, maintenant=None):
     """Renseigne dans l'onglet du mois les commandes de EN ATTENTE prevues
-    pour le lendemain (par rapport a `maintenant`), et les retire de EN
-    ATTENTE. Appelee par le workflow declenche a 14h."""
+    pour le lendemain ouvre (par rapport a `maintenant` ; le lendemain, sauf
+    le samedi ou c'est le lundi, le dimanche etant ferme), et les retire de
+    EN ATTENTE. Appelee par le workflow declenche a 14h."""
     onglet = _trouver_onglet(sheets_svc, spreadsheet_id, ONGLET_EN_ATTENTE)
     if not onglet:
         print(f"  Onglet '{ONGLET_EN_ATTENTE}' introuvable, rien a traiter.")
@@ -323,7 +334,7 @@ def traiter_en_attente(sheets_svc, spreadsheet_id, maintenant=None):
 
     maintenant = maintenant or datetime.now(_TZ)
     aujourdhui = maintenant.date()
-    lendemain = aujourdhui + timedelta(days=1)
+    lendemain = _lendemain_ouvre(aujourdhui)
 
     res = sheets_svc.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A2:B{1 + _MAX_LIGNES}").execute()
