@@ -35,7 +35,27 @@ RAYONS_LETTRE = {
     "B": "Boucherie",
     "C": "BVP",
     "F": "Fromage à la coupe",
+    # Pseudo-lettre (jamais produite par une vraie commande, qui n'a qu'une
+    # seule lettre en champs[-1]) reservee aux baguettes ajoutees d'office
+    # ci-dessous lors des runs du matin.
+    "DRIVE": "Boulangerie",
 }
+
+# Chaque run lance le matin (creneau 4h00-6h30) ajoute d'office 4 baguettes
+# tradition, commande "Drive" (pas liees a une vraie commande client).
+_HEURE_BAGUETTES_DEBUT = (4, 0)
+_HEURE_BAGUETTES_FIN   = (6, 30)
+_LETTRE_BAGUETTES_DRIVE = "DRIVE"
+_GENCOD_BAGUETTE_DRIVE  = "2000000286235"
+_LIBELLE_BAGUETTE_DRIVE = "Baguette tradition française à base de farine LABEL ROUGE, 1 pièce, 250g"
+_PRIX_BAGUETTE_DRIVE    = "1,05"
+_QTE_BAGUETTES_DRIVE    = 4
+
+
+def _dans_creneau_matin(dt):
+    """Vrai si l'heure (Paris) de dt est dans le creneau 4h00-6h30 inclus."""
+    return _HEURE_BAGUETTES_DEBUT <= (dt.hour, dt.minute) <= _HEURE_BAGUETTES_FIN
+
 
 # Format des lignes de bon_anticipation.txt (16 champs separes par ';') :
 # 0 gencod ; 1 libelle ; 2 prix ; 3 prix au kg/L ; 4 qte ; 5 substitution ;
@@ -234,6 +254,35 @@ def _grouper_produits(produits):
     return resultat
 
 
+def _qte_totale(lignes):
+    """Somme des quantites (commande, qte) d'un groupe : la qte totale a
+    collecter pour ce produit, tous clients confondus."""
+    total = 0.0
+    for _, q in lignes:
+        try:
+            total += float(q.replace(',', '.'))
+        except (TypeError, ValueError):
+            pass
+    if total.is_integer():
+        return str(int(total))
+    return f"{total:.2f}".replace('.', ',')
+
+
+def _poids_ligne(qte, poids_unitaire):
+    """qte * poids_unitaire (poids du produit pour cette commande), formate
+    avec le meme separateur/nombre de decimales que poids_unitaire."""
+    if not poids_unitaire:
+        return ''
+    try:
+        qte_f = float(qte.replace(',', '.'))
+        poids_f = float(poids_unitaire.replace(',', '.'))
+    except (TypeError, ValueError):
+        return poids_unitaire
+    sep = ',' if ',' in poids_unitaire else '.'
+    decimales = len(poids_unitaire.split(sep)[-1]) if sep in poids_unitaire else 3
+    return f"{qte_f * poids_f:.{decimales}f}".replace('.', sep)
+
+
 def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin):
     """Genere un unique PDF reunissant tous les rayons fournis (produits_pdf :
     {lettre: [produit, ...]}), chaque rayon demarrant en haut d'une nouvelle
@@ -285,8 +334,8 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
             col_widths = [60, 55, largeur_code_barres, 214, 45, 42, 30]
             hdr_txts = ('Commande', 'Photo', 'Code-barres', 'Libellé', 'Poids', 'Prix', 'Qté')
         else:
-            col_widths = [60, 55, largeur_code_barres, 259, 42, 30]
-            hdr_txts = ('Commande', 'Photo', 'Code-barres', 'Libellé', 'Prix', 'Qté')
+            col_widths = [60, 55, largeur_code_barres, 259, 42, 40]
+            hdr_txts = ('Commande', 'Photo', 'Code-barres', 'Libellé', 'Prix', 'Qté totale')
         derniere_col = len(hdr_txts) - 1
 
         hdr = [Paragraph(t, header_s) for t in hdr_txts]
@@ -326,15 +375,22 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
             else:
                 bc_cell = Paragraph(gencod, small)
 
-            # Produit identique dans plusieurs commandes : commande et qte
-            # empilees l'une sous l'autre, dans la meme case.
+            # Produit identique dans plusieurs commandes : commande empilee
+            # d'une ligne a l'autre, dans la meme case.
             commande_cell = Paragraph("<br/>".join(c for c, _ in g['lignes']), small)
-            qte_cell      = Paragraph("<br/>".join(q for _, q in g['lignes']), small)
 
             row = [commande_cell, photo_cell, bc_cell, Paragraph(g['libelle'], small)]
             if avec_poids:
-                poids_txt = f"{g['poids']} Kg" if g['poids'] else ''
-                row.append(Paragraph(poids_txt, small))
+                # Boucherie : qte et poids restent detailles par commande
+                # (poids total = qte * poids unitaire, propre a chaque client).
+                poids_txts = ["" if not g['poids'] else f"{_poids_ligne(q, g['poids'])} Kg"
+                              for _, q in g['lignes']]
+                row.append(Paragraph("<br/>".join(poids_txts), small))
+                qte_cell = Paragraph("<br/>".join(q for _, q in g['lignes']), small)
+            else:
+                # Autres rayons : quantite totale a collecter, sans le
+                # detail par commande.
+                qte_cell = Paragraph(_qte_totale(g['lignes']), small)
             prix_txt = f"{g['prix']} €" if g['prix'] else ''
             row.append(Paragraph(prix_txt, small))
             row.append(qte_cell)
@@ -451,10 +507,6 @@ def main():
     print(f"Recherche des anticipations du {dossier_jj_mm}/{dossier_mm_aaaa} "
           f"sur Drive GITHUB/Anticipation...")
     fichiers = _lister_anticipations_du_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm)
-    if not fichiers:
-        print("Aucune anticipation trouvee pour aujourd'hui.")
-        return
-
     print(f"{len(fichiers)} commande(s) avec anticipation trouvee(s).")
 
     tous_produits = []
@@ -475,6 +527,21 @@ def main():
     for lettre in sorted(par_lettre.keys()):
         print(f"  Lettre {lettre} ({len(par_lettre[lettre])} produit(s)) : "
               f"rayon non defini, ignoree (pas de PDF)")
+
+    if _dans_creneau_matin(jour_cible):
+        produits_pdf.setdefault(_LETTRE_BAGUETTES_DRIVE, []).append({
+            "commande": "Drive",
+            "gencod":   _GENCOD_BAGUETTE_DRIVE,
+            "libelle":  _LIBELLE_BAGUETTE_DRIVE,
+            "prix":     _PRIX_BAGUETTE_DRIVE,
+            "qte":      str(_QTE_BAGUETTES_DRIVE),
+            "poids":    "",
+            "heure":    jour_cible.strftime("%H:%M"),
+            "adresse":  "",
+            "lettre":   _LETTRE_BAGUETTES_DRIVE,
+        })
+        print(f"  Ajout automatique (run du matin) : {_QTE_BAGUETTES_DRIVE} baguettes "
+              f"tradition, commande Drive")
 
     if not produits_pdf:
         print("Aucun produit anticipable avec rayon defini aujourd'hui.")
