@@ -326,7 +326,7 @@ def _envoyer_email_avoir(gmail_svc, destinataire, civilite, avoir, date_cde, cre
     montant = _formatter_montant(avoir["montant"])
     corps = (
         f"Bonjour,\n\n\n"
-        f"Un avoir est dû à {civ} {avoir['nom']} {avoir['prenom']} d'un montant de {montant}\n"
+        f"Un avoir est dû à {civ} {avoir['nom']} {avoir['prenom']} d'un montant de {montant} "
         f"pour le {date_cde} entre {creneau}\n\n\n"
         f"Cordialement,\n"
         f"Erwan"
