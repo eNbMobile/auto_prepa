@@ -90,7 +90,7 @@ def _parser_lignes_anticipation(contenu, numero_commande):
             continue
 
         m_heure = _RE_HEURE.search(champs[_IDX_JOUR_HEURE])
-        heure = f"{m_heure.group(1)}:{m_heure.group(2)}" if m_heure else ""
+        heure = f"{int(m_heure.group(1)):02d}:{m_heure.group(2)}" if m_heure else ""
 
         produits.append({
             "commande": numero_commande,
@@ -224,9 +224,10 @@ def _charger_ordre_chemin_prepa(drive_svc):
 
 def _grouper_produits(produits):
     """Regroupe les lignes portant le meme gencod (produit identique commande
-    dans plusieurs commandes) : commande et quantite sont empilees, le reste
-    (libelle, prix, poids, adresse) est partage. Retourne une liste de dicts
-    {gencod, libelle, prix, poids, adresse, lignes: [(commande, qte), ...]}."""
+    dans plusieurs commandes) : commande, quantite et heure sont empilees, le
+    reste (libelle, prix, poids, adresse) est partage. Les lignes sont triees
+    par heure de commande croissante. Retourne une liste de dicts {gencod,
+    libelle, prix, poids, adresse, lignes: [(commande, qte, heure), ...]}."""
     groupes = {}
     ordre_gencods = []
     for p in produits:
@@ -241,21 +242,21 @@ def _grouper_produits(produits):
                 "lignes":  [],
             }
             ordre_gencods.append(gencod)
-        groupes[gencod]["lignes"].append((p["commande"], p["qte"]))
+        groupes[gencod]["lignes"].append((p["commande"], p["qte"], p["heure"]))
 
     resultat = []
     for gencod in ordre_gencods:
         g = groupes[gencod]
-        g["lignes"].sort(key=lambda t: t[0])
+        g["lignes"].sort(key=lambda t: (t[2], t[0]))
         resultat.append(g)
     return resultat
 
 
 def _qte_totale(lignes):
-    """Somme des quantites (commande, qte) d'un groupe : la qte totale a
-    collecter pour ce produit, tous clients confondus."""
+    """Somme des quantites (commande, qte, heure) d'un groupe : la qte totale
+    a collecter pour ce produit, tous clients confondus."""
     total = 0.0
-    for _, q in lignes:
+    for _, q, _ in lignes:
         try:
             total += float(q.replace(',', '.'))
         except (TypeError, ValueError):
@@ -284,13 +285,14 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
     """Genere un unique PDF reunissant tous les rayons fournis (produits_pdf :
     {lettre: [produit, ...]}), chaque rayon demarrant en haut d'une nouvelle
     page. Pour chaque rayon : une ligne par produit (gencod) avec
-    commande(s), photo, code-barres EAN13 + gencod, libelle, prix et
-    quantite(s) (+ poids pour la Boucherie). Les produits identiques
+    commande(s), heure(s), photo, code-barres EAN13 + gencod, libelle, prix
+    et quantite(s) (+ poids pour la Boucherie). Les produits identiques
     provenant de plusieurs commandes sont regroupes sur une seule ligne
-    (commande/qte empiles dans la meme case), et les lignes sont triees
-    selon l'ordre du chemin de preparation (chemin_prepa_ramasse.csv, via
-    ordre_chemin). Retourne le chemin local du PDF, ou None si reportlab est
-    indisponible / produits_pdf est vide."""
+    (commande/heure/qte empiles dans la meme case, triees par heure de
+    commande croissante), et les groupes sont tries selon l'ordre du chemin
+    de preparation (chemin_prepa_ramasse.csv, via ordre_chemin). Retourne le
+    chemin local du PDF, ou None si reportlab est indisponible / produits_pdf
+    est vide."""
     if not produits_pdf:
         return None
 
@@ -328,11 +330,11 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
         avec_poids = (lettre == "B")
         largeur_code_barres = 95
         if avec_poids:
-            col_widths = [60, 55, largeur_code_barres, 214, 45, 42, 30]
-            hdr_txts = ('Commande', 'Photo', 'Code-barres', 'Libellé', 'Poids', 'Prix', 'Qté')
+            col_widths = [45, 35, 55, largeur_code_barres, 194, 45, 42, 30]
+            hdr_txts = ('Commande', 'Heure', 'Photo', 'Code-barres', 'Libellé', 'Poids', 'Prix', 'Qté')
         else:
-            col_widths = [60, 55, largeur_code_barres, 259, 42, 40]
-            hdr_txts = ('Commande', 'Photo', 'Code-barres', 'Libellé', 'Prix', 'Qté totale')
+            col_widths = [45, 35, 55, largeur_code_barres, 239, 42, 40]
+            hdr_txts = ('Commande', 'Heure', 'Photo', 'Code-barres', 'Libellé', 'Prix', 'Qté totale')
         derniere_col = len(hdr_txts) - 1
 
         hdr = [Paragraph(t, header_s) for t in hdr_txts]
@@ -372,18 +374,20 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
             else:
                 bc_cell = Paragraph(gencod, small)
 
-            # Produit identique dans plusieurs commandes : commande empilee
-            # d'une ligne a l'autre, dans la meme case.
-            commande_cell = Paragraph("<br/>".join(c for c, _ in g['lignes']), small)
+            # Produit identique dans plusieurs commandes : commande et heure
+            # empilees d'une ligne a l'autre, dans la meme case, triees par
+            # heure de commande croissante (deja fait dans _grouper_produits).
+            commande_cell = Paragraph("<br/>".join(c for c, _, _ in g['lignes']), small)
+            heure_cell = Paragraph("<br/>".join(h for _, _, h in g['lignes']), small)
 
-            row = [commande_cell, photo_cell, bc_cell, Paragraph(g['libelle'], small)]
+            row = [commande_cell, heure_cell, photo_cell, bc_cell, Paragraph(g['libelle'], small)]
             if avec_poids:
                 # Boucherie : qte et poids restent detailles par commande
                 # (poids total = qte * poids unitaire, propre a chaque client).
                 poids_txts = ["" if not g['poids'] else f"{_poids_ligne(q, g['poids'])} Kg"
-                              for _, q in g['lignes']]
+                              for _, q, _ in g['lignes']]
                 row.append(Paragraph("<br/>".join(poids_txts), small))
-                qte_cell = Paragraph("<br/>".join(q for _, q in g['lignes']), small)
+                qte_cell = Paragraph("<br/>".join(q for _, q, _ in g['lignes']), small)
             else:
                 # Autres rayons : quantite totale a collecter, sans le
                 # detail par commande.
@@ -399,8 +403,8 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
             ('FONTSIZE',       (0, 0), (-1, 0), 8),
             ('ALIGN',          (0, 0), (-1, 0), 'CENTER'),
             ('FONTSIZE',       (0, 1), (-1, -1), 8),
-            ('ALIGN',          (0, 1), (2, -1), 'CENTER'),
-            ('ALIGN',          (4, 1), (derniere_col, -1), 'CENTER'),
+            ('ALIGN',          (0, 1), (3, -1), 'CENTER'),
+            ('ALIGN',          (5, 1), (derniere_col, -1), 'CENTER'),
             ('VALIGN',         (0, 0), (-1, -1), 'MIDDLE'),
             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#EEF6FB')]),
             ('GRID',           (0, 0), (-1, -1), 0.3, colors.lightgrey),
