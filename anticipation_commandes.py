@@ -35,17 +35,14 @@ RAYONS_LETTRE = {
     "B": "Boucherie",
     "C": "BVP",
     "F": "Fromage à la coupe",
-    # Pseudo-lettre (jamais produite par une vraie commande, qui n'a qu'une
-    # seule lettre en champs[-1]) reservee aux baguettes ajoutees d'office
-    # ci-dessous lors des runs du matin.
-    "DRIVE": "Boulangerie",
 }
 
 # Chaque run lance le matin (creneau 4h00-6h30) ajoute d'office 4 baguettes
-# tradition, commande "Drive" (pas liees a une vraie commande client).
+# tradition, commande "Drive" (pas liees a une vraie commande client), sur la
+# meme page BVP (lettre C) que les autres commandes de ce rayon.
 _HEURE_BAGUETTES_DEBUT = (4, 0)
 _HEURE_BAGUETTES_FIN   = (6, 30)
-_LETTRE_BAGUETTES_DRIVE = "DRIVE"
+_LETTRE_BAGUETTES_DRIVE = "C"
 _GENCOD_BAGUETTE_DRIVE  = "2000000286235"
 _LIBELLE_BAGUETTE_DRIVE = "Baguette tradition française à base de farine LABEL ROUGE, 1 pièce, 250g"
 _PRIX_BAGUETTE_DRIVE    = "1,05"
