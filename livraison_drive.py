@@ -15,7 +15,10 @@ Règle (demande utilisateur) :
                                                du mois, date du lendemain ouvré)
 - tous les autres cas                       -> onglet "EN ATTENTE" (nom
                                                prénom en CAPS, jour au format
-                                               JJ/MM, n° de commande)
+                                               JJ/MM, n° de commande, km —
+                                               le km est recupere sur
+                                               Shopopop des ce moment-la,
+                                               pas lors de la promotion)
 
 Le nom/prénom est toujours inscrit en CAPS. Dans EN ATTENTE, le n° de
 commande permet d'identifier sans ambiguïté la ligne à annuler (nom+jour
@@ -148,9 +151,9 @@ def _creer_onglet_en_attente(sheets_svc, spreadsheet_id):
         body={"requests": [{"addSheet": {"properties": {"title": ONGLET_EN_ATTENTE}}}]},
     ).execute()
     sheets_svc.spreadsheets().values().update(
-        spreadsheetId=spreadsheet_id, range=f"'{ONGLET_EN_ATTENTE}'!A1:C1",
+        spreadsheetId=spreadsheet_id, range=f"'{ONGLET_EN_ATTENTE}'!A1:D1",
         valueInputOption="USER_ENTERED",
-        body={"values": [["Nom Prénom", "Jour", "N° commande"]]},
+        body={"values": [["Nom Prénom", "Jour", "N° commande", "km"]]},
     ).execute()
     print(f"    Onglet '{ONGLET_EN_ATTENTE}' créé dans LIVRAISON DRIVE 2026.")
     return ONGLET_EN_ATTENTE
@@ -193,21 +196,26 @@ def _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom_complet, km=None):
     return True
 
 
-def _inscrire_en_attente(sheets_svc, spreadsheet_id, cible, nom_complet, numero_commande=None):
-    """Ajoute une ligne (Nom Prénom, Jour, N° commande) dans EN ATTENTE. Le
+def _inscrire_en_attente(sheets_svc, spreadsheet_id, cible, nom_complet, numero_commande=None, km=None):
+    """Ajoute une ligne (Nom Prénom, Jour, N° commande, km) dans EN ATTENTE. Le
     n° de commande sert d'identifiant fiable pour l'annulation, le nom seul
-    ne suffisant pas quand deux commandes partagent le même nom et jour."""
+    ne suffisant pas quand deux commandes partagent le même nom et jour. `km`
+    est recupere sur Shopopop des le traitement de la commande (meme si la
+    livraison n'est renseignee que plus tard dans l'onglet du mois), pour ne
+    pas avoir a interroger Shopopop une seconde fois lors de la promotion."""
     onglet = _trouver_onglet(sheets_svc, spreadsheet_id, ONGLET_EN_ATTENTE)
     if not onglet:
         onglet = _creer_onglet_en_attente(sheets_svc, spreadsheet_id)
     ligne = _premiere_ligne_libre(sheets_svc, spreadsheet_id, onglet, "A")
     sheets_svc.spreadsheets().values().update(
-        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A{ligne}:C{ligne}",
+        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A{ligne}:D{ligne}",
         valueInputOption="USER_ENTERED",
-        body={"values": [[nom_complet, cible.strftime("%d/%m"), numero_commande or ""]]},
+        body={"values": [[nom_complet, cible.strftime("%d/%m"), numero_commande or "",
+                           km if km is not None else ""]]},
     ).execute()
     print(f"    LIVRAISON DRIVE 2026 / {ONGLET_EN_ATTENTE} L{ligne} : "
-          f"{nom_complet} | {cible.strftime('%d/%m')} | {numero_commande or ''}")
+          f"{nom_complet} | {cible.strftime('%d/%m')} | {numero_commande or ''}"
+          + (f" | {km} km" if km is not None else " | km non trouve"))
 
 
 _ROUGE = {"red": 1.0, "green": 0.0, "blue": 0.0}
@@ -327,7 +335,7 @@ def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
         onglet_mois = _trouver_onglet(sheets_svc, spreadsheet_id, mois)
         if onglet_mois and _chercher_et_colorier(
                 sheets_svc, spreadsheet_id, onglet_mois,
-                idx_nom=2, idx_date=1, nb_colonnes=3,
+                idx_nom=2, idx_date=1, nb_colonnes=4,
                 nom_complet_cible=nom_complet_cible, jour_str=jour_str):
             return
 
@@ -336,11 +344,11 @@ def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
             numero_str = str(numero_commande).strip() if numero_commande else ""
             if numero_str and _chercher_et_colorier_numero(
                     sheets_svc, spreadsheet_id, onglet_attente,
-                    idx_numero=2, nb_colonnes=3, numero_cible=numero_str):
+                    idx_numero=2, nb_colonnes=4, numero_cible=numero_str):
                 return
             if _chercher_et_colorier(
                     sheets_svc, spreadsheet_id, onglet_attente,
-                    idx_nom=0, idx_date=1, nb_colonnes=3,
+                    idx_nom=0, idx_date=1, nb_colonnes=4,
                     nom_complet_cible=nom_complet_cible, jour_str=jour_str):
                 return
 
@@ -359,9 +367,10 @@ def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
     est reporte dans EN ATTENTE (colonne N° commande) s'il y a lieu, pour
     identifier la ligne sans ambiguite en cas d'annulation. `shopopop_token`/
     `shopopop_drive_id` (obtenus via connecter_shopopop) servent a recuperer
-    la distance (colonne km) quand la commande est renseignee directement
-    (pas via EN ATTENTE, la livraison n'etant pas encore programmee sur
-    Shopopop dans ce cas)."""
+    la distance (colonne km), y compris quand la commande part en EN ATTENTE
+    (la livraison est deja visible sur Shopopop des la commande, meme si sa
+    date est trop lointaine pour etre renseignee tout de suite dans l'onglet
+    du mois)."""
     if not sheets_svc or not spreadsheet_id:
         print("    Sheets/LIVRAISON DRIVE 2026 indisponible, commande ignoree.")
         return
@@ -379,14 +388,14 @@ def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
     nom_complet = f"{nom} {prenom}".strip().upper()
 
     try:
+        km = None
+        if shopopop_token:
+            km = shopopop.distance_km(shopopop_token, shopopop_drive_id, date_cde, nom_complet)
         if date_cde == aujourdhui or (
                 date_cde == _lendemain_ouvre(aujourdhui) and maintenant.hour >= 14):
-            km = None
-            if shopopop_token:
-                km = shopopop.distance_km(shopopop_token, shopopop_drive_id, date_cde, nom_complet)
             _inscrire_commande(sheets_svc, spreadsheet_id, date_cde, nom_complet, km)
         else:
-            _inscrire_en_attente(sheets_svc, spreadsheet_id, date_cde, nom_complet, numero_commande)
+            _inscrire_en_attente(sheets_svc, spreadsheet_id, date_cde, nom_complet, numero_commande, km)
     except Exception as e:
         print(f"    Ecriture LIVRAISON DRIVE 2026 echouee ({nom_complet}) : {e}")
 
@@ -410,14 +419,13 @@ def _parser_jour(jour_str, aujourdhui):
     return meilleure
 
 
-def traiter_en_attente(sheets_svc, spreadsheet_id, maintenant=None,
-                        shopopop_token=None, shopopop_drive_id=None):
+def traiter_en_attente(sheets_svc, spreadsheet_id, maintenant=None):
     """Renseigne dans l'onglet du mois les commandes de EN ATTENTE prevues
     pour le lendemain ouvre (par rapport a `maintenant` ; le lendemain, sauf
     le samedi ou c'est le lundi, le dimanche etant ferme), et les retire de
-    EN ATTENTE. Appelee par le workflow declenche a 14h. `shopopop_token`/
-    `shopopop_drive_id` (obtenus via connecter_shopopop) servent a recuperer
-    la distance (colonne km) de chaque commande promue."""
+    EN ATTENTE. Appelee par le workflow declenche a 14h. Le km, deja recupere
+    sur Shopopop au moment ou la commande a ete mise en EN ATTENTE (colonne
+    D), est simplement reporte tel quel — pas de nouvel appel Shopopop ici."""
     onglet = _trouver_onglet(sheets_svc, spreadsheet_id, ONGLET_EN_ATTENTE)
     if not onglet:
         print(f"  Onglet '{ONGLET_EN_ATTENTE}' introuvable, rien a traiter.")
@@ -428,7 +436,7 @@ def traiter_en_attente(sheets_svc, spreadsheet_id, maintenant=None,
     lendemain = _lendemain_ouvre(aujourdhui)
 
     res = sheets_svc.spreadsheets().values().get(
-        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A2:C{1 + _MAX_LIGNES}").execute()
+        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A2:D{1 + _MAX_LIGNES}").execute()
     lignes = res.get("values", [])
 
     a_traiter, a_garder = [], []
@@ -436,25 +444,23 @@ def traiter_en_attente(sheets_svc, spreadsheet_id, maintenant=None,
         nom_complet = row[0].strip() if len(row) > 0 and row[0] else ""
         jour = row[1].strip() if len(row) > 1 and row[1] else ""
         numero_commande = row[2].strip() if len(row) > 2 and row[2] else ""
+        km = row[3].strip() if len(row) > 3 and row[3] else ""
         if not nom_complet and not jour:
             continue
         cible = _parser_jour(jour, aujourdhui) if jour else None
         if cible == lendemain:
-            a_traiter.append((cible, nom_complet))
+            a_traiter.append((cible, nom_complet, km))
         else:
-            a_garder.append((nom_complet, jour, numero_commande))
+            a_garder.append((nom_complet, jour, numero_commande, km))
 
     print(f"  EN ATTENTE : {len(a_traiter)} commande(s) pour le {lendemain.strftime('%d/%m')}, "
           f"{len(a_garder)} conservee(s).")
 
-    for cible, nom_complet in a_traiter:
-        km = None
-        if shopopop_token:
-            km = shopopop.distance_km(shopopop_token, shopopop_drive_id, cible, nom_complet)
-        _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom_complet, km)
+    for cible, nom_complet, km in a_traiter:
+        _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom_complet, km or None)
 
     sheets_svc.spreadsheets().values().clear(
-        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A2:C{1 + _MAX_LIGNES}", body={}).execute()
+        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A2:D{1 + _MAX_LIGNES}", body={}).execute()
     if a_garder:
         sheets_svc.spreadsheets().values().update(
             spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A2",
@@ -477,10 +483,8 @@ def main():
         sys.exit(1)
 
     spreadsheet_id = _charger_config_livraison(drive_svc)
-    shopopop_token, shopopop_drive_id = connecter_shopopop(drive_svc)
     print(f"Traitement de l'onglet '{ONGLET_EN_ATTENTE}' de LIVRAISON DRIVE 2026 …")
-    traiter_en_attente(sheets_svc, spreadsheet_id,
-                        shopopop_token=shopopop_token, shopopop_drive_id=shopopop_drive_id)
+    traiter_en_attente(sheets_svc, spreadsheet_id)
 
 
 if __name__ == "__main__":
