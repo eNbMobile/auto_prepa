@@ -1144,6 +1144,8 @@ def _main():
     for pdf in sorted(nouveaux):
         print(f"  - {pdf}")
 
+    shopopop_token, shopopop_drive_id = livraison_drive.connecter_shopopop(drive_svc)
+
     os.makedirs(BDC_DIR, exist_ok=True)
     processed = set()
 
@@ -1254,7 +1256,8 @@ def _main():
 
         if len(lignes) > 1 and ',Livraison,' in lignes[1]:
             livraison_drive.traiter_commande_livraison(
-                sheets_svc, LIVRAISON_SPREADSHEET_ID, nom, prenom, date_cde, numero_commande=order_num)
+                sheets_svc, LIVRAISON_SPREADSHEET_ID, nom, prenom, date_cde, numero_commande=order_num,
+                shopopop_token=shopopop_token, shopopop_drive_id=shopopop_drive_id)
 
         if lignes:
             if montant_pdf:
