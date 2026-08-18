@@ -280,11 +280,10 @@ def _telecharger_bdc_archive_drive(drive_svc, numero):
 
 
 def _traiter_annulation_livraison(drive_svc, sheets_svc, numero):
-    """Si la commande annulee etait une LIVRAISON, passe sa ligne dans
-    LIVRAISON DRIVE 2026 au fond rouge (le fond jaune existant du classeur
-    signale une livraison a venir). Nom/prenom/date sont extraits de
-    l'archive BDC Drive, seule source encore disponible a ce stade (le mail
-    d'annulation ne contient que le numero de commande)."""
+    """Si la commande annulee etait une LIVRAISON, supprime sa ligne dans
+    LIVRAISON DRIVE 2026. Nom/prenom/date sont extraits de l'archive BDC
+    Drive, seule source encore disponible a ce stade (le mail d'annulation
+    ne contient que le numero de commande)."""
     pdf_path = _telecharger_bdc_archive_drive(drive_svc, numero)
     if not pdf_path:
         return
@@ -1144,7 +1143,10 @@ def _main():
     for pdf in sorted(nouveaux):
         print(f"  - {pdf}")
 
-    shopopop_token, shopopop_drive_id = livraison_drive.connecter_shopopop(drive_svc)
+    # Connexion Shopopop differee : uniquement quand une commande LIVRAISON
+    # est effectivement rencontree ci-dessous (5 a 10 fois/jour), pas a
+    # chaque run avec de nouvelles commandes (qui peuvent etre en Drive).
+    shopopop_token, shopopop_drive_id, shopopop_connecte = None, None, False
 
     os.makedirs(BDC_DIR, exist_ok=True)
     processed = set()
@@ -1255,6 +1257,9 @@ def _main():
             lignes = f.readlines()
 
         if len(lignes) > 1 and ',Livraison,' in lignes[1]:
+            if not shopopop_connecte:
+                shopopop_token, shopopop_drive_id = livraison_drive.connecter_shopopop(drive_svc)
+                shopopop_connecte = True
             livraison_drive.traiter_commande_livraison(
                 sheets_svc, LIVRAISON_SPREADSHEET_ID, nom, prenom, date_cde, numero_commande=order_num,
                 shopopop_token=shopopop_token, shopopop_drive_id=shopopop_drive_id)
