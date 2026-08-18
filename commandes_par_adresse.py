@@ -8,6 +8,10 @@ ADRESSE_CIBLE_DEFAUT (defaut : 'M2-MM-2-12').
 
 Usage :
     python3 commandes_par_adresse.py [--adresse M2-MM-2-12] [--sortie fichier.txt]
+
+Pour tester sur toutes les commandes deja traitees (tout BDC_DIR, toutes
+dates) plutot que seulement demain/jeudi/jours suivants :
+    python3 commandes_par_adresse.py --toutes
 """
 import argparse
 import os
@@ -71,6 +75,18 @@ def commandes_du_jour(jour):
     )
 
 
+def toutes_les_commandes():
+    """Liste triee (dossier, chemin) de tous les BonDeCommande_*.pdf presents
+    dans BDC_DIR, quelle que soit la date (pour tester sur les commandes deja
+    traitees, pas seulement celles a venir)."""
+    trouvees = []
+    for racine, _dirs, fichiers in os.walk(BDC_DIR):
+        for f in fichiers:
+            if f.startswith("BonDeCommande_") and f.endswith(".pdf"):
+                trouvees.append((os.path.relpath(racine, BDC_DIR), os.path.join(racine, f)))
+    return sorted(trouvees)
+
+
 def numero_commande(pdf_path):
     return os.path.basename(pdf_path).removeprefix("BonDeCommande_").removesuffix(".pdf")
 
@@ -101,6 +117,9 @@ def main():
                         help="Chemin de gencod_adresses.csv")
     parser.add_argument("--sortie", default=None,
                         help="Fichier .txt de sortie (defaut : commandes_<adresse>.txt)")
+    parser.add_argument("--toutes", action="store_true",
+                        help="Teste sur toutes les commandes deja traitees (tout BDC_DIR, "
+                             "toutes dates), au lieu de demain/jeudi/jours suivants seulement.")
     args = parser.parse_args()
 
     if not os.path.exists(args.gencod_adresses):
@@ -115,24 +134,40 @@ def main():
 
     sortie = args.sortie or f"commandes_{args.adresse}.txt"
 
-    jour = date.today() + timedelta(days=1)
     commandes_trouvees = []
     nb_jours = 0
     nb_commandes = 0
 
-    while True:
-        pdfs = commandes_du_jour(jour)
-        if not pdfs:
-            break
-        nb_jours += 1
-        print(f"\n{jour.strftime('%d/%m/%Y')} : {len(pdfs)} commande(s)")
-        for pdf in pdfs:
+    if args.toutes:
+        par_dossier = toutes_les_commandes()
+        if not par_dossier:
+            print(f"Aucun BonDeCommande_*.pdf trouve sous {BDC_DIR}.")
+        dossier_courant = None
+        for dossier, pdf in par_dossier:
+            if dossier != dossier_courant:
+                dossier_courant = dossier
+                nb_jours += 1
+                print(f"\n{dossier} :")
             nb_commandes += 1
             numero = numero_commande(pdf)
             if commande_contient_adresse(pdf, gencods_cibles):
                 print(f"  [{numero}] -> adresse '{args.adresse}' trouvee")
                 commandes_trouvees.append(numero)
-        jour += timedelta(days=1)
+    else:
+        jour = date.today() + timedelta(days=1)
+        while True:
+            pdfs = commandes_du_jour(jour)
+            if not pdfs:
+                break
+            nb_jours += 1
+            print(f"\n{jour.strftime('%d/%m/%Y')} : {len(pdfs)} commande(s)")
+            for pdf in pdfs:
+                nb_commandes += 1
+                numero = numero_commande(pdf)
+                if commande_contient_adresse(pdf, gencods_cibles):
+                    print(f"  [{numero}] -> adresse '{args.adresse}' trouvee")
+                    commandes_trouvees.append(numero)
+            jour += timedelta(days=1)
 
     with open(sortie, "w", encoding="utf-8") as f:
         for numero in commandes_trouvees:
