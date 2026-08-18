@@ -47,6 +47,7 @@ _GENCOD_BAGUETTE_DRIVE  = "2000000286235"
 _LIBELLE_BAGUETTE_DRIVE = "Baguette tradition française à base de farine LABEL ROUGE, 1 pièce, 250g"
 _PRIX_BAGUETTE_DRIVE    = "1,05"
 _QTE_BAGUETTES_DRIVE    = 4
+_HEURE_BAGUETTES_DRIVE  = "07:30"
 
 
 def _dans_creneau_matin(dt):
@@ -333,7 +334,7 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
             col_widths = [45, 35, 55, largeur_code_barres, 194, 45, 42, 30]
             hdr_txts = ('Commande', 'Heure', 'Photo', 'Code-barres', 'Libellé', 'Poids', 'Prix', 'Qté')
         else:
-            col_widths = [45, 35, 55, largeur_code_barres, 239, 42, 40]
+            col_widths = [55, 35, 55, largeur_code_barres, 239, 42, 30]
             hdr_txts = ('Commande', 'Heure', 'Photo', 'Code-barres', 'Libellé', 'Prix', 'Qté totale')
         derniere_col = len(hdr_txts) - 1
 
@@ -537,7 +538,7 @@ def main():
             "prix":     _PRIX_BAGUETTE_DRIVE,
             "qte":      str(_QTE_BAGUETTES_DRIVE),
             "poids":    "",
-            "heure":    jour_cible.strftime("%H:%M"),
+            "heure":    _HEURE_BAGUETTES_DRIVE,
             "adresse":  "",
             "lettre":   _LETTRE_BAGUETTES_DRIVE,
         })
