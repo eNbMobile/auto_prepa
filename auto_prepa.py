@@ -897,6 +897,31 @@ def _envoyer_email_anomalie_bon(gmail_svc, numero, lignes_invalides):
     except Exception as e:
         print(f"    Envoi email anomalie {numero} echoue : {e}")
 
+def _envoyer_email_km_manquant(gmail_svc, numero, nom, prenom, date_cde_str):
+    """Alerte par email quand la distance (colonne km) n'a pas pu etre
+    recuperee sur Shopopop pour une commande LIVRAISON (identifiants/site
+    Shopopop indisponibles, ou destinataire introuvable dans les livraisons
+    programmees) — a completer a la main dans LIVRAISON DRIVE 2026."""
+    from email.mime.text import MIMEText
+    destinataire = EMAIL_ANTICIPATION
+    if not destinataire:
+        return
+    corps = (
+        f"Bonjour,\n\n"
+        f"Le nombre de km n'a pas pu etre recupere sur Shopopop pour la commande "
+        f"{numero} ({nom} {prenom}, livraison du {date_cde_str}).\n\n"
+        f"Merci de completer la colonne km a la main dans LIVRAISON DRIVE 2026.\n"
+    )
+    try:
+        msg = MIMEText(corps, "plain", "utf-8")
+        msg["to"] = destinataire
+        msg["subject"] = f"Commande {numero} - km Shopopop non renseigne"
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
+        print(f"    Email km manquant envoye pour cde {numero} => {destinataire}")
+    except Exception as e:
+        print(f"    Envoi email km manquant {numero} echoue : {e}")
+
 def extraire_articles_produits_pdf(texte):
     """Extrait (nb_articles, nb_produits) depuis les premieres lignes du PDF."""
     articles = produits = None
@@ -1260,9 +1285,11 @@ def _main():
             if not shopopop_connecte:
                 shopopop_token, shopopop_drive_id = livraison_drive.connecter_shopopop(drive_svc)
                 shopopop_connecte = True
-            livraison_drive.traiter_commande_livraison(
+            km_manquant = livraison_drive.traiter_commande_livraison(
                 sheets_svc, LIVRAISON_SPREADSHEET_ID, nom, prenom, date_cde, numero_commande=order_num,
                 shopopop_token=shopopop_token, shopopop_drive_id=shopopop_drive_id)
+            if km_manquant:
+                _envoyer_email_km_manquant(gmail_svc, order_num, nom, prenom, date_cde)
 
         if lignes:
             if montant_pdf:

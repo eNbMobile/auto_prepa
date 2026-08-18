@@ -363,18 +363,20 @@ def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
     la distance (colonne km), y compris quand la commande part en EN ATTENTE
     (la livraison est deja visible sur Shopopop des la commande, meme si sa
     date est trop lointaine pour etre renseignee tout de suite dans l'onglet
-    du mois)."""
+    du mois).
+    Retourne True si la commande a ete inscrite mais sans km (a signaler par
+    email par l'appelant), False sinon (km trouve, ou commande non inscrite)."""
     if not sheets_svc or not spreadsheet_id:
         print("    Sheets/LIVRAISON DRIVE 2026 indisponible, commande ignoree.")
-        return
+        return False
     if not (nom or prenom) or not date_cde_str:
         print("    Nom/prenom/date introuvables dans le PDF, livraison Drive ignoree.")
-        return
+        return False
     try:
         date_cde = datetime.strptime(date_cde_str, "%d/%m/%Y").date()
     except ValueError:
         print(f"    Date de commande illisible ({date_cde_str}), livraison Drive ignoree.")
-        return
+        return False
 
     maintenant = maintenant or datetime.now(_TZ)
     aujourdhui = maintenant.date()
@@ -389,8 +391,10 @@ def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
             _inscrire_commande(sheets_svc, spreadsheet_id, date_cde, nom_complet, km)
         else:
             _inscrire_en_attente(sheets_svc, spreadsheet_id, date_cde, nom_complet, numero_commande, km)
+        return km is None
     except Exception as e:
         print(f"    Ecriture LIVRAISON DRIVE 2026 echouee ({nom_complet}) : {e}")
+        return False
 
 
 def _parser_jour(jour_str, aujourdhui):

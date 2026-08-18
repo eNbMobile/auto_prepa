@@ -92,7 +92,6 @@ def login(email, mot_de_passe):
     try:
         auth_req = urllib.request.Request(auth_url, headers=_HEADERS_NAVIGATEUR)
         with opener.open(auth_req, timeout=20) as resp:
-            statut = resp.status
             page = resp.read().decode("utf-8", errors="replace")
     except Exception as e:
         print(f"    Connexion Shopopop échouée (page de connexion) : {e}")
@@ -102,18 +101,14 @@ def login(email, mot_de_passe):
     # exact ("kc-login-form") n'est pas fiable (page de login personnalisee) :
     # on isole plutot le <form> dont l'action pointe vers login-actions,
     # l'URL Keycloak qui traite la soumission des identifiants.
-    formulaires = re.findall(r'<form\b[^>]*>', page, re.DOTALL)
     form_action = None
-    for tag in formulaires:
+    for tag in re.findall(r'<form\b[^>]*>', page, re.DOTALL):
         m = re.search(r'\baction="([^"]*login-actions[^"]*)"', tag)
         if m:
             form_action = html.unescape(m.group(1))
             break
     if not form_action:
-        champs = re.findall(r'<input\b[^>]*>', page, re.DOTALL)
-        print(f"    Shopopop : formulaire de connexion introuvable (page de login modifiée ?) "
-              f"— statut {statut}, {len(page)} caractères. "
-              f"Formulaires : {formulaires[:5]!r} Champs : {champs[:10]!r}")
+        print("    Shopopop : formulaire de connexion introuvable (page de login modifiée ?).")
         return None
 
     try:
