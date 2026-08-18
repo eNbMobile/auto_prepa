@@ -1341,7 +1341,7 @@ def _main():
                 os.rename(src_f, dst_f)
 
         anticipation_dst = os.path.join(WORK_DIR, f"bon_anticipation_{order_num}.txt")
-        if os.path.exists(anticipation_dst):
+        if os.path.exists(anticipation_dst) and os.path.getsize(anticipation_dst) > 0:
             archiver_anticipation_drive(drive_svc, anticipation_dst, dossier_jj_mm, dossier_mm_aaaa)
 
         for fname in [f"bon_prepa_{order_num}.txt",

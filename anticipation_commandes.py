@@ -35,6 +35,7 @@ RAYONS_LETTRE = {
     "B": "Boucherie",
     "C": "BVP",
     "F": "Fromage à la coupe",
+    "G": "Traiteur chaud",
 }
 
 # Chaque run lance le matin (creneau 4h00-6h30) ajoute d'office 4 baguettes
