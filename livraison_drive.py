@@ -33,6 +33,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import controle_stocks as cs
+import shopopop
 
 _TZ = ZoneInfo("Europe/Paris")
 
@@ -82,9 +83,8 @@ def _get_sheets_service():
         return None
 
 
-def _charger_config_livraison(drive_svc):
-    """Retourne l'ID du classeur LIVRAISON DRIVE 2026 depuis config.json
-    (clé "livraison_spreadsheet_id"), ou la valeur par défaut."""
+def _charger_config_dict(drive_svc):
+    """Télécharge et parse config.json depuis le dossier Drive de config."""
     import io
     import json
     from googleapiclient.http import MediaIoBaseDownload
@@ -101,8 +101,32 @@ def _charger_config_livraison(drive_svc):
     done = False
     while not done:
         _, done = dl.next_chunk()
-    cfg = json.loads(buf.getvalue().decode())
+    return json.loads(buf.getvalue().decode())
+
+
+def _charger_config_livraison(drive_svc):
+    """Retourne l'ID du classeur LIVRAISON DRIVE 2026 depuis config.json
+    (clé "livraison_spreadsheet_id"), ou la valeur par défaut."""
+    cfg = _charger_config_dict(drive_svc)
     return cfg.get("livraison_spreadsheet_id", "").strip() or LIVRAISON_SPREADSHEET_ID_DEFAUT
+
+
+def connecter_shopopop(drive_svc):
+    """Se connecte à Shopopop Pro avec les identifiants de config.json (clés
+    "ID_Shopopop", "MDP_Shopopop") et retourne (access_token, drive_id).
+    access_token est None si les identifiants sont absents ou la connexion a
+    échoué — la colonne km est alors laissée vide (comme actuellement)."""
+    cfg = _charger_config_dict(drive_svc)
+    email = cfg.get("ID_Shopopop", "").strip()
+    mdp = cfg.get("MDP_Shopopop", "").strip()
+    drive_id = cfg.get("shopopop_drive_id", "").strip() or shopopop.SHOPOPOP_DRIVE_ID_DEFAUT
+    if not email or not mdp:
+        print("    ID_Shopopop/MDP_Shopopop absents de config.json, km Shopopop ignoré.")
+        return None, drive_id
+    token = shopopop.login(email, mdp)
+    if not token:
+        print("    Connexion Shopopop échouée, km Shopopop ignoré.")
+    return token, drive_id
 
 
 def _lister_onglets(sheets_svc, spreadsheet_id):
@@ -146,10 +170,11 @@ def _premiere_ligne_libre(sheets_svc, spreadsheet_id, titre_onglet, colonne):
     return 2 + _MAX_LIGNES
 
 
-def _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom_complet):
-    """Renseigne (Préparateur, Date, Nom Prénom) sur la premiere ligne libre
-    de l'onglet du mois de `cible` (colonne C = nom, sert de reference pour
-    trouver la ligne libre)."""
+def _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom_complet, km=None):
+    """Renseigne (Préparateur, Date, Nom Prénom, km) sur la premiere ligne
+    libre de l'onglet du mois de `cible` (colonne C = nom, sert de reference
+    pour trouver la ligne libre). `km` (distance magasin -> client, recuperee
+    sur Shopopop) est laisse vide si absent/introuvable, a completer a la main."""
     mois = MOIS_FR[cible.month - 1]
     onglet = _trouver_onglet(sheets_svc, spreadsheet_id, mois)
     if not onglet:
@@ -157,12 +182,14 @@ def _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom_complet):
         return False
     ligne = _premiere_ligne_libre(sheets_svc, spreadsheet_id, onglet, "C")
     sheets_svc.spreadsheets().values().update(
-        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A{ligne}:C{ligne}",
+        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A{ligne}:D{ligne}",
         valueInputOption="USER_ENTERED",
-        body={"values": [[PREPARATEUR, cible.strftime("%d/%m"), nom_complet]]},
+        body={"values": [[PREPARATEUR, cible.strftime("%d/%m"), nom_complet,
+                           km if km is not None else ""]]},
     ).execute()
     print(f"    LIVRAISON DRIVE 2026 / {onglet} L{ligne} : {PREPARATEUR} | "
-          f"{cible.strftime('%d/%m')} | {nom_complet}")
+          f"{cible.strftime('%d/%m')} | {nom_complet}"
+          + (f" | {km} km" if km is not None else " | km non trouve"))
     return True
 
 
@@ -324,12 +351,17 @@ def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
 
 
 def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde_str,
-                                numero_commande=None, maintenant=None):
+                                numero_commande=None, maintenant=None,
+                                shopopop_token=None, shopopop_drive_id=None):
     """A appeler pour chaque commande en LIVRAISON (detectee via ',Livraison,'
     sur la 2e ligne de bon_prepa.txt). `date_cde_str` est au format
     JJ/MM/AAAA (extrait du PDF par extraire_client_creneau_pdf). `numero_commande`
     est reporte dans EN ATTENTE (colonne N° commande) s'il y a lieu, pour
-    identifier la ligne sans ambiguite en cas d'annulation."""
+    identifier la ligne sans ambiguite en cas d'annulation. `shopopop_token`/
+    `shopopop_drive_id` (obtenus via connecter_shopopop) servent a recuperer
+    la distance (colonne km) quand la commande est renseignee directement
+    (pas via EN ATTENTE, la livraison n'etant pas encore programmee sur
+    Shopopop dans ce cas)."""
     if not sheets_svc or not spreadsheet_id:
         print("    Sheets/LIVRAISON DRIVE 2026 indisponible, commande ignoree.")
         return
@@ -349,7 +381,10 @@ def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
     try:
         if date_cde == aujourdhui or (
                 date_cde == _lendemain_ouvre(aujourdhui) and maintenant.hour >= 14):
-            _inscrire_commande(sheets_svc, spreadsheet_id, date_cde, nom_complet)
+            km = None
+            if shopopop_token:
+                km = shopopop.distance_km(shopopop_token, shopopop_drive_id, date_cde, nom_complet)
+            _inscrire_commande(sheets_svc, spreadsheet_id, date_cde, nom_complet, km)
         else:
             _inscrire_en_attente(sheets_svc, spreadsheet_id, date_cde, nom_complet, numero_commande)
     except Exception as e:
@@ -375,11 +410,14 @@ def _parser_jour(jour_str, aujourdhui):
     return meilleure
 
 
-def traiter_en_attente(sheets_svc, spreadsheet_id, maintenant=None):
+def traiter_en_attente(sheets_svc, spreadsheet_id, maintenant=None,
+                        shopopop_token=None, shopopop_drive_id=None):
     """Renseigne dans l'onglet du mois les commandes de EN ATTENTE prevues
     pour le lendemain ouvre (par rapport a `maintenant` ; le lendemain, sauf
     le samedi ou c'est le lundi, le dimanche etant ferme), et les retire de
-    EN ATTENTE. Appelee par le workflow declenche a 14h."""
+    EN ATTENTE. Appelee par le workflow declenche a 14h. `shopopop_token`/
+    `shopopop_drive_id` (obtenus via connecter_shopopop) servent a recuperer
+    la distance (colonne km) de chaque commande promue."""
     onglet = _trouver_onglet(sheets_svc, spreadsheet_id, ONGLET_EN_ATTENTE)
     if not onglet:
         print(f"  Onglet '{ONGLET_EN_ATTENTE}' introuvable, rien a traiter.")
@@ -410,7 +448,10 @@ def traiter_en_attente(sheets_svc, spreadsheet_id, maintenant=None):
           f"{len(a_garder)} conservee(s).")
 
     for cible, nom_complet in a_traiter:
-        _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom_complet)
+        km = None
+        if shopopop_token:
+            km = shopopop.distance_km(shopopop_token, shopopop_drive_id, cible, nom_complet)
+        _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom_complet, km)
 
     sheets_svc.spreadsheets().values().clear(
         spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A2:C{1 + _MAX_LIGNES}", body={}).execute()
@@ -436,8 +477,10 @@ def main():
         sys.exit(1)
 
     spreadsheet_id = _charger_config_livraison(drive_svc)
+    shopopop_token, shopopop_drive_id = connecter_shopopop(drive_svc)
     print(f"Traitement de l'onglet '{ONGLET_EN_ATTENTE}' de LIVRAISON DRIVE 2026 …")
-    traiter_en_attente(sheets_svc, spreadsheet_id)
+    traiter_en_attente(sheets_svc, spreadsheet_id,
+                        shopopop_token=shopopop_token, shopopop_drive_id=shopopop_drive_id)
 
 
 if __name__ == "__main__":
