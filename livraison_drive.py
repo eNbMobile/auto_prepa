@@ -14,7 +14,12 @@ Règle (demande utilisateur) :
   est déjà 14h ou plus le jour même         -> renseignée directement (onglet
                                                du mois, date du lendemain ouvré)
 - tous les autres cas                       -> onglet "EN ATTENTE" (nom
-                                               prénom, jour au format JJ/MM)
+                                               prénom en CAPS, jour au format
+                                               JJ/MM, n° de commande)
+
+Le nom/prénom est toujours inscrit en CAPS. Dans EN ATTENTE, le n° de
+commande permet d'identifier sans ambiguïté la ligne à annuler (nom+jour
+peut correspondre à plusieurs commandes du même client le même jour).
 
 auto_prepa.py appelle traiter_commande_livraison() pour chaque commande en
 LIVRAISON détectée (présence de ',Livraison,' sur la 2e ligne de
@@ -119,9 +124,9 @@ def _creer_onglet_en_attente(sheets_svc, spreadsheet_id):
         body={"requests": [{"addSheet": {"properties": {"title": ONGLET_EN_ATTENTE}}}]},
     ).execute()
     sheets_svc.spreadsheets().values().update(
-        spreadsheetId=spreadsheet_id, range=f"'{ONGLET_EN_ATTENTE}'!A1:B1",
+        spreadsheetId=spreadsheet_id, range=f"'{ONGLET_EN_ATTENTE}'!A1:C1",
         valueInputOption="USER_ENTERED",
-        body={"values": [["Nom Prénom", "Jour"]]},
+        body={"values": [["Nom Prénom", "Jour", "N° commande"]]},
     ).execute()
     print(f"    Onglet '{ONGLET_EN_ATTENTE}' créé dans LIVRAISON DRIVE 2026.")
     return ONGLET_EN_ATTENTE
@@ -161,18 +166,21 @@ def _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom_complet):
     return True
 
 
-def _inscrire_en_attente(sheets_svc, spreadsheet_id, cible, nom_complet):
+def _inscrire_en_attente(sheets_svc, spreadsheet_id, cible, nom_complet, numero_commande=None):
+    """Ajoute une ligne (Nom Prénom, Jour, N° commande) dans EN ATTENTE. Le
+    n° de commande sert d'identifiant fiable pour l'annulation, le nom seul
+    ne suffisant pas quand deux commandes partagent le même nom et jour."""
     onglet = _trouver_onglet(sheets_svc, spreadsheet_id, ONGLET_EN_ATTENTE)
     if not onglet:
         onglet = _creer_onglet_en_attente(sheets_svc, spreadsheet_id)
     ligne = _premiere_ligne_libre(sheets_svc, spreadsheet_id, onglet, "A")
     sheets_svc.spreadsheets().values().update(
-        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A{ligne}:B{ligne}",
+        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A{ligne}:C{ligne}",
         valueInputOption="USER_ENTERED",
-        body={"values": [[nom_complet, cible.strftime("%d/%m")]]},
+        body={"values": [[nom_complet, cible.strftime("%d/%m"), numero_commande or ""]]},
     ).execute()
     print(f"    LIVRAISON DRIVE 2026 / {ONGLET_EN_ATTENTE} L{ligne} : "
-          f"{nom_complet} | {cible.strftime('%d/%m')}")
+          f"{nom_complet} | {cible.strftime('%d/%m')} | {numero_commande or ''}")
 
 
 _ROUGE = {"red": 1.0, "green": 0.0, "blue": 0.0}
@@ -185,6 +193,26 @@ def _sheet_id(sheets_svc, spreadsheet_id, titre_onglet):
         if s["properties"]["title"] == titre_onglet:
             return s["properties"]["sheetId"]
     return None
+
+
+def _colorier_ligne(sheets_svc, spreadsheet_id, titre_onglet, ligne, nb_colonnes):
+    sheet_id = _sheet_id(sheets_svc, spreadsheet_id, titre_onglet)
+    if sheet_id is None:
+        return False
+    sheets_svc.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={"requests": [{
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": ligne - 1, "endRowIndex": ligne,
+                    "startColumnIndex": 0, "endColumnIndex": nb_colonnes,
+                },
+                "cell": {"userEnteredFormat": {"backgroundColor": _ROUGE}},
+                "fields": "userEnteredFormat.backgroundColor",
+            },
+        }]}).execute()
+    return True
 
 
 def _chercher_et_colorier(sheets_svc, spreadsheet_id, titre_onglet,
@@ -208,34 +236,50 @@ def _chercher_et_colorier(sheets_svc, spreadsheet_id, titre_onglet,
         if _normaliser(nom_val) != nom_complet_cible or date_val != jour_str:
             continue
         ligne = 2 + i
-        sheet_id = _sheet_id(sheets_svc, spreadsheet_id, titre_onglet)
-        if sheet_id is None:
+        if not _colorier_ligne(sheets_svc, spreadsheet_id, titre_onglet, ligne, nb_colonnes):
             return False
-        sheets_svc.spreadsheets().batchUpdate(
-            spreadsheetId=spreadsheet_id,
-            body={"requests": [{
-                "repeatCell": {
-                    "range": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": ligne - 1, "endRowIndex": ligne,
-                        "startColumnIndex": 0, "endColumnIndex": nb_colonnes,
-                    },
-                    "cell": {"userEnteredFormat": {"backgroundColor": _ROUGE}},
-                    "fields": "userEnteredFormat.backgroundColor",
-                },
-            }]}).execute()
         print(f"    LIVRAISON DRIVE 2026 / {titre_onglet} L{ligne} : "
               f"{nom_val} annulee -> fond rouge.")
         return True
     return False
 
 
-def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde_str):
+def _chercher_et_colorier_numero(sheets_svc, spreadsheet_id, titre_onglet,
+                                  idx_numero, nb_colonnes, numero_cible):
+    """Cherche, dans les nb_colonnes premieres colonnes de `titre_onglet`, une
+    ligne dont la colonne idx_numero = numero_cible (n° de commande) ; si
+    trouvee, colore ses nb_colonnes premieres cellules en rouge. Le n° de
+    commande identifie sans ambiguite la ligne, contrairement au nom+jour qui
+    peut correspondre a plusieurs commandes du meme client le meme jour.
+    Retourne True si une ligne a ete trouvee et coloriee."""
+    derniere_colonne = chr(ord('A') + nb_colonnes - 1)
+    res = sheets_svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=f"'{titre_onglet}'!A2:{derniere_colonne}{1 + _MAX_LIGNES}").execute()
+    lignes = res.get("values", [])
+    for i, row in enumerate(lignes):
+        numero_val = row[idx_numero].strip() if idx_numero < len(row) and row[idx_numero] else ""
+        if not numero_val or numero_val != numero_cible:
+            continue
+        ligne = 2 + i
+        if not _colorier_ligne(sheets_svc, spreadsheet_id, titre_onglet, ligne, nb_colonnes):
+            return False
+        print(f"    LIVRAISON DRIVE 2026 / {titre_onglet} L{ligne} : "
+              f"commande {numero_cible} annulee -> fond rouge.")
+        return True
+    return False
+
+
+def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde_str, numero_commande=None):
     """A appeler pour une commande en LIVRAISON strictement annulee (pas une
     modification/remplacement, qui ne change pas la date de livraison).
     Localise la ligne correspondante dans LIVRAISON DRIVE 2026 — d'abord
     l'onglet du mois de la commande, puis EN ATTENTE si absente du mois — et
-    passe son fond au rouge. La ligne n'est pas supprimee."""
+    passe son fond au rouge. La ligne n'est pas supprimee.
+    Dans EN ATTENTE, le matching se fait en priorite sur `numero_commande`
+    (identifiant fiable, contrairement au nom+jour qui peut correspondre a
+    plusieurs commandes du meme client le meme jour), avec repli sur
+    nom+jour si le numero est absent ou introuvable."""
     if not sheets_svc or not spreadsheet_id:
         print("    Sheets/LIVRAISON DRIVE 2026 indisponible, annulation livraison ignoree.")
         return
@@ -261,11 +305,17 @@ def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
             return
 
         onglet_attente = _trouver_onglet(sheets_svc, spreadsheet_id, ONGLET_EN_ATTENTE)
-        if onglet_attente and _chercher_et_colorier(
-                sheets_svc, spreadsheet_id, onglet_attente,
-                idx_nom=0, idx_date=1, nb_colonnes=2,
-                nom_complet_cible=nom_complet_cible, jour_str=jour_str):
-            return
+        if onglet_attente:
+            numero_str = str(numero_commande).strip() if numero_commande else ""
+            if numero_str and _chercher_et_colorier_numero(
+                    sheets_svc, spreadsheet_id, onglet_attente,
+                    idx_numero=2, nb_colonnes=3, numero_cible=numero_str):
+                return
+            if _chercher_et_colorier(
+                    sheets_svc, spreadsheet_id, onglet_attente,
+                    idx_nom=0, idx_date=1, nb_colonnes=3,
+                    nom_complet_cible=nom_complet_cible, jour_str=jour_str):
+                return
 
         print(f"    Aucune ligne LIVRAISON DRIVE 2026 trouvee pour {nom} {prenom} "
               f"({date_cde_str}), rien a colorier.")
@@ -273,10 +323,13 @@ def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
         print(f"    Annulation LIVRAISON DRIVE 2026 echouee ({nom} {prenom}) : {e}")
 
 
-def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde_str, maintenant=None):
+def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde_str,
+                                numero_commande=None, maintenant=None):
     """A appeler pour chaque commande en LIVRAISON (detectee via ',Livraison,'
     sur la 2e ligne de bon_prepa.txt). `date_cde_str` est au format
-    JJ/MM/AAAA (extrait du PDF par extraire_client_creneau_pdf)."""
+    JJ/MM/AAAA (extrait du PDF par extraire_client_creneau_pdf). `numero_commande`
+    est reporte dans EN ATTENTE (colonne N° commande) s'il y a lieu, pour
+    identifier la ligne sans ambiguite en cas d'annulation."""
     if not sheets_svc or not spreadsheet_id:
         print("    Sheets/LIVRAISON DRIVE 2026 indisponible, commande ignoree.")
         return
@@ -291,14 +344,14 @@ def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
 
     maintenant = maintenant or datetime.now(_TZ)
     aujourdhui = maintenant.date()
-    nom_complet = f"{nom} {prenom}".strip()
+    nom_complet = f"{nom} {prenom}".strip().upper()
 
     try:
         if date_cde == aujourdhui or (
                 date_cde == _lendemain_ouvre(aujourdhui) and maintenant.hour >= 14):
             _inscrire_commande(sheets_svc, spreadsheet_id, date_cde, nom_complet)
         else:
-            _inscrire_en_attente(sheets_svc, spreadsheet_id, date_cde, nom_complet)
+            _inscrire_en_attente(sheets_svc, spreadsheet_id, date_cde, nom_complet, numero_commande)
     except Exception as e:
         print(f"    Ecriture LIVRAISON DRIVE 2026 echouee ({nom_complet}) : {e}")
 
@@ -337,20 +390,21 @@ def traiter_en_attente(sheets_svc, spreadsheet_id, maintenant=None):
     lendemain = _lendemain_ouvre(aujourdhui)
 
     res = sheets_svc.spreadsheets().values().get(
-        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A2:B{1 + _MAX_LIGNES}").execute()
+        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A2:C{1 + _MAX_LIGNES}").execute()
     lignes = res.get("values", [])
 
     a_traiter, a_garder = [], []
     for row in lignes:
         nom_complet = row[0].strip() if len(row) > 0 and row[0] else ""
         jour = row[1].strip() if len(row) > 1 and row[1] else ""
+        numero_commande = row[2].strip() if len(row) > 2 and row[2] else ""
         if not nom_complet and not jour:
             continue
         cible = _parser_jour(jour, aujourdhui) if jour else None
         if cible == lendemain:
             a_traiter.append((cible, nom_complet))
         else:
-            a_garder.append((nom_complet, jour))
+            a_garder.append((nom_complet, jour, numero_commande))
 
     print(f"  EN ATTENTE : {len(a_traiter)} commande(s) pour le {lendemain.strftime('%d/%m')}, "
           f"{len(a_garder)} conservee(s).")
@@ -359,7 +413,7 @@ def traiter_en_attente(sheets_svc, spreadsheet_id, maintenant=None):
         _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom_complet)
 
     sheets_svc.spreadsheets().values().clear(
-        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A2:B{1 + _MAX_LIGNES}", body={}).execute()
+        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A2:C{1 + _MAX_LIGNES}", body={}).execute()
     if a_garder:
         sheets_svc.spreadsheets().values().update(
             spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A2",

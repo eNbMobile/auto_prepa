@@ -296,7 +296,7 @@ def _traiter_annulation_livraison(drive_svc, sheets_svc, numero):
             return
         civilite, nom, prenom, date_cde, creneau = extraire_client_creneau_pdf(pt.stdout)
         livraison_drive.annuler_commande_livraison(
-            sheets_svc, LIVRAISON_SPREADSHEET_ID, nom, prenom, date_cde)
+            sheets_svc, LIVRAISON_SPREADSHEET_ID, nom, prenom, date_cde, numero_commande=numero)
     finally:
         if os.path.exists(pdf_path):
             os.remove(pdf_path)
@@ -1254,7 +1254,7 @@ def _main():
 
         if len(lignes) > 1 and ',Livraison,' in lignes[1]:
             livraison_drive.traiter_commande_livraison(
-                sheets_svc, LIVRAISON_SPREADSHEET_ID, nom, prenom, date_cde)
+                sheets_svc, LIVRAISON_SPREADSHEET_ID, nom, prenom, date_cde, numero_commande=order_num)
 
         if lignes:
             if montant_pdf:
