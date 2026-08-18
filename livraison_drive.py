@@ -218,9 +218,6 @@ def _inscrire_en_attente(sheets_svc, spreadsheet_id, cible, nom_complet, numero_
           + (f" | {km} km" if km is not None else " | km non trouve"))
 
 
-_ROUGE = {"red": 1.0, "green": 0.0, "blue": 0.0}
-
-
 def _sheet_id(sheets_svc, spreadsheet_id, titre_onglet):
     res = sheets_svc.spreadsheets().get(
         spreadsheetId=spreadsheet_id, fields="sheets.properties(sheetId,title)").execute()
@@ -230,34 +227,30 @@ def _sheet_id(sheets_svc, spreadsheet_id, titre_onglet):
     return None
 
 
-def _colorier_ligne(sheets_svc, spreadsheet_id, titre_onglet, ligne, nb_colonnes):
+def _supprimer_ligne(sheets_svc, spreadsheet_id, titre_onglet, ligne):
+    """Supprime la ligne `ligne` (les lignes suivantes remontent d'un cran)."""
     sheet_id = _sheet_id(sheets_svc, spreadsheet_id, titre_onglet)
     if sheet_id is None:
         return False
     sheets_svc.spreadsheets().batchUpdate(
         spreadsheetId=spreadsheet_id,
         body={"requests": [{
-            "repeatCell": {
+            "deleteDimension": {
                 "range": {
-                    "sheetId": sheet_id,
-                    "startRowIndex": ligne - 1, "endRowIndex": ligne,
-                    "startColumnIndex": 0, "endColumnIndex": nb_colonnes,
+                    "sheetId": sheet_id, "dimension": "ROWS",
+                    "startIndex": ligne - 1, "endIndex": ligne,
                 },
-                "cell": {"userEnteredFormat": {"backgroundColor": _ROUGE}},
-                "fields": "userEnteredFormat.backgroundColor",
             },
         }]}).execute()
     return True
 
 
-def _chercher_et_colorier(sheets_svc, spreadsheet_id, titre_onglet,
-                           idx_nom, idx_date, nb_colonnes, nom_complet_cible, jour_str):
+def _chercher_et_supprimer(sheets_svc, spreadsheet_id, titre_onglet,
+                            idx_nom, idx_date, nb_colonnes, nom_complet_cible, jour_str):
     """Cherche, dans les nb_colonnes premieres colonnes de `titre_onglet`, une
     ligne dont la colonne idx_nom = nom_complet_cible (compare via _normaliser)
-    et la colonne idx_date = jour_str (JJ/MM) ; si trouvee, colore ses
-    nb_colonnes premieres cellules en rouge (le fond jaune existant du
-    classeur signale une livraison a venir, le rouge une livraison annulee).
-    Retourne True si une ligne a ete trouvee et coloriee."""
+    et la colonne idx_date = jour_str (JJ/MM) ; si trouvee, supprime la ligne.
+    Retourne True si une ligne a ete trouvee et supprimee."""
     derniere_colonne = chr(ord('A') + nb_colonnes - 1)
     res = sheets_svc.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id,
@@ -271,22 +264,22 @@ def _chercher_et_colorier(sheets_svc, spreadsheet_id, titre_onglet,
         if _normaliser(nom_val) != nom_complet_cible or date_val != jour_str:
             continue
         ligne = 2 + i
-        if not _colorier_ligne(sheets_svc, spreadsheet_id, titre_onglet, ligne, nb_colonnes):
+        if not _supprimer_ligne(sheets_svc, spreadsheet_id, titre_onglet, ligne):
             return False
         print(f"    LIVRAISON DRIVE 2026 / {titre_onglet} L{ligne} : "
-              f"{nom_val} annulee -> fond rouge.")
+              f"{nom_val} annulee -> ligne supprimee.")
         return True
     return False
 
 
-def _chercher_et_colorier_numero(sheets_svc, spreadsheet_id, titre_onglet,
-                                  idx_numero, nb_colonnes, numero_cible):
+def _chercher_et_supprimer_numero(sheets_svc, spreadsheet_id, titre_onglet,
+                                   idx_numero, nb_colonnes, numero_cible):
     """Cherche, dans les nb_colonnes premieres colonnes de `titre_onglet`, une
     ligne dont la colonne idx_numero = numero_cible (n° de commande) ; si
-    trouvee, colore ses nb_colonnes premieres cellules en rouge. Le n° de
-    commande identifie sans ambiguite la ligne, contrairement au nom+jour qui
-    peut correspondre a plusieurs commandes du meme client le meme jour.
-    Retourne True si une ligne a ete trouvee et coloriee."""
+    trouvee, supprime la ligne. Le n° de commande identifie sans ambiguite la
+    ligne, contrairement au nom+jour qui peut correspondre a plusieurs
+    commandes du meme client le meme jour.
+    Retourne True si une ligne a ete trouvee et supprimee."""
     derniere_colonne = chr(ord('A') + nb_colonnes - 1)
     res = sheets_svc.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id,
@@ -297,10 +290,10 @@ def _chercher_et_colorier_numero(sheets_svc, spreadsheet_id, titre_onglet,
         if not numero_val or numero_val != numero_cible:
             continue
         ligne = 2 + i
-        if not _colorier_ligne(sheets_svc, spreadsheet_id, titre_onglet, ligne, nb_colonnes):
+        if not _supprimer_ligne(sheets_svc, spreadsheet_id, titre_onglet, ligne):
             return False
         print(f"    LIVRAISON DRIVE 2026 / {titre_onglet} L{ligne} : "
-              f"commande {numero_cible} annulee -> fond rouge.")
+              f"commande {numero_cible} annulee -> ligne supprimee.")
         return True
     return False
 
@@ -310,7 +303,7 @@ def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
     modification/remplacement, qui ne change pas la date de livraison).
     Localise la ligne correspondante dans LIVRAISON DRIVE 2026 — d'abord
     l'onglet du mois de la commande, puis EN ATTENTE si absente du mois — et
-    passe son fond au rouge. La ligne n'est pas supprimee.
+    la supprime.
     Dans EN ATTENTE, le matching se fait en priorite sur `numero_commande`
     (identifiant fiable, contrairement au nom+jour qui peut correspondre a
     plusieurs commandes du meme client le meme jour), avec repli sur
@@ -333,7 +326,7 @@ def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
     try:
         mois = MOIS_FR[date_cde.month - 1]
         onglet_mois = _trouver_onglet(sheets_svc, spreadsheet_id, mois)
-        if onglet_mois and _chercher_et_colorier(
+        if onglet_mois and _chercher_et_supprimer(
                 sheets_svc, spreadsheet_id, onglet_mois,
                 idx_nom=2, idx_date=1, nb_colonnes=4,
                 nom_complet_cible=nom_complet_cible, jour_str=jour_str):
@@ -342,18 +335,18 @@ def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
         onglet_attente = _trouver_onglet(sheets_svc, spreadsheet_id, ONGLET_EN_ATTENTE)
         if onglet_attente:
             numero_str = str(numero_commande).strip() if numero_commande else ""
-            if numero_str and _chercher_et_colorier_numero(
+            if numero_str and _chercher_et_supprimer_numero(
                     sheets_svc, spreadsheet_id, onglet_attente,
                     idx_numero=2, nb_colonnes=4, numero_cible=numero_str):
                 return
-            if _chercher_et_colorier(
+            if _chercher_et_supprimer(
                     sheets_svc, spreadsheet_id, onglet_attente,
                     idx_nom=0, idx_date=1, nb_colonnes=4,
                     nom_complet_cible=nom_complet_cible, jour_str=jour_str):
                 return
 
         print(f"    Aucune ligne LIVRAISON DRIVE 2026 trouvee pour {nom} {prenom} "
-              f"({date_cde_str}), rien a colorier.")
+              f"({date_cde_str}), rien a supprimer.")
     except Exception as e:
         print(f"    Annulation LIVRAISON DRIVE 2026 echouee ({nom} {prenom}) : {e}")
 
