@@ -17,7 +17,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 import auto_prepa as ap
 
@@ -482,6 +482,64 @@ def _supprimer_bons_anticipation_traites(drive_svc, fichiers):
             print(f"    Suppression {filename} echouee : {e}")
 
 
+def _cle_tri_commande(numero):
+    """Tri numerique quand possible (numeros de commande), alphabetique sinon."""
+    return (0, int(numero)) if numero.isdigit() else (1, numero)
+
+
+def _maj_fichier_commandes_anticipees(drive_svc, commandes, dossier_mm_aaaa, dossier_jj_mm):
+    """Note dans GITHUB/Anticipation/archives/MM_AAAA/JJ_MM/commandes_anticipées_JJ_MM.txt
+    (separateur virgule) les numeros de commande anticipes ce jour-la. Si une
+    anticipation a deja ete lancee dans la journee pour ce meme JJ_MM (J, J+1,
+    ...), le fichier existant est fusionne avec les commandes de ce run plutot
+    qu'ecrase."""
+    if not commandes:
+        return
+
+    nom_fichier = f"commandes_anticipées_{dossier_jj_mm}.txt"
+    path = f"GITHUB/Anticipation/archives/{dossier_mm_aaaa}/{dossier_jj_mm}"
+    try:
+        github_id = ap._get_or_create_subfolder(drive_svc, "root", "GITHUB")
+        anticipation_id = ap._get_or_create_subfolder(drive_svc, github_id, "Anticipation")
+        archives_id = ap._get_or_create_subfolder(drive_svc, anticipation_id, "archives")
+        mois_id = ap._get_or_create_subfolder(drive_svc, archives_id, dossier_mm_aaaa)
+        subfolder_id = ap._get_or_create_subfolder(drive_svc, mois_id, dossier_jj_mm)
+
+        res = drive_svc.files().list(
+            q=f"name='{nom_fichier}' and '{subfolder_id}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        existing = res.get("files", [])
+
+        deja_notees = set()
+        if existing:
+            contenu = _telecharger_texte(drive_svc, existing[0]["id"])
+            deja_notees = {c.strip() for c in contenu.strip().split(',') if c.strip()}
+
+        toutes = sorted(deja_notees | set(commandes), key=_cle_tri_commande)
+        nouveau_contenu = ",".join(toutes)
+
+        chemin_local = os.path.join(ap.WORK_DIR, nom_fichier)
+        os.makedirs(ap.WORK_DIR, exist_ok=True)
+        with open(chemin_local, "w", encoding="utf-8") as f:
+            f.write(nouveau_contenu)
+        try:
+            media = MediaFileUpload(chemin_local, mimetype="text/plain", resumable=False)
+            if existing:
+                drive_svc.files().update(fileId=existing[0]["id"], media_body=media).execute()
+            else:
+                drive_svc.files().create(
+                    body={"name": nom_fichier, "parents": [subfolder_id]},
+                    media_body=media,
+                    fields="id",
+                ).execute()
+        finally:
+            os.remove(chemin_local)
+        print(f"    {nom_fichier} => Drive {path}/ OK ({len(toutes)} commande(s) au total)")
+    except Exception as e:
+        print(f"    Mise a jour {nom_fichier} echouee : {e}")
+
+
 def main():
     os.makedirs(ap.WORK_DIR, exist_ok=True)
 
@@ -529,6 +587,11 @@ def main():
     for lettre in sorted(par_lettre.keys()):
         print(f"  Lettre {lettre} ({len(par_lettre[lettre])} produit(s)) : "
               f"rayon non defini, ignoree (pas de PDF)")
+
+    commandes_anticipees = sorted(
+        {p["commande"] for produits in produits_pdf.values() for p in produits},
+        key=_cle_tri_commande)
+    _maj_fichier_commandes_anticipees(drive_svc, commandes_anticipees, dossier_mm_aaaa, dossier_jj_mm)
 
     if _dans_creneau_matin(jour_cible):
         produits_pdf.setdefault(_LETTRE_BAGUETTES_DRIVE, []).append({
