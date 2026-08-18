@@ -131,7 +131,7 @@ def distance_km(access_token, drive_id, date_livraison, nom_complet):
     prévues pour `date_livraison` (objet date), celle dont le destinataire
     correspond à `nom_complet` (comparaison par ensemble de mots normalisés,
     insensible à l'ordre nom/prénom, aux accents et à la casse), et retourne
-    sa distance en km (arrondie à 1 décimale), ou None si non trouvée."""
+    sa distance en km (arrondie à 2 décimales), ou None si non trouvée."""
     if not access_token:
         return None
     cible = _tokens(nom_complet)
@@ -163,7 +163,7 @@ def distance_km(access_token, drive_id, date_livraison, nom_complet):
                 nom_dest = f"{dest.get('first_name', '')} {dest.get('last_name', '')}"
                 if _tokens(nom_dest) == cible:
                     metres = it.get("delivery_distance")
-                    return round(metres / 1000, 1) if isinstance(metres, (int, float)) else None
+                    return round(metres / 1000, 2) if isinstance(metres, (int, float)) else None
 
             if len(items) < 50:
                 return None
