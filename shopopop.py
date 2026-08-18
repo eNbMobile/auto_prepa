@@ -30,6 +30,15 @@ _CLIENT_ID = "backoffice-externe"
 _REDIRECT_URI = "https://app.shopopop.com/"
 _TZ = ZoneInfo("Europe/Paris")
 
+# Shopopop est derriere Cloudflare, qui bloque par defaut les requetes sans
+# en-tetes de navigateur (le User-Agent par defaut d'urllib, "Python-urllib/x.y",
+# est un signal de bot classique) — d'ou les 403 observes sans ces en-tetes.
+_HEADERS_NAVIGATEUR = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"),
+    "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+}
+
 # ID du "drive" (magasin) Shopopop (visible dans l'URL app.shopopop.com/deliveries?drive_id=...).
 # Utilisé si absent de config.json (clé "shopopop_drive_id") — à mettre à jour si le magasin change.
 SHOPOPOP_DRIVE_ID_DEFAUT = "14156"
@@ -81,19 +90,24 @@ def login(email, mot_de_passe):
     })
 
     try:
-        with opener.open(auth_url, timeout=20) as resp:
+        auth_req = urllib.request.Request(auth_url, headers=_HEADERS_NAVIGATEUR)
+        with opener.open(auth_req, timeout=20) as resp:
             page = resp.read().decode("utf-8", errors="replace")
+    except Exception as e:
+        print(f"    Connexion Shopopop échouée (page de connexion) : {e}")
+        return None
 
-        m = re.search(r'<form[^>]+id="kc-login-form"[^>]+action="([^"]+)"', page)
-        if not m:
-            print("    Shopopop : formulaire de connexion introuvable (page de login modifiée ?).")
-            return None
-        form_action = html.unescape(m.group(1))
+    m = re.search(r'<form[^>]+id="kc-login-form"[^>]+action="([^"]+)"', page)
+    if not m:
+        print("    Shopopop : formulaire de connexion introuvable (page de login modifiée ?).")
+        return None
+    form_action = html.unescape(m.group(1))
 
+    try:
         payload = urllib.parse.urlencode({"username": email, "password": mot_de_passe}).encode()
         req = urllib.request.Request(
             form_action, data=payload, method="POST",
-            headers={"Content-Type": "application/x-www-form-urlencoded"})
+            headers={**_HEADERS_NAVIGATEUR, "Content-Type": "application/x-www-form-urlencoded"})
         try:
             opener.open(req, timeout=20)
             print("    Shopopop : pas de redirection après connexion, identifiants probablement refusés.")
@@ -102,12 +116,16 @@ def login(email, mot_de_passe):
             if e.code not in (302, 303):
                 raise
             location = e.headers.get("Location", "")
+    except Exception as e:
+        print(f"    Connexion Shopopop échouée (envoi identifiants) : {e}")
+        return None
 
-        code = urllib.parse.parse_qs(urllib.parse.urlparse(location).query).get("code", [None])[0]
-        if not code:
-            print("    Shopopop : connexion refusée (pas de code d'autorisation retourné).")
-            return None
+    code = urllib.parse.parse_qs(urllib.parse.urlparse(location).query).get("code", [None])[0]
+    if not code:
+        print("    Shopopop : connexion refusée (pas de code d'autorisation retourné).")
+        return None
 
+    try:
         token_payload = urllib.parse.urlencode({
             "grant_type": "authorization_code",
             "client_id": _CLIENT_ID,
@@ -117,12 +135,12 @@ def login(email, mot_de_passe):
         }).encode()
         token_req = urllib.request.Request(
             _AUTH_BASE + "/protocol/openid-connect/token", data=token_payload, method="POST",
-            headers={"Content-Type": "application/x-www-form-urlencoded"})
+            headers={**_HEADERS_NAVIGATEUR, "Content-Type": "application/x-www-form-urlencoded"})
         with opener.open(token_req, timeout=20) as resp:
             tokens = json.loads(resp.read().decode("utf-8"))
         return tokens.get("access_token")
     except Exception as e:
-        print(f"    Connexion Shopopop échouée : {e}")
+        print(f"    Connexion Shopopop échouée (échange du token) : {e}")
         return None
 
 
@@ -153,6 +171,7 @@ def distance_km(access_token, drive_id, date_livraison, nom_complet):
                 "withdrawal_end_utc": fin_utc,
             })
             req = urllib.request.Request(url, headers={
+                **_HEADERS_NAVIGATEUR,
                 "Authorization": f"Bearer {access_token}", "Accept": "application/json"})
             with urllib.request.urlopen(req, timeout=20) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
