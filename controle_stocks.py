@@ -40,7 +40,7 @@ _config_drive_cache = {}     # {nom: contenu texte}
 TOKEN_FILE         = os.path.expanduser("~/.auto_prepa_token.json")
 SCOPES             = ["https://www.googleapis.com/auth/drive"]
 EMAIL_DESTINATAIRE = ""  # chargé depuis config.json
-EMAIL_COPIE_STOCK  = "superu.arnage.coursesu@systeme-u.fr"  # copie systématique sur l'email de contrôle de stocks
+EMAIL_COPIE_STOCK  = ""  # chargé depuis config.json (email_destinataire_2)
 
 def _col_index(ref):
     """Convertit une référence Excel type 'AB' en index 0-based."""
@@ -892,7 +892,7 @@ def envoyer_email_pdf(pdf_ecarts, pdf_stock_bas, date_j1, nb_ecart, manquant, su
 
 def _charger_config():
     """Charge config.json depuis DRIVE_CONFIG_FOLDER_ID et initialise les globals."""
-    global DRIVE_CONTROLE_FOLDER_ID, DRIVE_BDC_FOLDER_ID, EMAIL_DESTINATAIRE
+    global DRIVE_CONTROLE_FOLDER_ID, DRIVE_BDC_FOLDER_ID, EMAIL_DESTINATAIRE, EMAIL_COPIE_STOCK
     if not DRIVE_CONFIG_FOLDER_ID:
         print("ERREUR : secret DRIVE_CONFIG_FOLDER_ID manquant.")
         sys.exit(1)
@@ -920,6 +920,7 @@ def _charger_config():
         DRIVE_CONTROLE_FOLDER_ID = cfg["drive_controle_folder_id"]
         DRIVE_BDC_FOLDER_ID      = cfg["drive_bdc_folder_id"]
         EMAIL_DESTINATAIRE       = cfg["email_destinataire"]
+        EMAIL_COPIE_STOCK        = cfg["email_destinataire_2"]
     except Exception as e:
         print(f"ERREUR chargement config Drive : {e}")
         sys.exit(1)
