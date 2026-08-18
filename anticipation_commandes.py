@@ -35,6 +35,7 @@ RAYONS_LETTRE = {
     "B": "Boucherie",
     "C": "BVP",
     "F": "Fromage à la coupe",
+    "G": "Traiteur chaud",
 }
 
 # Chaque run lance le matin (creneau 4h00-6h30) ajoute d'office 4 baguettes
@@ -290,8 +291,9 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
     et quantite(s) (+ poids pour la Boucherie). Les produits identiques
     provenant de plusieurs commandes sont regroupes sur une seule ligne
     (commande/heure/qte empiles dans la meme case, triees par heure de
-    commande croissante), et les groupes sont tries selon l'ordre du chemin
-    de preparation (chemin_prepa_ramasse.csv, via ordre_chemin). Retourne le
+    commande croissante), et les groupes sont tries par heure de commande
+    croissante (l'ordre du chemin de preparation, chemin_prepa_ramasse.csv
+    via ordre_chemin, ne departage plus qu'a heure egale). Retourne le
     chemin local du PDF, ou None si reportlab est indisponible / produits_pdf
     est vide."""
     if not produits_pdf:
@@ -319,7 +321,9 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
     def _elements_rayon(produits, lettre, nom_rayon):
         groupes = _grouper_produits(produits)
         fin_chemin = len(ordre_chemin)
-        groupes.sort(key=lambda g: (ordre_chemin.get(g["adresse"], fin_chemin), g["gencod"]))
+        groupes.sort(key=lambda g: (g["lignes"][0][2],
+                                     ordre_chemin.get(g["adresse"], fin_chemin),
+                                     g["gencod"]))
 
         elements = [
             Paragraph(f"Anticipation {nom_rayon} {date_complete} — À préparer avant 7h30",
