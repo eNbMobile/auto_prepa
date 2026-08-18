@@ -98,21 +98,22 @@ def login(email, mot_de_passe):
         print(f"    Connexion Shopopop échouée (page de connexion) : {e}")
         return None
 
-    # L'ordre des attributs (id/action) du <form> n'est pas garanti : on isole
-    # d'abord la balise <form> contenant "kc-login-form", puis on en extrait
-    # `action` independamment, plutot qu'un seul regex a l'ordre fige.
+    # L'ordre des attributs (id/action) du <form> n'est pas garanti, et l'id
+    # exact ("kc-login-form") n'est pas fiable (page de login personnalisee) :
+    # on isole plutot le <form> dont l'action pointe vers login-actions,
+    # l'URL Keycloak qui traite la soumission des identifiants.
+    formulaires = re.findall(r'<form\b[^>]*>', page, re.DOTALL)
     form_action = None
-    for tag in re.findall(r'<form\b[^>]*>', page, re.DOTALL):
-        if "kc-login-form" in tag:
-            m = re.search(r'\baction="([^"]*)"', tag)
-            if m:
-                form_action = html.unescape(m.group(1))
+    for tag in formulaires:
+        m = re.search(r'\baction="([^"]*login-actions[^"]*)"', tag)
+        if m:
+            form_action = html.unescape(m.group(1))
             break
     if not form_action:
+        champs = re.findall(r'<input\b[^>]*>', page, re.DOTALL)
         print(f"    Shopopop : formulaire de connexion introuvable (page de login modifiée ?) "
-              f"— statut {statut}, {len(page)} caractères, "
-              f"'kc-login-form' present : {'kc-login-form' in page}, "
-              f"debut : {page[:200]!r}")
+              f"— statut {statut}, {len(page)} caractères. "
+              f"Formulaires : {formulaires[:5]!r} Champs : {champs[:10]!r}")
         return None
 
     try:
