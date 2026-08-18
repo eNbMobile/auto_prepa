@@ -349,6 +349,7 @@ def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites):
                             contenu_antici = _telecharger_anticipation_drive(drive_svc, num_ancien)
                             if contenu_antici:
                                 _envoyer_email_anticipation(gmail_svc, num_ancien, contenu_antici)
+                _alerter_si_commande_anticipee_annulee(drive_svc, gmail_svc, num_ancien, num_nouveau)
                 _supprimer_bons_drive(drive_svc, num_ancien)
                 _supprimer_anticipation_archive_drive(drive_svc, num_ancien)
                 _supprimer_bdc_drive(drive_svc, num_ancien)
@@ -696,6 +697,111 @@ def _telecharger_anticipation_drive(drive_svc, numero):
     except Exception as e:
         print(f"    Telechargement anticipation {numero} echoue : {e}")
         return ""
+
+_CIVILITES_LONGUES = {"M.": "Monsieur", "Mme": "Madame"}
+
+
+def _telecharger_commandes_anticipees_archivees(drive_svc, dossier_mm_aaaa, dossier_jj_mm):
+    """Telecharge et parse GITHUB/Anticipation/archives/MM_AAAA/JJ_MM/commandes_anticipées_JJ_MM.txt
+    (deja archive par anticipation_commandes.py). Retourne l'ensemble des numeros de
+    commande deja anticipes ce jour-la (vide si le fichier ou un dossier parent
+    n'existe pas encore)."""
+    def _sous_dossier(parent_id, nom):
+        if not parent_id:
+            return None
+        res = drive_svc.files().list(
+            q=(f"name='{nom}' and '{parent_id}' in parents "
+               f"and mimeType='application/vnd.google-apps.folder' and trashed=false"),
+            fields="files(id)",
+        ).execute()
+        files = res.get("files", [])
+        return files[0]["id"] if files else None
+
+    nom_fichier = f"commandes_anticipées_{dossier_jj_mm}.txt"
+    try:
+        github_id = _sous_dossier("root", "GITHUB")
+        anticipation_id = _sous_dossier(github_id, "Anticipation")
+        archives_id = _sous_dossier(anticipation_id, "archives")
+        mois_id = _sous_dossier(archives_id, dossier_mm_aaaa)
+        subfolder_id = _sous_dossier(mois_id, dossier_jj_mm)
+        if not subfolder_id:
+            return set()
+
+        res = drive_svc.files().list(
+            q=f"name='{nom_fichier}' and '{subfolder_id}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        files = res.get("files", [])
+        if not files:
+            return set()
+        buf = io.BytesIO()
+        dl = MediaIoBaseDownload(buf, drive_svc.files().get_media(fileId=files[0]["id"]))
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        contenu = buf.getvalue().decode("utf-8", errors="replace")
+        return {c.strip() for c in contenu.strip().split(',') if c.strip()}
+    except Exception as e:
+        print(f"    Lecture {nom_fichier} echouee : {e}")
+        return set()
+
+
+def _envoyer_email_anticipation_annulee(gmail_svc, civilite, nom, prenom, num_ancien, num_nouveau):
+    """Alerte : la commande annulee/remplacee faisait deja partie d'une anticipation archivee."""
+    from email.mime.text import MIMEText
+    destinataire = EMAIL_ANTICIPATION
+    if not destinataire:
+        return
+    civilite_txt = _CIVILITES_LONGUES.get(civilite, "Monsieur/Madame")
+    client = " ".join(p for p in (civilite_txt, nom, prenom) if p)
+    corps = (
+        f"Bonjour,\n\n"
+        f"La commande de {client}, n°{num_ancien} a été annulée et remplacée "
+        f"par la commande n°{num_nouveau} et faisait partie de l'anticipation.\n\n"
+        f"Merci d'être vigilant sur les produits de cette commande.\n\n"
+        f"Cordialement,\nErwan"
+    )
+    try:
+        msg = MIMEText(corps, "plain", "utf-8")
+        msg["to"] = destinataire
+        msg["subject"] = "Attention commande anticipée et annulée"
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
+        print(f"    Email alerte anticipation annulee envoye pour cde {num_ancien} => {destinataire}")
+    except Exception as e:
+        print(f"    Envoi email alerte anticipation annulee {num_ancien} echoue : {e}")
+
+
+def _alerter_si_commande_anticipee_annulee(drive_svc, gmail_svc, num_ancien, num_nouveau):
+    """Si la commande annulee/remplacee (num_ancien) faisait deja partie d'une
+    anticipation archivee aujourd'hui (commandes_anticipées_JJ_MM.txt), alerte
+    par email avec le nom du client (extrait de l'archive BDC, encore presente
+    sur Drive a ce stade, avant sa suppression par _supprimer_bdc_drive)."""
+    now = datetime.now(_TZ)
+    dossier_mm_aaaa = now.strftime("%m_%Y")
+    dossier_jj_mm = now.strftime("%d_%m")
+    commandes_anticipees = _telecharger_commandes_anticipees_archivees(
+        drive_svc, dossier_mm_aaaa, dossier_jj_mm)
+    if num_ancien not in commandes_anticipees:
+        return
+
+    print(f"    ATTENTION : commande {num_ancien} annulee faisait partie de "
+          f"l'anticipation du {dossier_jj_mm} !")
+
+    civilite = nom = prenom = ""
+    pdf_path = _telecharger_bdc_archive_drive(drive_svc, num_ancien)
+    if pdf_path:
+        try:
+            pt = subprocess.run(["pdftotext", "-layout", pdf_path, "-"],
+                                capture_output=True, text=True)
+            if pt.stdout.strip():
+                civilite, nom, prenom, _, _ = extraire_client_creneau_pdf(pt.stdout)
+        finally:
+            if os.path.exists(pdf_path):
+                os.remove(pdf_path)
+
+    _envoyer_email_anticipation_annulee(gmail_svc, civilite, nom, prenom, num_ancien, num_nouveau)
+
 
 def _envoyer_email_anticipation(gmail_svc, numero, contenu):
     """Envoie le contenu du bon d'anticipation supprime par email."""
