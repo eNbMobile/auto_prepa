@@ -53,8 +53,8 @@ ONGLET_EN_ATTENTE = "EN ATTENTE"
 PREPARATEUR = "ER"
 
 # Vert #00B050 (meme convention que les livraisons deja confirmees en debut
-# de fichier) : applique au nom/prenom (colonne C) par marquer_livree() quand
-# le workflow "Verif LAD" confirme la livraison cote Shopopop.
+# de fichier) : applique en fond de ligne par marquer_livree() quand le
+# workflow "Verif LAD" confirme la livraison cote Shopopop.
 _VERT_LIVREE = {"red": 0.0, "green": 0.690, "blue": 0.314}
 
 _MAX_LIGNES = 500  # profondeur de recherche de ligne libre / lecture EN ATTENTE
@@ -233,11 +233,12 @@ def _sheet_id(sheets_svc, spreadsheet_id, titre_onglet):
 
 
 def marquer_livree(sheets_svc, spreadsheet_id, aujourdhui, ligne):
-    """Met en vert (couleur _VERT_LIVREE, comme les livraisons deja
-    confirmees en debut de fichier) le nom/prenom (colonne C) de la ligne
-    `ligne` de l'onglet du mois de `aujourdhui`, pour signaler qu'une
-    livraison a ete confirmee cote Shopopop (workflow "Verif LAD").
-    Retourne True si applique, False si l'onglet est introuvable."""
+    """Met en vert le FOND (backgroundColor _VERT_LIVREE, comme les
+    livraisons deja confirmees en debut de fichier) de toute la ligne
+    `ligne` (colonnes A a E : Preparateur, Date, Nom Prenom, km, prix) de
+    l'onglet du mois de `aujourdhui`, pour signaler qu'une livraison a ete
+    confirmee cote Shopopop (workflow "Verif LAD"). Retourne True si
+    applique, False si l'onglet est introuvable."""
     mois = MOIS_FR[aujourdhui.month - 1]
     onglet = _trouver_onglet(sheets_svc, spreadsheet_id, mois)
     if not onglet:
@@ -253,10 +254,10 @@ def marquer_livree(sheets_svc, spreadsheet_id, aujourdhui, ligne):
                 "range": {
                     "sheetId": sheet_id,
                     "startRowIndex": ligne - 1, "endRowIndex": ligne,
-                    "startColumnIndex": 2, "endColumnIndex": 3,
+                    "startColumnIndex": 0, "endColumnIndex": 5,
                 },
-                "cell": {"userEnteredFormat": {"textFormat": {"foregroundColor": _VERT_LIVREE}}},
-                "fields": "userEnteredFormat.textFormat.foregroundColor",
+                "cell": {"userEnteredFormat": {"backgroundColor": _VERT_LIVREE}},
+                "fields": "userEnteredFormat.backgroundColor",
             },
         }]}).execute()
     return True
