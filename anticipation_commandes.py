@@ -317,7 +317,7 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
     small    = ParagraphStyle('small', fontSize=8, leading=10)
     header_s = ParagraphStyle('hdr', fontSize=8, leading=10, textColor=colors.white)
     tiny_c   = ParagraphStyle('tiny_c', fontSize=7, leading=8, alignment=1)
-    prix_kg_s = ParagraphStyle('prix_kg', fontSize=8, leading=8)
+    prix_kg_s = ParagraphStyle('prix_kg', fontSize=8, leading=9)
     titre_s  = ParagraphStyle('titre', fontName='Helvetica-Bold', fontSize=13,
                               leading=16, alignment=1)
     BLEU     = colors.HexColor('#006797')
@@ -339,7 +339,7 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
         avec_poids = (lettre == "B")
         largeur_code_barres = 95
         if avec_poids:
-            col_widths = [55, 35, 55, largeur_code_barres, 184, 45, 42, 30]
+            col_widths = [55, 35, 55, largeur_code_barres, 172, 45, 54, 30]
             hdr_txts = ('Commande', 'Heure', 'Photo', 'Code-barres', 'Libellé', 'Poids', 'Prix', 'Qté')
         else:
             col_widths = [55, 35, 55, largeur_code_barres, 239, 42, 30]
@@ -402,7 +402,7 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
                 # detail par commande.
                 qte_cell = Paragraph(_qte_totale(g['lignes']), small)
             if avec_poids and g['prix'] and g['prix_kg']:
-                prix_txt = f"{g['prix']} €<br/><font size=6>{g['prix_kg']} €/Kg</font>"
+                prix_txt = f"{g['prix']} €<br/>{g['prix_kg']} €/Kg"
                 row.append(Paragraph(prix_txt, prix_kg_s))
             else:
                 prix_txt = f"{g['prix']} €" if g['prix'] else ''
