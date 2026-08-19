@@ -7,8 +7,8 @@ destinataire) qu'elle n'est plus dans l'onglet "Programmées" — c'est-à-dire
 qu'elle est bien passée dans "Livrées" (ou un autre statut final).
 
 Une commande est signalée en anomalie si :
-- elle est introuvable chez Shopopop (statut_livraison retourne None) ;
-- elle est toujours au statut "schedule" (donc toujours "Programmées").
+- elle est toujours dans "Programmées" (pas encore livrée) ;
+- la vérification Shopopop elle-même a échoué (connexion/API).
 
 Un email récapitulatif des anomalies est envoyé s'il y en a au moins une.
 """
@@ -23,8 +23,6 @@ import livraison_drive as ld
 import shopopop
 
 _TZ = ZoneInfo("Europe/Paris")
-
-_STATUT_PROGRAMMEE = "schedule"
 
 
 def _charger_config(drive_svc):
@@ -104,15 +102,16 @@ def main():
 
     anomalies = []
     for ligne, nom_complet, km in commandes:
-        statut = shopopop.statut_livraison(shopopop_token, shopopop_drive_id, aujourdhui, nom_complet)
-        if statut is None:
-            print(f"  {nom_complet} : INTROUVABLE chez Shopopop")
-            anomalies.append((nom_complet, "introuvable chez Shopopop"))
-        elif statut == _STATUT_PROGRAMMEE:
+        sortie = shopopop.livraison_sortie_programmees(
+            shopopop_token, shopopop_drive_id, aujourdhui, nom_complet)
+        if sortie is None:
+            print(f"  {nom_complet} : ECHEC de la vérification Shopopop")
+            anomalies.append((nom_complet, "échec de la vérification Shopopop (connexion/API)"))
+        elif sortie is False:
             print(f"  {nom_complet} : toujours 'Programmée' (pas livrée)")
             anomalies.append((nom_complet, "toujours 'Programmée' (pas livrée)"))
         else:
-            print(f"  {nom_complet} : OK (livrée, statut={statut}) — nom passé en vert")
+            print(f"  {nom_complet} : OK (livrée) — nom passé en vert")
             ld.marquer_livree(sheets_svc, spreadsheet_id, aujourdhui, ligne)
 
     print(f"\n{len(anomalies)} anomalie(s) sur {len(commandes)} commande(s).")

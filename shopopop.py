@@ -152,15 +152,17 @@ def login(email, mot_de_passe):
         return None
 
 
-def _rechercher_livraison(access_token, drive_id, date_livraison, nom_complet, status=None):
-    """Cherche, parmi les livraisons du magasin `drive_id` prévues pour
-    `date_livraison` (objet date), celle dont le destinataire correspond à
-    `nom_complet` (comparaison par ensemble de mots normalisés, insensible à
-    l'ordre nom/prénom, aux accents et à la casse). `status` restreint la
-    recherche côté API à ce statut (ex. "schedule" pour l'onglet
-    "Programmées") ; laissé à None, la recherche porte sur tous les statuts
-    (utile pour retrouver une livraison qui a quitté "Programmées").
-    Retourne l'item brut (dict) trouvé, ou None si absent/erreur."""
+def _rechercher_livraison_programmee(access_token, drive_id, date_livraison, nom_complet):
+    """Cherche, parmi les livraisons "Programmées" (status="schedule" — seule
+    valeur de statut acceptée par l'API back-office pour ce paramètre ; une
+    requête sans "status" est refusée avec une erreur HTTP 400) du magasin
+    `drive_id` prévues pour `date_livraison` (objet date), celle dont le
+    destinataire correspond à `nom_complet` (comparaison par ensemble de mots
+    normalisés, insensible à l'ordre nom/prénom, aux accents et à la casse).
+    Retourne l'item brut (dict) trouvé, ou None si absent. Peut lever une
+    exception en cas d'erreur réseau/API — à la charge de l'appelant de la
+    gérer, pour ne pas confondre un échec de vérification avec une absence
+    confirmée (livraison sortie de "Programmées")."""
     if not access_token:
         return None
     cible = _tokens(nom_complet)
@@ -173,55 +175,59 @@ def _rechercher_livraison(access_token, drive_id, date_livraison, nom_complet, s
     fin_utc = fin_paris.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%S.999Z")
 
     page = 1
-    try:
-        while True:
-            params = {
-                "drive_id": drive_id, "order": "ASC", "page": page, "per_page": 50,
-                "withdrawal_start_utc": debut_utc,
-                "withdrawal_end_utc": fin_utc,
-            }
-            if status:
-                params["status"] = status
-            url = _API_BASE + "/deliveries?" + urllib.parse.urlencode(params)
-            req = urllib.request.Request(url, headers={
-                **_HEADERS_NAVIGATEUR,
-                "Authorization": f"Bearer {access_token}", "Accept": "application/json"})
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+    while True:
+        url = _API_BASE + "/deliveries?" + urllib.parse.urlencode({
+            "drive_id": drive_id, "order": "ASC", "page": page, "per_page": 50,
+            "status": "schedule",
+            "withdrawal_start_utc": debut_utc,
+            "withdrawal_end_utc": fin_utc,
+        })
+        req = urllib.request.Request(url, headers={
+            **_HEADERS_NAVIGATEUR,
+            "Authorization": f"Bearer {access_token}", "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
 
-            items = data.get("items", [])
-            for it in items:
-                dest = it.get("recipient") or {}
-                nom_dest = f"{dest.get('first_name', '')} {dest.get('last_name', '')}"
-                if _tokens(nom_dest) == cible:
-                    return it
+        items = data.get("items", [])
+        for it in items:
+            dest = it.get("recipient") or {}
+            nom_dest = f"{dest.get('first_name', '')} {dest.get('last_name', '')}"
+            if _tokens(nom_dest) == cible:
+                return it
 
-            if len(items) < 50:
-                return None
-            page += 1
-    except Exception as e:
-        print(f"    Recherche Shopopop échouée ({nom_complet}) : {e}")
-        return None
+        if len(items) < 50:
+            return None
+        page += 1
 
 
 def distance_km(access_token, drive_id, date_livraison, nom_complet):
     """Cherche, parmi les livraisons "Programmées" du magasin `drive_id`
     prévues pour `date_livraison`, celle dont le destinataire correspond à
     `nom_complet`, et retourne sa distance en km (arrondie à 2 décimales),
-    ou None si non trouvée."""
-    it = _rechercher_livraison(access_token, drive_id, date_livraison, nom_complet, status="schedule")
+    ou None si non trouvée/erreur."""
+    try:
+        it = _rechercher_livraison_programmee(access_token, drive_id, date_livraison, nom_complet)
+    except Exception as e:
+        print(f"    Recherche distance Shopopop échouée ({nom_complet}) : {e}")
+        return None
     if not it:
         return None
     metres = it.get("delivery_distance")
     return round(metres / 1000, 2) if isinstance(metres, (int, float)) else None
 
 
-def statut_livraison(access_token, drive_id, date_livraison, nom_complet):
-    """Cherche, parmi TOUTES les livraisons (tous statuts) du magasin
-    `drive_id` prévues pour `date_livraison`, celle dont le destinataire
-    correspond à `nom_complet`, et retourne son statut Shopopop brut (ex.
-    "schedule" = toujours en "Programmées", donc pas encore livrée ; toute
-    autre valeur = la livraison a quitté "Programmées", typiquement
-    "Livrées"), ou None si la livraison est introuvable chez Shopopop."""
-    it = _rechercher_livraison(access_token, drive_id, date_livraison, nom_complet, status=None)
-    return it.get("status") if it else None
+def livraison_sortie_programmees(access_token, drive_id, date_livraison, nom_complet):
+    """Vérifie si la livraison du destinataire `nom_complet` prévue pour
+    `date_livraison` a quitté l'onglet "Programmées" de Shopopop (donc
+    vraisemblablement passée en "Livrées" — l'API ne permet pas d'interroger
+    un autre statut que "schedule", cf. _rechercher_livraison_programmee).
+    Retourne True si absente de "Programmées" (livrée), False si toujours
+    "Programmées" (pas encore livrée), ou None si la vérification a échoué
+    (connexion/API) — à distinguer d'un True, pour ne pas signaler à tort
+    une livraison comme confirmée en cas de panne."""
+    try:
+        it = _rechercher_livraison_programmee(access_token, drive_id, date_livraison, nom_complet)
+    except Exception as e:
+        print(f"    Recherche Shopopop échouée ({nom_complet}) : {e}")
+        return None
+    return it is None
