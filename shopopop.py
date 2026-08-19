@@ -152,12 +152,15 @@ def login(email, mot_de_passe):
         return None
 
 
-def distance_km(access_token, drive_id, date_livraison, nom_complet):
-    """Cherche, parmi les livraisons "Programmées" du magasin `drive_id`
-    prévues pour `date_livraison` (objet date), celle dont le destinataire
-    correspond à `nom_complet` (comparaison par ensemble de mots normalisés,
-    insensible à l'ordre nom/prénom, aux accents et à la casse), et retourne
-    sa distance en km (arrondie à 2 décimales), ou None si non trouvée."""
+def _rechercher_livraison(access_token, drive_id, date_livraison, nom_complet, status=None):
+    """Cherche, parmi les livraisons du magasin `drive_id` prévues pour
+    `date_livraison` (objet date), celle dont le destinataire correspond à
+    `nom_complet` (comparaison par ensemble de mots normalisés, insensible à
+    l'ordre nom/prénom, aux accents et à la casse). `status` restreint la
+    recherche côté API à ce statut (ex. "schedule" pour l'onglet
+    "Programmées") ; laissé à None, la recherche porte sur tous les statuts
+    (utile pour retrouver une livraison qui a quitté "Programmées").
+    Retourne l'item brut (dict) trouvé, ou None si absent/erreur."""
     if not access_token:
         return None
     cible = _tokens(nom_complet)
@@ -172,12 +175,14 @@ def distance_km(access_token, drive_id, date_livraison, nom_complet):
     page = 1
     try:
         while True:
-            url = _API_BASE + "/deliveries?" + urllib.parse.urlencode({
+            params = {
                 "drive_id": drive_id, "order": "ASC", "page": page, "per_page": 50,
-                "status": "schedule",
                 "withdrawal_start_utc": debut_utc,
                 "withdrawal_end_utc": fin_utc,
-            })
+            }
+            if status:
+                params["status"] = status
+            url = _API_BASE + "/deliveries?" + urllib.parse.urlencode(params)
             req = urllib.request.Request(url, headers={
                 **_HEADERS_NAVIGATEUR,
                 "Authorization": f"Bearer {access_token}", "Accept": "application/json"})
@@ -189,12 +194,34 @@ def distance_km(access_token, drive_id, date_livraison, nom_complet):
                 dest = it.get("recipient") or {}
                 nom_dest = f"{dest.get('first_name', '')} {dest.get('last_name', '')}"
                 if _tokens(nom_dest) == cible:
-                    metres = it.get("delivery_distance")
-                    return round(metres / 1000, 2) if isinstance(metres, (int, float)) else None
+                    return it
 
             if len(items) < 50:
                 return None
             page += 1
     except Exception as e:
-        print(f"    Recherche distance Shopopop échouée ({nom_complet}) : {e}")
+        print(f"    Recherche Shopopop échouée ({nom_complet}) : {e}")
         return None
+
+
+def distance_km(access_token, drive_id, date_livraison, nom_complet):
+    """Cherche, parmi les livraisons "Programmées" du magasin `drive_id`
+    prévues pour `date_livraison`, celle dont le destinataire correspond à
+    `nom_complet`, et retourne sa distance en km (arrondie à 2 décimales),
+    ou None si non trouvée."""
+    it = _rechercher_livraison(access_token, drive_id, date_livraison, nom_complet, status="schedule")
+    if not it:
+        return None
+    metres = it.get("delivery_distance")
+    return round(metres / 1000, 2) if isinstance(metres, (int, float)) else None
+
+
+def statut_livraison(access_token, drive_id, date_livraison, nom_complet):
+    """Cherche, parmi TOUTES les livraisons (tous statuts) du magasin
+    `drive_id` prévues pour `date_livraison`, celle dont le destinataire
+    correspond à `nom_complet`, et retourne son statut Shopopop brut (ex.
+    "schedule" = toujours en "Programmées", donc pas encore livrée ; toute
+    autre valeur = la livraison a quitté "Programmées", typiquement
+    "Livrées"), ou None si la livraison est introuvable chez Shopopop."""
+    it = _rechercher_livraison(access_token, drive_id, date_livraison, nom_complet, status=None)
+    return it.get("status") if it else None
