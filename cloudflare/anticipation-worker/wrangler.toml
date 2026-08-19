@@ -1,13 +1,6 @@
-name = "anticipation"
+name = "anticip"
 main = "src/index.js"
 compatibility_date = "2024-11-01"
 
-[vars]
-GITHUB_OWNER = "eNbMobile"
-GITHUB_REPO = "auto_prepa"
-GITHUB_WORKFLOW = "anticipation_commandes.yml"
-GITHUB_REF = "main"
-
-# Secrets à définir après le déploiement (ne jamais les mettre ici en clair) :
-#   wrangler secret put GITHUB_TOKEN
-#   wrangler secret put ACCESS_CODE   (optionnel, voir README.md)
+# Secret à définir après le déploiement (ne jamais le mettre ici en clair) :
+#   wrangler secret put GH_TOKEN

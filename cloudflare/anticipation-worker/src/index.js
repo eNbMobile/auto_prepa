@@ -1,169 +1,19 @@
-/**
- * Worker Cloudflare : déclenche le workflow GitHub Actions "Anticipation Commandes"
- * (anticipation_commandes.yml) sans passer par l'interface GitHub ni par un cron.
- *
- * Page HTML avec un menu déroulant : commandes du jour / de demain / date au choix.
- */
+const REPO_OWNER = 'eNbMobile';
+const REPO_NAME = 'auto_prepa';
+const WORKFLOW_FILE = 'anticipation_commandes.yml';
+const REF = 'main';
 
-function htmlPage() {
-  return `<!doctype html>
-<html lang="fr">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Anticipation commandes</title>
-<style>
-  :root { color-scheme: light dark; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    max-width: 480px;
-    margin: 3rem auto;
-    padding: 0 1.25rem;
-    background: #f6f7f9;
-    color: #1a1a1a;
-  }
-  h1 { font-size: 1.35rem; margin-bottom: .25rem; }
-  p.sub { color: #666; margin-top: 0; margin-bottom: 1.75rem; font-size: .9rem; }
-  form {
-    background: #fff;
-    border: 1px solid #e2e4e8;
-    border-radius: 10px;
-    padding: 1.5rem;
-  }
-  label { display: block; font-weight: 600; margin-bottom: .4rem; font-size: .9rem; }
-  select, input[type="date"], input[type="password"] {
-    width: 100%;
-    padding: .6rem .7rem;
-    font-size: 1rem;
-    border: 1px solid #ccc;
-    border-radius: 6px;
-    margin-bottom: 1.1rem;
-    box-sizing: border-box;
-  }
-  #date-wrap, #code-wrap { display: none; }
-  button {
-    width: 100%;
-    padding: .75rem;
-    font-size: 1rem;
-    font-weight: 600;
-    color: #fff;
-    background: #2563eb;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-  }
-  button:disabled { opacity: .6; cursor: not-allowed; }
-  #status {
-    margin-top: 1.1rem;
-    padding: .75rem;
-    border-radius: 6px;
-    font-size: .9rem;
-    display: none;
-  }
-  #status.ok { display: block; background: #ecfdf3; color: #036b26; border: 1px solid #b7ecc8; }
-  #status.err { display: block; background: #fef2f2; color: #9f1c1c; border: 1px solid #f5c2c2; }
-  #status a { color: inherit; font-weight: 600; }
-  @media (prefers-color-scheme: dark) {
-    body { background: #111318; color: #e7e7e7; }
-    form { background: #1a1d24; border-color: #2a2e37; }
-    p.sub { color: #9aa0aa; }
-    select, input[type="date"], input[type="password"] { background: #0f1115; color: #e7e7e7; border-color: #3a3f4a; }
-  }
-</style>
-</head>
-<body>
-  <h1>Anticipation des commandes</h1>
-  <p class="sub">Déclenche le workflow GitHub Actions « Anticipation Commandes » à la demande.</p>
-
-  <form id="f">
-    <label for="mode">Commandes à anticiper</label>
-    <select id="mode" name="mode">
-      <option value="jour">Commandes du jour</option>
-      <option value="demain">Commandes de demain</option>
-      <option value="custom">Saisir une date…</option>
-    </select>
-
-    <div id="date-wrap">
-      <label for="date">Date</label>
-      <input type="date" id="date" name="date">
-    </div>
-
-    <div id="code-wrap">
-      <label for="code">Code d'accès</label>
-      <input type="password" id="code" name="code" autocomplete="off">
-    </div>
-
-    <button type="submit" id="submit-btn">Lancer l'anticipation</button>
-  </form>
-
-  <div id="status"></div>
-
-<script>
-  const modeSelect = document.getElementById('mode');
-  const dateWrap = document.getElementById('date-wrap');
-  const dateInput = document.getElementById('date');
-  const codeWrap = document.getElementById('code-wrap');
-  const form = document.getElementById('f');
-  const statusEl = document.getElementById('status');
-  const submitBtn = document.getElementById('submit-btn');
-
-  // Affiche le champ code d'accès seulement si le serveur en réclame un.
-  fetch('/declencher', { method: 'OPTIONS' })
-    .then(r => r.json())
-    .then(info => { if (info.codeRequired) codeWrap.style.display = 'block'; })
-    .catch(() => {});
-
-  modeSelect.addEventListener('change', () => {
-    dateWrap.style.display = modeSelect.value === 'custom' ? 'block' : 'none';
-  });
-
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    statusEl.className = '';
-    statusEl.textContent = '';
-
-    if (modeSelect.value === 'custom' && !dateInput.value) {
-      statusEl.className = 'err';
-      statusEl.textContent = 'Merci de choisir une date.';
-      return;
-    }
-
-    submitBtn.disabled = true;
-    submitBtn.textContent = 'Lancement…';
-
-    try {
-      const res = await fetch('/declencher', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode: modeSelect.value,
-          date: dateInput.value,
-          code: document.getElementById('code').value,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok && data.ok) {
-        statusEl.className = 'ok';
-        statusEl.innerHTML = 'Anticipation lancée pour le <strong>' + data.date +
-          '</strong>. <a href="' + data.runsUrl + '" target="_blank" rel="noopener">Voir l\\'avancement sur GitHub</a>';
-      } else {
-        statusEl.className = 'err';
-        statusEl.textContent = data.error || 'Erreur inconnue.';
-      }
-    } catch (err) {
-      statusEl.className = 'err';
-      statusEl.textContent = 'Erreur réseau : ' + err.message;
-    } finally {
-      submitBtn.disabled = false;
-      submitBtn.textContent = "Lancer l'anticipation";
-    }
-  });
-</script>
-</body>
-</html>`;
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[c]));
 }
 
-/** Renvoie {y, m, d} de la date du jour à Paris (indépendant du fuseau du serveur). */
+/** {y, m, d} de la date du jour à Paris, indépendamment du fuseau du serveur. */
 function parisYMD(date) {
   const fmt = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Europe/Paris',
@@ -176,108 +26,129 @@ function parisYMD(date) {
   return { y: get('year'), m: get('month'), d: get('day') };
 }
 
-/** Construit la date "JJ/MM/AAAA" attendue par anticipation_commandes.py, selon le mode choisi. */
-function computeDateStr(mode, customDate) {
-  if (mode === 'custom') {
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(customDate || '');
-    if (!m) throw new Error('Date invalide.');
-    const [, y, mo, d] = m;
-    const check = new Date(Date.UTC(+y, +mo - 1, +d));
-    if (
-      check.getUTCFullYear() !== +y ||
-      check.getUTCMonth() !== +mo - 1 ||
-      check.getUTCDate() !== +d
-    ) {
-      throw new Error('Date invalide.');
-    }
-    return `${d}/${mo}/${y}`;
-  }
+function formatDDMMYYYY(y, m, d) {
+  return `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}/${y}`;
+}
 
-  if (mode !== 'jour' && mode !== 'demain') {
-    throw new Error('Mode invalide.');
+/** Valide un texte "JJ/MM/AAAA" et vérifie qu'il s'agit bien d'une date réelle. */
+function parseDDMMYYYY(text) {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(String(text || '').trim());
+  if (!m) return null;
+  const [, dd, mm, yyyy] = m;
+  const check = new Date(Date.UTC(+yyyy, +mm - 1, +dd));
+  if (
+    check.getUTCFullYear() !== +yyyy ||
+    check.getUTCMonth() !== +mm - 1 ||
+    check.getUTCDate() !== +dd
+  ) {
+    return null;
+  }
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+function computeDateStr(mode, customDate) {
+  if (mode === 'date') {
+    const parsed = parseDDMMYYYY(customDate);
+    if (!parsed) throw new Error('Date invalide (format attendu JJ/MM/AAAA).');
+    return parsed;
   }
 
   const { y, m, d } = parisYMD(new Date());
   const dateObj = new Date(Date.UTC(y, m - 1, d));
   if (mode === 'demain') dateObj.setUTCDate(dateObj.getUTCDate() + 1);
+  else if (mode !== 'jour') throw new Error('Choix invalide.');
 
-  const dd = String(dateObj.getUTCDate()).padStart(2, '0');
-  const mm = String(dateObj.getUTCMonth() + 1).padStart(2, '0');
-  const yyyy = dateObj.getUTCFullYear();
-  return `${dd}/${mm}/${yyyy}`;
+  return formatDDMMYYYY(dateObj.getUTCFullYear(), dateObj.getUTCMonth() + 1, dateObj.getUTCDate());
 }
 
-async function dispatchWorkflow(env, dateStr) {
-  const url = `https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/actions/workflows/${env.GITHUB_WORKFLOW}/dispatches`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${env.GITHUB_TOKEN}`,
-      Accept: 'application/vnd.github+json',
-      'Content-Type': 'application/json',
-      'User-Agent': 'anticipation-worker',
-      'X-GitHub-Api-Version': '2022-11-28',
-    },
-    body: JSON.stringify({
-      ref: env.GITHUB_REF,
-      inputs: { date: dateStr },
-    }),
+function renderPage(title, message, status = 'info') {
+  const color = status === 'success' ? '#1a7f37' : status === 'error' ? '#cf222e' : '#1f2328';
+  const html = `<!doctype html><html lang="fr"><head><meta charset="utf-8">`
+    + `<meta name="viewport" content="width=device-width, initial-scale=1">`
+    + `<title>${escapeHtml(title)}</title></head>`
+    + `<body style="font-family: system-ui, sans-serif; max-width: 480px; margin: 10vh auto; text-align:center; color:${color}">`
+    + `<h1>${escapeHtml(title)}</h1><p>${message}</p>`
+    + `</body></html>`;
+  return new Response(html, {
+    status: status === 'error' ? 400 : 200,
+    headers: { 'content-type': 'text/html; charset=utf-8' },
   });
+}
 
-  if (res.status !== 204) {
-    let detail = '';
-    try {
-      const body = await res.json();
-      detail = body.message || JSON.stringify(body);
-    } catch {
-      detail = await res.text();
-    }
-    throw new Error(`GitHub a refusé le déclenchement (${res.status}) : ${detail}`);
-  }
+function renderFormPage(mode, dateValue, error) {
+  const opt = (value, label) =>
+    `<option value="${value}"${mode === value ? ' selected' : ''}>${label}</option>`;
+  const html = `<!doctype html><html lang="fr"><head><meta charset="utf-8">`
+    + `<meta name="viewport" content="width=device-width, initial-scale=1">`
+    + `<title>Anticipation Commandes</title></head>`
+    + `<body style="font-family: system-ui, sans-serif; max-width: 480px; margin: 10vh auto; text-align:center">`
+    + `<h1>Anticipation Commandes</h1>`
+    + (error ? `<p style="color:#cf222e">${escapeHtml(error)}</p>` : '')
+    + `<form method="post">`
+    + `<p><select name="mode" id="mode" style="font-size:1.1em; padding:0.4em" `
+    + `onchange="document.getElementById('date-wrap').style.display = this.value === 'date' ? 'block' : 'none'">`
+    + opt('jour', 'Commandes du jour')
+    + opt('demain', 'Commandes de demain')
+    + opt('date', 'Saisir une date…')
+    + `</select></p>`
+    + `<p id="date-wrap" style="display:${mode === 'date' ? 'block' : 'none'}">`
+    + `<input type="text" name="date" placeholder="JJ/MM/AAAA" pattern="\\d{2}/\\d{2}/\\d{4}" `
+    + `value="${escapeHtml(dateValue || '')}" style="font-size:1.1em; padding:0.4em">`
+    + `</p>`
+    + `<button type="submit" style="font-size:1.2em; padding: 0.6em 1.4em; cursor:pointer">Lancer l'anticipation</button>`
+    + `</form></body></html>`;
+  return new Response(html, {
+    status: error ? 400 : 200,
+    headers: { 'content-type': 'text/html; charset=utf-8' },
+  });
 }
 
 export default {
   async fetch(request, env) {
-    const url = new URL(request.url);
+    if (request.method === 'POST') {
+      const form = await request.formData();
+      const mode = form.get('mode') || 'jour';
+      const dateValue = form.get('date') || '';
 
-    if (url.pathname === '/' && request.method === 'GET') {
-      return new Response(htmlPage(), {
-        headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      });
-    }
-
-    if (url.pathname === '/declencher' && request.method === 'OPTIONS') {
-      return new Response(JSON.stringify({ codeRequired: !!env.ACCESS_CODE }), {
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-
-    if (url.pathname === '/declencher' && request.method === 'POST') {
+      let dateStr;
       try {
-        const body = await request.json();
-
-        if (env.ACCESS_CODE && body.code !== env.ACCESS_CODE) {
-          return new Response(JSON.stringify({ ok: false, error: "Code d'accès incorrect." }), {
-            status: 401,
-            headers: { 'Content-Type': 'application/json' },
-          });
-        }
-
-        const dateStr = computeDateStr(body.mode, body.date);
-        await dispatchWorkflow(env, dateStr);
-
-        const runsUrl = `https://github.com/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/actions/workflows/${env.GITHUB_WORKFLOW}`;
-        return new Response(JSON.stringify({ ok: true, date: dateStr, runsUrl }), {
-          headers: { 'Content-Type': 'application/json' },
-        });
+        dateStr = computeDateStr(mode, dateValue);
       } catch (err) {
-        return new Response(JSON.stringify({ ok: false, error: err.message }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' },
-        });
+        return renderFormPage(mode, dateValue, err.message);
       }
+
+      const ghResponse = await fetch(
+        `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/workflows/${WORKFLOW_FILE}/dispatches`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${env.GH_TOKEN}`,
+            Accept: 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+            'User-Agent': 'enbmobile-trigger-worker',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ ref: REF, inputs: { date: dateStr } }),
+        }
+      );
+
+      if (ghResponse.status === 204) {
+        return renderPage(
+          'Anticipation lancée ✅',
+          `L'anticipation a bien été lancée pour le <strong>${escapeHtml(dateStr)}</strong>.`,
+          'success'
+        );
+      }
+
+      const errorBody = await ghResponse.text();
+      console.log(`dispatch failed: HTTP ${ghResponse.status} - ${errorBody}`);
+      return renderPage(
+        'Erreur',
+        `Le déclenchement a échoué (code ${ghResponse.status}). Contacte l'administrateur.`,
+        'error'
+      );
     }
 
-    return new Response('Not found', { status: 404 });
+    return renderFormPage('jour', '', null);
   },
 };

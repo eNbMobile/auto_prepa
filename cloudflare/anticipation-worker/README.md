@@ -1,14 +1,16 @@
-# Worker "anticipation"
+# Worker "anticip"
 
 Page web (Cloudflare Worker) qui déclenche le workflow GitHub Actions
 `anticipation_commandes.yml` sans passer par l'interface GitHub ni par un cron,
-sur le même principe que le worker `ctrl.controle-stocks.workers.dev` déjà en place
-pour le contrôle des stocks.
+même principe et même style que le worker `ctrl` (`ctrl.controle-stocks.workers.dev`)
+déjà en place pour le contrôle des stocks — d'ailleurs ce worker réutilise
+directement son mécanisme de déclenchement (secret `GH_TOKEN`, appel à l'API
+GitHub Actions `dispatches`).
 
 La page propose un menu déroulant :
 - **Commandes du jour**
 - **Commandes de demain**
-- **Saisir une date** (affiche un champ date au format JJ/MM/AAAA)
+- **Saisir une date…** (fait apparaître un champ texte au format JJ/MM/AAAA)
 
 ## Déploiement
 
@@ -17,50 +19,28 @@ Prérequis : Node.js et `npx` disponibles en local.
 ```bash
 cd cloudflare/anticipation-worker
 npx wrangler login          # une seule fois, ouvre le navigateur pour s'authentifier
+npx wrangler secret put GH_TOKEN   # même token que pour le worker "ctrl" si tu l'as encore
 npx wrangler deploy
 ```
 
-Le nom du worker (`anticipation` dans `wrangler.toml`) détermine l'URL obtenue,
-en général `https://anticipation.<ton-sous-domaine>.workers.dev` (le même
-sous-domaine `controle-stocks` que pour le worker existant si tu déploies sur
-le même compte Cloudflare).
+Le nom du worker (`anticip` dans `wrangler.toml`) détermine l'URL obtenue :
+`https://anticip.controle-stocks.workers.dev` (même sous-domaine de compte que
+`ctrl` si tu déploies sur le même compte Cloudflare).
 
-## Secrets à configurer
+## Secret `GH_TOKEN`
 
-### `GITHUB_TOKEN` (obligatoire)
+Token GitHub avec le droit de déclencher `anticipation_commandes.yml` :
 
-Un token GitHub avec le droit de déclencher le workflow `anticipation_commandes.yml` :
-
-- **Token classique** : scope `repo` (ou `public_repo` si le dépôt est public) + `workflow`.
+- **Token classique** : scope `repo` (ou `public_repo` si dépôt public) + `workflow`.
 - **Token fine-grained** : accès au dépôt `eNbMobile/auto_prepa` avec la permission
   `Actions: Read and write`.
 
-Si un token est déjà utilisé pour le worker `controle-stocks` (secret `GH_PAT` du
-dépôt, ou un token Cloudflare dédié), tu peux réutiliser le même.
-
-```bash
-npx wrangler secret put GITHUB_TOKEN
-```
-
-### `ACCESS_CODE` (optionnel)
-
-Si tu veux protéger la page par un petit code d'accès (évite que n'importe qui
-tombant sur l'URL puisse déclencher le workflow) :
-
-```bash
-npx wrangler secret put ACCESS_CODE
-```
-
-Si ce secret n'est pas défini, la page ne demande aucun code.
-
-## Configuration (`wrangler.toml`)
-
-Les variables `GITHUB_OWNER`, `GITHUB_REPO`, `GITHUB_WORKFLOW` et `GITHUB_REF`
-sont déjà renseignées pour ce dépôt (`eNbMobile/auto_prepa`, branche `main`).
-Modifie-les si besoin avant de déployer.
+C'est le même type de token que celui déjà utilisé par le worker `ctrl` — tu
+peux réutiliser exactement le même.
 
 ## Test rapide
 
-Une fois déployé, ouvrir l'URL du worker, choisir "Commandes du jour" (ou une
-autre option) et cliquer sur "Lancer l'anticipation". La page affiche un lien
-direct vers la page GitHub Actions pour suivre l'exécution.
+Une fois déployé, ouvrir l'URL du worker, choisir une option dans le menu
+déroulant (éventuellement saisir une date), puis cliquer sur "Lancer
+l'anticipation". La page confirme le déclenchement ; le run apparaît dans
+GitHub → Actions → Anticipation Commandes.
