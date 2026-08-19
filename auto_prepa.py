@@ -353,6 +353,7 @@ def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites):
                 _supprimer_anticipation_archive_drive(drive_svc, num_ancien)
                 _supprimer_bdc_drive(drive_svc, num_ancien)
                 _uploader_annulation_drive(drive_svc, num_ancien)
+                supprimer_commande_avoir_drive(drive_svc, num_ancien)
                 traites.add(f"BonDeCommande_{num_ancien}.pdf")
             elif match_annul:
                 num_annule = match_annul.group(1)
@@ -362,6 +363,7 @@ def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites):
                 _supprimer_anticipation_archive_drive(drive_svc, num_annule)
                 _supprimer_bdc_drive(drive_svc, num_annule)
                 _uploader_annulation_drive(drive_svc, num_annule)
+                supprimer_commande_avoir_drive(drive_svc, num_annule)
                 traites.add(f"BonDeCommande_{num_annule}.pdf")
             else:
                 print(f"    Sujet non reconnu : {subject[:80]}")
@@ -1005,10 +1007,13 @@ def log_ecart_drive(drive_svc, numero, articles_pdf, produits_pdf, articles_gen,
         print(f"    Log ecart Drive echoue : {e}")
 
 AVOIR_SHEET_FILENAME = "Commandes en cours"
+AVOIR_ENTETE = ["Civilité", "N° commande", "Nom", "Prénom", "Date", "Créneau"]
 
-def inscrire_commande_avoir_drive(drive_svc, civilite, nom, prenom, date_cde, creneau):
-    """Ajoute une ligne (civilite, nom, prenom, date, creneau) au Google Sheet
-    Drive GITHUB/Avoir/Commandes en cours, pour chaque commande geree."""
+def inscrire_commande_avoir_drive(drive_svc, civilite, numero, nom, prenom, date_cde, creneau):
+    """Ajoute une ligne (civilite, numero, nom, prenom, date, creneau) au Google Sheet
+    Drive GITHUB/Avoir/Commandes en cours, pour chaque commande geree. Le numero de
+    commande en deuxieme colonne permet de retrouver/supprimer la ligne en cas
+    d'annulation ou de remplacement."""
     if not (nom or prenom):
         print("    Civilite/nom/prenom introuvables dans le PDF, ligne Avoir ignoree.")
         return
@@ -1027,8 +1032,7 @@ def inscrire_commande_avoir_drive(drive_svc, civilite, nom, prenom, date_cde, cr
         ).execute()
         existing = res.get("files", [])
 
-        entete = ["Civilité", "Nom", "Prénom", "Date", "Créneau"]
-        lignes = [entete]
+        lignes = [AVOIR_ENTETE]
         if existing:
             buf = io.BytesIO()
             dl = MediaIoBaseDownload(
@@ -1040,8 +1044,9 @@ def inscrire_commande_avoir_drive(drive_svc, civilite, nom, prenom, date_cde, cr
             lues = [l for l in csv.reader(io.StringIO(contenu)) if l]
             if lues:
                 lignes = lues
+                lignes[0] = AVOIR_ENTETE
 
-        lignes.append([civilite, nom, prenom, date_cde, creneau])
+        lignes.append([civilite, numero, nom, prenom, date_cde, creneau])
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".csv",
                                          delete=False, encoding="utf-8", newline="") as f:
@@ -1057,12 +1062,62 @@ def inscrire_commande_avoir_drive(drive_svc, civilite, nom, prenom, date_cde, cr
                           "mimeType": "application/vnd.google-apps.spreadsheet"},
                     media_body=media, fields="id",
                 ).execute()
-            print(f"    Avoir/{AVOIR_SHEET_FILENAME} : {civilite} {nom} {prenom} | "
+            print(f"    Avoir/{AVOIR_SHEET_FILENAME} : {civilite} {numero} {nom} {prenom} | "
                   f"{date_cde} | {creneau}")
         finally:
             os.remove(tmp)
     except Exception as e:
         print(f"    Ecriture Drive GITHUB/Avoir/{AVOIR_SHEET_FILENAME} echouee : {e}")
+
+def supprimer_commande_avoir_drive(drive_svc, numero):
+    """Supprime, dans Drive GITHUB/Avoir/Commandes en cours, la ligne dont le
+    numero de commande (2e colonne) correspond a numero, suite a une
+    annulation ou un remplacement de commande."""
+    try:
+        github_id = _get_or_create_subfolder(drive_svc, "root", "GITHUB")
+        if not github_id:
+            return
+        avoir_id = _get_or_create_subfolder(drive_svc, github_id, "Avoir")
+        if not avoir_id:
+            return
+
+        res = drive_svc.files().list(
+            q=(f"name='{AVOIR_SHEET_FILENAME}' and '{avoir_id}' in parents "
+               f"and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"),
+            fields="files(id)",
+        ).execute()
+        existing = res.get("files", [])
+        if not existing:
+            return
+
+        buf = io.BytesIO()
+        dl = MediaIoBaseDownload(
+            buf, drive_svc.files().export_media(fileId=existing[0]["id"], mimeType="text/csv"))
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        contenu = buf.getvalue().decode("utf-8-sig", errors="replace")
+        lignes = [l for l in csv.reader(io.StringIO(contenu)) if l]
+        if not lignes:
+            return
+
+        entete, corps = lignes[0], lignes[1:]
+        nouveau_corps = [l for l in corps if len(l) < 2 or l[1] != numero]
+        if len(nouveau_corps) == len(corps):
+            return
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv",
+                                         delete=False, encoding="utf-8", newline="") as f:
+            csv.writer(f).writerows([entete] + nouveau_corps)
+            tmp = f.name
+        try:
+            media = MediaFileUpload(tmp, mimetype="text/csv", resumable=False)
+            drive_svc.files().update(fileId=existing[0]["id"], media_body=media).execute()
+            print(f"    Avoir/{AVOIR_SHEET_FILENAME} : ligne commande {numero} supprimee")
+        finally:
+            os.remove(tmp)
+    except Exception as e:
+        print(f"    Suppression Drive GITHUB/Avoir/{AVOIR_SHEET_FILENAME} echouee : {e}")
 
 LOCK_FILE = os.path.expanduser("~/.auto_prepa.lock")
 
@@ -1258,7 +1313,7 @@ def _main():
         print(" OK")
 
         civilite, nom, prenom, date_cde, creneau = extraire_client_creneau_pdf(pt.stdout)
-        inscrire_commande_avoir_drive(drive_svc, civilite, nom, prenom, date_cde, creneau)
+        inscrire_commande_avoir_drive(drive_svc, civilite, order_num, nom, prenom, date_cde, creneau)
 
         avertissements_nomenclature = [
             ligne.rstrip('\n')
