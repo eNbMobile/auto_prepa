@@ -64,6 +64,7 @@ def _dans_creneau_matin(dt):
 _IDX_GENCOD  = 0
 _IDX_LIBELLE = 1
 _IDX_PRIX    = 2
+_IDX_PRIX_KG = 3
 _IDX_QTE     = 4
 _IDX_POIDS   = 6
 _IDX_JOUR_HEURE = 9
@@ -99,6 +100,7 @@ def _parser_lignes_anticipation(contenu, numero_commande):
             "gencod":   champs[_IDX_GENCOD].strip(),
             "libelle":  champs[_IDX_LIBELLE].strip(),
             "prix":     champs[_IDX_PRIX].strip(),
+            "prix_kg":  champs[_IDX_PRIX_KG].strip(),
             "qte":      champs[_IDX_QTE].strip(),
             "poids":    champs[_IDX_POIDS].strip(),
             "heure":    heure,
@@ -236,12 +238,13 @@ def _grouper_produits(produits):
         gencod = p["gencod"]
         if gencod not in groupes:
             groupes[gencod] = {
-                "gencod":  gencod,
-                "libelle": p["libelle"],
-                "prix":    p["prix"],
-                "poids":   p["poids"],
-                "adresse": p["adresse"],
-                "lignes":  [],
+                "gencod":   gencod,
+                "libelle":  p["libelle"],
+                "prix":     p["prix"],
+                "prix_kg":  p["prix_kg"],
+                "poids":    p["poids"],
+                "adresse":  p["adresse"],
+                "lignes":   [],
             }
             ordre_gencods.append(gencod)
         groupes[gencod]["lignes"].append((p["commande"], p["qte"], p["heure"]))
@@ -314,6 +317,7 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
     small    = ParagraphStyle('small', fontSize=8, leading=10)
     header_s = ParagraphStyle('hdr', fontSize=8, leading=10, textColor=colors.white)
     tiny_c   = ParagraphStyle('tiny_c', fontSize=7, leading=8, alignment=1)
+    prix_kg_s = ParagraphStyle('prix_kg', fontSize=8, leading=8)
     titre_s  = ParagraphStyle('titre', fontName='Helvetica-Bold', fontSize=13,
                               leading=16, alignment=1)
     BLEU     = colors.HexColor('#006797')
@@ -335,7 +339,7 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
         avec_poids = (lettre == "B")
         largeur_code_barres = 95
         if avec_poids:
-            col_widths = [45, 35, 55, largeur_code_barres, 194, 45, 42, 30]
+            col_widths = [55, 35, 55, largeur_code_barres, 184, 45, 42, 30]
             hdr_txts = ('Commande', 'Heure', 'Photo', 'Code-barres', 'Libellé', 'Poids', 'Prix', 'Qté')
         else:
             col_widths = [55, 35, 55, largeur_code_barres, 239, 42, 30]
@@ -397,8 +401,12 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
                 # Autres rayons : quantite totale a collecter, sans le
                 # detail par commande.
                 qte_cell = Paragraph(_qte_totale(g['lignes']), small)
-            prix_txt = f"{g['prix']} €" if g['prix'] else ''
-            row.append(Paragraph(prix_txt, small))
+            if avec_poids and g['prix'] and g['prix_kg']:
+                prix_txt = f"{g['prix']} €<br/><font size=6>{g['prix_kg']} €/Kg</font>"
+                row.append(Paragraph(prix_txt, prix_kg_s))
+            else:
+                prix_txt = f"{g['prix']} €" if g['prix'] else ''
+                row.append(Paragraph(prix_txt, small))
             row.append(qte_cell)
             data.append(row)
 
@@ -416,6 +424,13 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
             ('TOPPADDING',     (0, 0), (-1, -1), 6),
             ('BOTTOMPADDING',  (0, 0), (-1, -1), 6),
         ])
+        if avec_poids:
+            # Poids (col 5) et Prix (col 6) remontes en haut de cellule : le
+            # prix/kg ajoute une 2e ligne sous le prix sans faire grandir la
+            # ligne davantage que necessaire.
+            style.add('VALIGN', (5, 1), (6, -1), 'TOP')
+            style.add('TOPPADDING', (0, 1), (-1, -1), 4)
+            style.add('BOTTOMPADDING', (0, 1), (-1, -1), 4)
 
         table = Table(data, colWidths=col_widths, repeatRows=1)
         table.setStyle(style)
@@ -603,6 +618,7 @@ def main():
             "gencod":   _GENCOD_BAGUETTE_DRIVE,
             "libelle":  _LIBELLE_BAGUETTE_DRIVE,
             "prix":     _PRIX_BAGUETTE_DRIVE,
+            "prix_kg":  "",
             "qte":      str(_QTE_BAGUETTES_DRIVE),
             "poids":    "",
             "heure":    _HEURE_BAGUETTES_DRIVE,
