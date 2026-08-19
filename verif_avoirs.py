@@ -146,7 +146,7 @@ def _get_sheets_service():
 
 
 def _charger_config_avoir(drive_svc):
-    """Retourne (avoir_spreadsheet_id, email_destinataire) depuis config.json."""
+    """Retourne (avoir_spreadsheet_id, email_destinataire, email_destinataire_2) depuis config.json."""
     import json
     from googleapiclient.http import MediaIoBaseDownload
     res = drive_svc.files().list(
@@ -168,7 +168,8 @@ def _charger_config_avoir(drive_svc):
     if not email:
         print("ERREUR : email_destinataire absent de config.json.")
         sys.exit(1)
-    return avoir_id, email
+    email_2 = cfg.get("email_destinataire_2", "").strip()
+    return avoir_id, email, email_2
 
 
 def _argb_vers_rgb01(argb):
@@ -318,7 +319,7 @@ def _vider_commandes_en_cours(sheets_svc, file_id):
     print("  'Commandes en cours' vide.")
 
 
-def _envoyer_email_avoir(gmail_svc, destinataire, civilite, avoir, date_cde, creneau):
+def _envoyer_email_avoir(gmail_svc, destinataire, destinataire_2, civilite, avoir, date_cde, creneau):
     if not gmail_svc:
         print("  Gmail inaccessible — email non envoye.")
         return
@@ -332,11 +333,13 @@ def _envoyer_email_avoir(gmail_svc, destinataire, civilite, avoir, date_cde, cre
     )
     msg = MIMEText(corps, 'plain', 'utf-8')
     msg['To'] = destinataire
+    if destinataire_2:
+        msg['Cc'] = destinataire_2
     msg['Subject'] = "Avoir à déduire"
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     try:
         gmail_svc.users().messages().send(userId='me', body={'raw': raw}).execute()
-        print(f"  Email envoye -> {destinataire} ({avoir['nom']} {avoir['prenom']}, {montant})")
+        print(f"  Email envoye -> {destinataire} (cc: {destinataire_2}) ({avoir['nom']} {avoir['prenom']}, {montant})")
     except Exception as e:
         print(f"  Email echoue ({avoir['nom']} {avoir['prenom']}) : {e}")
 
@@ -355,7 +358,7 @@ def main():
         print("ERREUR : Sheets inaccessible.")
         sys.exit(1)
 
-    avoir_spreadsheet_id, email_destinataire = _charger_config_avoir(drive_svc)
+    avoir_spreadsheet_id, email_destinataire, email_destinataire_2 = _charger_config_avoir(drive_svc)
 
     aujourdhui = datetime.now(_TZ).date()
     print(f"Lecture des avoirs jaunes ({aujourdhui.strftime('%d/%m/%Y')}) …")
@@ -393,7 +396,7 @@ def main():
                 continue
             print(f"  Avoir trouve ({avoir['onglet']}, {avoir['nom']} {avoir['prenom']}, "
                   f"{_formatter_montant(avoir['montant'])}) — envoi du mail.")
-            _envoyer_email_avoir(gmail_svc, email_destinataire, civilite, avoir, date_cde, creneau)
+            _envoyer_email_avoir(gmail_svc, email_destinataire, email_destinataire_2, civilite, avoir, date_cde, creneau)
             nb_envoyes += 1
         if not trouve:
             print("  Aucun avoir jaune correspondant.")
