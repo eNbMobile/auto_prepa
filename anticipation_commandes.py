@@ -315,7 +315,7 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
         return None
 
     small    = ParagraphStyle('small', fontSize=8, leading=10)
-    small_c  = ParagraphStyle('small_c', fontSize=8, leading=10, alignment=1)
+    small_c  = ParagraphStyle('small_c', fontSize=8, leading=8, alignment=1)
     header_s = ParagraphStyle('hdr', fontSize=8, leading=10, textColor=colors.white)
     tiny_c   = ParagraphStyle('tiny_c', fontSize=7, leading=8, alignment=1)
     titre_s  = ParagraphStyle('titre', fontName='Helvetica-Bold', fontSize=13,
@@ -414,6 +414,11 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
                             ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
                             ('LEFTPADDING',   (0, 0), (-1, -1), 0),
                             ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+                            # Ecarte legerement Poids/Prix (remontes) du
+                            # prix/kg (descendu), sans agrandir la ligne : le
+                            # leading de small_c a ete resserre d'autant.
+                            ('BOTTOMPADDING', (0, 0), (-1, 0), 2),
+                            ('TOPPADDING',    (0, 1), (-1, 1), 2),
                         ]),
                     )
                     row.append(poids_prix)
