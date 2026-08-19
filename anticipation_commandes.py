@@ -34,9 +34,15 @@ RAYONS_LETTRE = {
     "A": "Bazar",
     "B": "Boucherie",
     "C": "BVP",
+    "D": "Poissonnerie",
     "F": "Fromage à la coupe",
     "G": "Traiteur chaud",
 }
+
+# Rayons dont le format PDF affiche systematiquement poids/qte + prix + prix/kg
+# par ligne de commande (comme la Boucherie) : cf. avec_poids/poids_variable
+# dans _elements_rayon.
+_LETTRES_AVEC_POIDS_SYSTEMATIQUE = ("B", "D")
 
 # Chaque run lance le matin (creneau 4h00-6h30) ajoute d'office 4 baguettes
 # tradition, commande "Drive" (pas liees a une vraie commande client), sur la
@@ -347,14 +353,15 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
             Spacer(1, 5 * mm),
         ]
 
-        # Boucherie (lettre B) : colonne Poids en plus, juste avant le Prix.
+        # Boucherie (lettre B) et Poissonnerie (lettre D) : colonne Poids en
+        # plus, juste avant le Prix (_LETTRES_AVEC_POIDS_SYSTEMATIQUE).
         # Fromage à la coupe (lettre F) : meme colonne Poids, mais seulement
         # si le rayon contient aujourd'hui au moins un produit vendu au
         # poids variable (gencod generique, cf. _gencod_poids_variable) ;
         # les produits a poids fixe du meme rayon restent alors affiches
         # normalement (case Poids vide, quantite totale).
         contient_poids_variable = any(_gencod_poids_variable(p['gencod']) for p in produits)
-        avec_poids = (lettre == "B") or (lettre == "F" and contient_poids_variable)
+        avec_poids = (lettre in _LETTRES_AVEC_POIDS_SYSTEMATIQUE) or (lettre == "F" and contient_poids_variable)
         largeur_code_barres = 95
         if avec_poids:
             col_widths = [55, 35, 55, largeur_code_barres, 184, 45, 42, 30]
@@ -409,11 +416,12 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
             heure_cell = Paragraph("<br/>".join(h for _, _, h in g['lignes']), small)
 
             row = [commande_cell, heure_cell, photo_cell, bc_cell, Paragraph(g['libelle'], small)]
-            # Poids variable : Boucherie en totalite, Fromage a la coupe
-            # seulement pour les produits identifies par leur gencod (cf.
-            # _gencod_poids_variable). Un rayon Fromage a poids variable
-            # peut donc melanger des lignes des deux formats.
-            poids_variable = avec_poids and (lettre == "B" or _gencod_poids_variable(gencod))
+            # Poids variable : Boucherie et Poissonnerie en totalite, Fromage
+            # a la coupe seulement pour les produits identifies par leur
+            # gencod (cf. _gencod_poids_variable). Un rayon Fromage a poids
+            # variable peut donc melanger des lignes des deux formats.
+            poids_variable = avec_poids and (lettre in _LETTRES_AVEC_POIDS_SYSTEMATIQUE
+                                              or _gencod_poids_variable(gencod))
             if poids_variable:
                 # Qte et poids restent detailles par commande (poids total =
                 # qte * poids unitaire, propre a chaque client).
@@ -539,12 +547,14 @@ def _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf):
 
 
 def _supprimer_bons_anticipation_traites(drive_svc, fichiers):
-    """Supprime de Drive les bon_anticipation_NUMERO.txt une fois inclus dans le
-    PDF archive, pour eviter qu'ils ne soient retraites lors d'une relance."""
+    """Met a la corbeille sur Drive les bon_anticipation_NUMERO.txt une fois inclus
+    dans le PDF archive, pour eviter qu'ils ne soient retraites lors d'une relance.
+    Mis a la corbeille (trashed=True) plutot que supprimes definitivement (delete),
+    pour rester restaurables depuis Drive en cas de besoin."""
     for file_id, filename in fichiers:
         try:
-            drive_svc.files().delete(fileId=file_id).execute()
-            print(f"    Supprime Drive GITHUB/Anticipation : {filename}")
+            drive_svc.files().update(fileId=file_id, body={"trashed": True}).execute()
+            print(f"    Mis a la corbeille Drive GITHUB/Anticipation : {filename}")
         except Exception as e:
             print(f"    Suppression {filename} echouee : {e}")
 

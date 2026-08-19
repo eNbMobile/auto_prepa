@@ -587,7 +587,9 @@ def archiver_resultat_anticipation_drive(drive_svc, local_path, dossier_mm_aaaa,
         return False
 
 def _supprimer_anticipation_archive_drive(drive_svc, numero):
-    """Supprime la copie de bon_anticipation_NUMERO.txt archivee sous GITHUB/Anticipation/."""
+    """Met a la corbeille la copie de bon_anticipation_NUMERO.txt archivee sous
+    GITHUB/Anticipation/ (trashed=True plutot que suppression definitive, pour
+    rester restaurable depuis Drive)."""
     nom = f"bon_anticipation_{numero}.txt"
     try:
         res = drive_svc.files().list(
@@ -597,8 +599,8 @@ def _supprimer_anticipation_archive_drive(drive_svc, numero):
         for f in res.get("files", []):
             if DRIVE_BONS_FOLDER_ID and DRIVE_BONS_FOLDER_ID in (f.get("parents") or []):
                 continue
-            drive_svc.files().delete(fileId=f["id"]).execute()
-            print(f"    Supprime Drive GITHUB/Anticipation : {nom}")
+            drive_svc.files().update(fileId=f["id"], body={"trashed": True}).execute()
+            print(f"    Mis a la corbeille Drive GITHUB/Anticipation : {nom}")
     except Exception as e:
         print(f"    Suppression archive GITHUB/Anticipation {nom} echouee : {e}")
 
