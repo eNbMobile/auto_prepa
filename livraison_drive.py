@@ -397,6 +397,31 @@ def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
         return False
 
 
+def lire_commandes_jour(sheets_svc, spreadsheet_id, aujourdhui):
+    """Retourne [(nom_complet, km), ...] des commandes en LIVRAISON inscrites
+    pour `aujourdhui` dans l'onglet du mois de `aujourdhui` de LIVRAISON
+    DRIVE 2026 (colonne B = Date au format JJ/MM, colonne C = Nom Prénom,
+    colonne D = km). Utilisé par le workflow "Vérif LAD" pour vérifier
+    chaque soir que ces commandes ont bien été livrées côté Shopopop."""
+    mois = MOIS_FR[aujourdhui.month - 1]
+    onglet = _trouver_onglet(sheets_svc, spreadsheet_id, mois)
+    if not onglet:
+        print(f"    Onglet '{mois}' introuvable dans LIVRAISON DRIVE 2026.")
+        return []
+    jour_str = aujourdhui.strftime("%d/%m")
+    res = sheets_svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=f"'{onglet}'!A2:D{1 + _MAX_LIGNES}").execute()
+    commandes = []
+    for row in res.get("values", []):
+        date_val = row[1].strip() if len(row) > 1 and row[1] else ""
+        nom_complet = row[2].strip() if len(row) > 2 and row[2] else ""
+        km = row[3].strip() if len(row) > 3 and row[3] else ""
+        if date_val == jour_str and nom_complet:
+            commandes.append((nom_complet, km))
+    return commandes
+
+
 def _parser_jour(jour_str, aujourdhui):
     """Parse 'JJ/MM' en date, en choisissant l'annee la plus proche de
     aujourdhui (gere le cas d'une commande de fin decembre encore en
