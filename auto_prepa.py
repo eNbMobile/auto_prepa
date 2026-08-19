@@ -50,6 +50,7 @@ DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
 DRIVE_BONS_FOLDER_ID = ""
 DRIVE_BDC_FOLDER_ID  = ""
 EMAIL_ANTICIPATION   = ""
+EMAIL_ANTICIPATION_2 = ""
 LIVRAISON_SPREADSHEET_ID = ""
 
 CONFIG_FILES = [
@@ -1139,7 +1140,7 @@ def main():
 
 def _charger_config(drive_svc):
     """Charge config.json depuis DRIVE_CONFIG_FOLDER_ID et initialise les globals."""
-    global DRIVE_BONS_FOLDER_ID, DRIVE_BDC_FOLDER_ID, EMAIL_ANTICIPATION, LIVRAISON_SPREADSHEET_ID
+    global DRIVE_BONS_FOLDER_ID, DRIVE_BDC_FOLDER_ID, EMAIL_ANTICIPATION, EMAIL_ANTICIPATION_2, LIVRAISON_SPREADSHEET_ID
     if not DRIVE_CONFIG_FOLDER_ID:
         print("ERREUR : secret DRIVE_CONFIG_FOLDER_ID manquant.")
         sys.exit(1)
@@ -1161,6 +1162,7 @@ def _charger_config(drive_svc):
         DRIVE_BONS_FOLDER_ID = cfg["drive_bons_folder_id"]
         DRIVE_BDC_FOLDER_ID  = cfg["drive_bdc_folder_id"]
         EMAIL_ANTICIPATION   = cfg.get("email_destinataire", "")
+        EMAIL_ANTICIPATION_2 = cfg.get("email_destinataire_2", "")
         LIVRAISON_SPREADSHEET_ID = (cfg.get("livraison_spreadsheet_id", "").strip()
                                      or livraison_drive.LIVRAISON_SPREADSHEET_ID_DEFAUT)
     except Exception as e:

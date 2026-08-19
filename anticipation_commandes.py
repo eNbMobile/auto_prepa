@@ -515,6 +515,7 @@ def _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf):
     """Envoie par email le PDF d'anticipation du jour au destinataire
     configure sur Drive (config.json / email_destinataire)."""
     destinataire = ap.EMAIL_ANTICIPATION
+    destinataire_cc = ap.EMAIL_ANTICIPATION_2
     if not destinataire:
         print("  Envoi email anticipation ignore : email_destinataire absent de config.json")
         return
@@ -528,6 +529,8 @@ def _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf):
     try:
         msg = MIMEMultipart()
         msg["To"] = destinataire
+        if destinataire_cc:
+            msg["Cc"] = destinataire_cc
         msg["Subject"] = f"Anticipation {dossier_jj_mm}"
         msg.attach(MIMEText(
             f"Bonjour,\n\nCi-joint le resultat de l'anticipation du {dossier_jj_mm}.\n",
@@ -541,7 +544,7 @@ def _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf):
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
-        print(f"  Email anticipation envoye => {destinataire}")
+        print(f"  Email anticipation envoye => {destinataire} (cc: {destinataire_cc})")
     except Exception as e:
         print(f"  Envoi email anticipation echoue : {e}")
 
