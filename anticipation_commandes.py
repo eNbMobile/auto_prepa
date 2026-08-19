@@ -315,9 +315,9 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
         return None
 
     small    = ParagraphStyle('small', fontSize=8, leading=10)
+    small_c  = ParagraphStyle('small_c', fontSize=8, leading=10, alignment=1)
     header_s = ParagraphStyle('hdr', fontSize=8, leading=10, textColor=colors.white)
     tiny_c   = ParagraphStyle('tiny_c', fontSize=7, leading=8, alignment=1)
-    prix_kg_s = ParagraphStyle('prix_kg', fontSize=8, leading=9)
     titre_s  = ParagraphStyle('titre', fontName='Helvetica-Bold', fontSize=13,
                               leading=16, alignment=1)
     BLEU     = colors.HexColor('#006797')
@@ -339,7 +339,7 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
         avec_poids = (lettre == "B")
         largeur_code_barres = 95
         if avec_poids:
-            col_widths = [55, 35, 55, largeur_code_barres, 172, 45, 54, 30]
+            col_widths = [55, 35, 55, largeur_code_barres, 184, 45, 42, 30]
             hdr_txts = ('Commande', 'Heure', 'Photo', 'Code-barres', 'Libellé', 'Poids', 'Prix', 'Qté')
         else:
             col_widths = [55, 35, 55, largeur_code_barres, 239, 42, 30]
@@ -350,6 +350,7 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
         data = [hdr]
 
         cache_photos = {}
+        span_rows = []
         for g in groupes:
             gencod = g['gencod']
 
@@ -395,16 +396,36 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
                 # (poids total = qte * poids unitaire, propre a chaque client).
                 poids_txts = ["" if not g['poids'] else f"{_poids_ligne(q, g['poids'])} Kg"
                               for _, q, _ in g['lignes']]
-                row.append(Paragraph("<br/>".join(poids_txts), small))
+                poids_txt = "<br/>".join(poids_txts)
+                prix_txt = f"{g['prix']} €" if g['prix'] else ''
                 qte_cell = Paragraph("<br/>".join(q for _, q, _ in g['lignes']), small)
+                if g['prix'] and g['prix_kg']:
+                    # Prix/kg affiche sur une ligne centree sous le Poids ET
+                    # le Prix (colonnes fusionnees), comme annote a la main
+                    # sur le bon d'origine.
+                    poids_prix = Table(
+                        [[Paragraph(poids_txt, small_c), Paragraph(prix_txt, small_c)],
+                         [Paragraph(f"{g['prix_kg']} €/Kg", small_c)]],
+                        colWidths=[col_widths[5], col_widths[6]],
+                        style=TableStyle([
+                            ('SPAN',          (0, 1), (1, 1)),
+                            ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+                            ('TOPPADDING',    (0, 0), (-1, -1), 0),
+                            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+                            ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+                            ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+                        ]),
+                    )
+                    row.append(poids_prix)
+                    row.append('')
+                    span_rows.append(len(data))
+                else:
+                    row.append(Paragraph(poids_txt, small))
+                    row.append(Paragraph(prix_txt, small))
             else:
                 # Autres rayons : quantite totale a collecter, sans le
                 # detail par commande.
                 qte_cell = Paragraph(_qte_totale(g['lignes']), small)
-            if avec_poids and g['prix'] and g['prix_kg']:
-                prix_txt = f"{g['prix']} €<br/>{g['prix_kg']} €/Kg"
-                row.append(Paragraph(prix_txt, prix_kg_s))
-            else:
                 prix_txt = f"{g['prix']} €" if g['prix'] else ''
                 row.append(Paragraph(prix_txt, small))
             row.append(qte_cell)
@@ -424,13 +445,10 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
             ('TOPPADDING',     (0, 0), (-1, -1), 6),
             ('BOTTOMPADDING',  (0, 0), (-1, -1), 6),
         ])
-        if avec_poids:
-            # Poids (col 5) et Prix (col 6) remontes en haut de cellule : le
-            # prix/kg ajoute une 2e ligne sous le prix sans faire grandir la
-            # ligne davantage que necessaire.
-            style.add('VALIGN', (5, 1), (6, -1), 'TOP')
-            style.add('TOPPADDING', (0, 1), (-1, -1), 4)
-            style.add('BOTTOMPADDING', (0, 1), (-1, -1), 4)
+        # Prix/kg (Boucherie) : cellule Poids+Prix fusionnee sur la ligne ou
+        # elle est affichee (cf. poids_prix ci-dessus).
+        for idx in span_rows:
+            style.add('SPAN', (5, idx), (6, idx))
 
         table = Table(data, colWidths=col_widths, repeatRows=1)
         table.setStyle(style)
