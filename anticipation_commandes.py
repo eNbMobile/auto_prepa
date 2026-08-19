@@ -74,6 +74,17 @@ _NB_CHAMPS_MIN = 16
 _RE_LEADING_SEQ = re.compile(r'^(?:-\d+)?;(\d{13};)')
 _RE_HEURE = re.compile(r'([01]?\d|2[0-3])[:h]([0-5]\d)')
 
+# Gencod "poids variable" (balance) : code-barres generique EAN13 dont la
+# partie poids/prix n'a pas encore ete renseignee par la balance, reperable
+# a ses 5 derniers chiffres significatifs a 0 suivis de la cle de controle.
+_RE_GENCOD_POIDS_VARIABLE = re.compile(r'^\d{7}00000\d$')
+
+
+def _gencod_poids_variable(gencod):
+    """Vrai si le gencod correspond a un produit vendu au poids variable
+    (gencod se terminant par 00000 + cle de controle)."""
+    return bool(gencod) and bool(_RE_GENCOD_POIDS_VARIABLE.match(gencod))
+
 
 def _parser_lignes_anticipation(contenu, numero_commande):
     """Parse le contenu d'un bon_anticipation.txt et ne garde que les champs utiles.
@@ -291,7 +302,8 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
     {lettre: [produit, ...]}), chaque rayon demarrant en haut d'une nouvelle
     page. Pour chaque rayon : une ligne par produit (gencod) avec
     commande(s), heure(s), photo, code-barres EAN13 + gencod, libelle, prix
-    et quantite(s) (+ poids pour la Boucherie). Les produits identiques
+    et quantite(s) (+ poids pour la Boucherie et pour le Fromage à la coupe
+    vendu au poids variable). Les produits identiques
     provenant de plusieurs commandes sont regroupes sur une seule ligne
     (commande/heure/qte empiles dans la meme case, triees par heure de
     commande croissante), et les groupes sont tries par heure de commande
@@ -336,14 +348,20 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
         ]
 
         # Boucherie (lettre B) : colonne Poids en plus, juste avant le Prix.
-        avec_poids = (lettre == "B")
+        # Fromage à la coupe (lettre F) : meme colonne Poids, mais seulement
+        # si le rayon contient aujourd'hui au moins un produit vendu au
+        # poids variable (gencod generique, cf. _gencod_poids_variable) ;
+        # les produits a poids fixe du meme rayon restent alors affiches
+        # normalement (case Poids vide, quantite totale).
+        contient_poids_variable = any(_gencod_poids_variable(p['gencod']) for p in produits)
+        avec_poids = (lettre == "B") or (lettre == "F" and contient_poids_variable)
         largeur_code_barres = 95
         if avec_poids:
             col_widths = [55, 35, 55, largeur_code_barres, 184, 45, 42, 30]
             hdr_txts = ('Commande', 'Heure', 'Photo', 'Code-barres', 'Libellé', 'Poids', 'Prix', 'Qté')
         else:
             col_widths = [55, 35, 55, largeur_code_barres, 239, 42, 30]
-            hdr_txts = ('Commande', 'Heure', 'Photo', 'Code-barres', 'Libellé', 'Prix', 'Qté totale')
+            hdr_txts = ('Commande', 'Heure', 'Photo', 'Code-barres', 'Libellé', 'Prix', 'Qté')
         derniere_col = len(hdr_txts) - 1
 
         hdr = [Paragraph(t, header_s) for t in hdr_txts]
@@ -391,9 +409,14 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
             heure_cell = Paragraph("<br/>".join(h for _, _, h in g['lignes']), small)
 
             row = [commande_cell, heure_cell, photo_cell, bc_cell, Paragraph(g['libelle'], small)]
-            if avec_poids:
-                # Boucherie : qte et poids restent detailles par commande
-                # (poids total = qte * poids unitaire, propre a chaque client).
+            # Poids variable : Boucherie en totalite, Fromage a la coupe
+            # seulement pour les produits identifies par leur gencod (cf.
+            # _gencod_poids_variable). Un rayon Fromage a poids variable
+            # peut donc melanger des lignes des deux formats.
+            poids_variable = avec_poids and (lettre == "B" or _gencod_poids_variable(gencod))
+            if poids_variable:
+                # Qte et poids restent detailles par commande (poids total =
+                # qte * poids unitaire, propre a chaque client).
                 poids_txts = ["" if not g['poids'] else f"{_poids_ligne(q, g['poids'])} Kg"
                               for _, q, _ in g['lignes']]
                 poids_txt = "<br/>".join(poids_txts)
@@ -428,8 +451,10 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
                     row.append(Paragraph(poids_txt, small))
                     row.append(Paragraph(prix_txt, small))
             else:
-                # Autres rayons : quantite totale a collecter, sans le
-                # detail par commande.
+                # Poids fixe (ou rayon sans colonne Poids) : quantite totale
+                # a collecter, sans le detail par commande.
+                if avec_poids:
+                    row.append('')  # pas de poids pour ce produit
                 qte_cell = Paragraph(_qte_totale(g['lignes']), small)
                 prix_txt = f"{g['prix']} €" if g['prix'] else ''
                 row.append(Paragraph(prix_txt, small))
