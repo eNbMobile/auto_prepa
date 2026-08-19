@@ -52,6 +52,11 @@ MOIS_FR = ["JANVIER", "FEVRIER", "MARS", "AVRIL", "MAI", "JUIN", "JUILLET",
 ONGLET_EN_ATTENTE = "EN ATTENTE"
 PREPARATEUR = "ER"
 
+# Vert #00B050 (meme convention que les livraisons deja confirmees en debut
+# de fichier) : applique au nom/prenom (colonne C) par marquer_livree() quand
+# le workflow "Verif LAD" confirme la livraison cote Shopopop.
+_VERT_LIVREE = {"red": 0.0, "green": 0.690, "blue": 0.314}
+
 _MAX_LIGNES = 500  # profondeur de recherche de ligne libre / lecture EN ATTENTE
 
 
@@ -227,6 +232,36 @@ def _sheet_id(sheets_svc, spreadsheet_id, titre_onglet):
     return None
 
 
+def marquer_livree(sheets_svc, spreadsheet_id, aujourdhui, ligne):
+    """Met en vert (couleur _VERT_LIVREE, comme les livraisons deja
+    confirmees en debut de fichier) le nom/prenom (colonne C) de la ligne
+    `ligne` de l'onglet du mois de `aujourdhui`, pour signaler qu'une
+    livraison a ete confirmee cote Shopopop (workflow "Verif LAD").
+    Retourne True si applique, False si l'onglet est introuvable."""
+    mois = MOIS_FR[aujourdhui.month - 1]
+    onglet = _trouver_onglet(sheets_svc, spreadsheet_id, mois)
+    if not onglet:
+        print(f"    ERREUR : onglet '{mois}' introuvable dans LIVRAISON DRIVE 2026.")
+        return False
+    sheet_id = _sheet_id(sheets_svc, spreadsheet_id, onglet)
+    if sheet_id is None:
+        return False
+    sheets_svc.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={"requests": [{
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": ligne - 1, "endRowIndex": ligne,
+                    "startColumnIndex": 2, "endColumnIndex": 3,
+                },
+                "cell": {"userEnteredFormat": {"textFormat": {"foregroundColor": _VERT_LIVREE}}},
+                "fields": "userEnteredFormat.textFormat.foregroundColor",
+            },
+        }]}).execute()
+    return True
+
+
 def _supprimer_ligne(sheets_svc, spreadsheet_id, titre_onglet, ligne):
     """Supprime la ligne `ligne` (les lignes suivantes remontent d'un cran)."""
     sheet_id = _sheet_id(sheets_svc, spreadsheet_id, titre_onglet)
@@ -398,11 +433,13 @@ def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
 
 
 def lire_commandes_jour(sheets_svc, spreadsheet_id, aujourdhui):
-    """Retourne [(nom_complet, km), ...] des commandes en LIVRAISON inscrites
-    pour `aujourdhui` dans l'onglet du mois de `aujourdhui` de LIVRAISON
-    DRIVE 2026 (colonne B = Date au format JJ/MM, colonne C = Nom Prénom,
-    colonne D = km). Utilisé par le workflow "Vérif LAD" pour vérifier
-    chaque soir que ces commandes ont bien été livrées côté Shopopop."""
+    """Retourne [(ligne, nom_complet, km), ...] des commandes en LIVRAISON
+    inscrites pour `aujourdhui` dans l'onglet du mois de `aujourdhui` de
+    LIVRAISON DRIVE 2026 (colonne B = Date au format JJ/MM, colonne C = Nom
+    Prénom, colonne D = km). `ligne` (numero de ligne dans l'onglet) sert a
+    cibler la cellule a colorer via marquer_livree(). Utilisé par le
+    workflow "Vérif LAD" pour vérifier chaque soir que ces commandes ont
+    bien été livrées côté Shopopop."""
     mois = MOIS_FR[aujourdhui.month - 1]
     onglet = _trouver_onglet(sheets_svc, spreadsheet_id, mois)
     if not onglet:
@@ -413,12 +450,12 @@ def lire_commandes_jour(sheets_svc, spreadsheet_id, aujourdhui):
         spreadsheetId=spreadsheet_id,
         range=f"'{onglet}'!A2:D{1 + _MAX_LIGNES}").execute()
     commandes = []
-    for row in res.get("values", []):
+    for i, row in enumerate(res.get("values", [])):
         date_val = row[1].strip() if len(row) > 1 and row[1] else ""
         nom_complet = row[2].strip() if len(row) > 2 and row[2] else ""
         km = row[3].strip() if len(row) > 3 and row[3] else ""
         if date_val == jour_str and nom_complet:
-            commandes.append((nom_complet, km))
+            commandes.append((2 + i, nom_complet, km))
     return commandes
 
 

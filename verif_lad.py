@@ -103,7 +103,7 @@ def main():
         return
 
     anomalies = []
-    for nom_complet, km in commandes:
+    for ligne, nom_complet, km in commandes:
         statut = shopopop.statut_livraison(shopopop_token, shopopop_drive_id, aujourdhui, nom_complet)
         if statut is None:
             print(f"  {nom_complet} : INTROUVABLE chez Shopopop")
@@ -112,7 +112,8 @@ def main():
             print(f"  {nom_complet} : toujours 'Programmée' (pas livrée)")
             anomalies.append((nom_complet, "toujours 'Programmée' (pas livrée)"))
         else:
-            print(f"  {nom_complet} : OK (livrée, statut={statut})")
+            print(f"  {nom_complet} : OK (livrée, statut={statut}) — nom passé en vert")
+            ld.marquer_livree(sheets_svc, spreadsheet_id, aujourdhui, ligne)
 
     print(f"\n{len(anomalies)} anomalie(s) sur {len(commandes)} commande(s).")
 
