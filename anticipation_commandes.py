@@ -303,6 +303,22 @@ def _poids_ligne(qte, poids_unitaire):
     return f"{qte_f * poids_f:.{decimales}f}".replace('.', sep)
 
 
+def _prix_ligne_poids(qte, poids_unitaire, prix_kg):
+    """Prix reellement commande pour cette ligne (poids variable) : prix/kg *
+    poids commande (qte * poids_unitaire), et non le prix indicatif partage
+    par toutes les commandes du meme produit. Retourne '' si le calcul n'est
+    pas possible (poids ou prix/kg manquant)."""
+    if not poids_unitaire or not prix_kg:
+        return ''
+    try:
+        qte_f = float(qte.replace(',', '.'))
+        poids_f = float(poids_unitaire.replace(',', '.'))
+        prix_kg_f = float(prix_kg.replace(',', '.'))
+    except (TypeError, ValueError):
+        return ''
+    return f"{qte_f * poids_f * prix_kg_f:.2f}".replace('.', ',')
+
+
 def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin):
     """Genere un unique PDF reunissant tous les rayons fournis (produits_pdf :
     {lettre: [produit, ...]}), chaque rayon demarrant en haut d'une nouvelle
@@ -423,14 +439,19 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
             poids_variable = avec_poids and (lettre in _LETTRES_AVEC_POIDS_SYSTEMATIQUE
                                               or _gencod_poids_variable(gencod))
             if poids_variable:
-                # Qte et poids restent detailles par commande (poids total =
-                # qte * poids unitaire, propre a chaque client).
+                # Qte, poids et prix restent detailles par commande (poids
+                # total = qte * poids unitaire, prix = prix/kg * ce poids :
+                # chaque client peut avoir commande une quantite differente,
+                # donc un poids et un prix differents pour le meme produit).
                 poids_txts = ["" if not g['poids'] else f"{_poids_ligne(q, g['poids'])} Kg"
                               for _, q, _ in g['lignes']]
                 poids_txt = "<br/>".join(poids_txts)
-                prix_txt = f"{g['prix']} €" if g['prix'] else ''
+                prix_txts = ["" if not (g['poids'] and g['prix_kg'])
+                             else f"{_prix_ligne_poids(q, g['poids'], g['prix_kg'])} €"
+                             for _, q, _ in g['lignes']]
+                prix_txt = "<br/>".join(prix_txts)
                 qte_cell = Paragraph("<br/>".join(q for _, q, _ in g['lignes']), small)
-                if g['prix'] and g['prix_kg']:
+                if g['poids'] and g['prix_kg']:
                     # Prix/kg affiche sur une ligne centree sous le Poids ET
                     # le Prix (colonnes fusionnees), comme annote a la main
                     # sur le bon d'origine.
