@@ -67,6 +67,33 @@ def _pkce_pair():
     return verifier, challenge
 
 
+def _extraire_form_action(page):
+    """Isole le <form> dont l'action pointe vers login-actions, l'URL
+    Keycloak qui traite la soumission des identifiants (l'ordre des
+    attributs id/action du <form> n'est pas garanti, et l'id exact
+    ("kc-login-form") n'est pas fiable sur une page de login personnalisée)."""
+    for tag in re.findall(r'<form\b[^>]*>', page, re.DOTALL):
+        m = re.search(r'\baction="([^"]*login-actions[^"]*)"', tag)
+        if m:
+            return html.unescape(m.group(1))
+    return None
+
+
+def _champs_caches(page):
+    """Récupère les <input type="hidden"> (jeton CSRF, execution, etc.) à
+    reporter tels quels dans la soumission du formulaire suivant."""
+    champs = {}
+    for tag in re.findall(r'<input\b[^>]*>', page, re.DOTALL):
+        if not re.search(r'\btype="hidden"', tag):
+            continue
+        m_nom = re.search(r'\bname="([^"]*)"', tag)
+        if not m_nom:
+            continue
+        m_val = re.search(r'\bvalue="([^"]*)"', tag)
+        champs[html.unescape(m_nom.group(1))] = html.unescape(m_val.group(1)) if m_val else ""
+    return champs
+
+
 def login(email, mot_de_passe):
     """Réalise le flux OAuth2 Authorization Code + PKCE auprès de Keycloak
     (identique à celui du navigateur) et retourne un access_token, ou None
@@ -97,22 +124,41 @@ def login(email, mot_de_passe):
         print(f"    Connexion Shopopop échouée (page de connexion) : {e}")
         return None
 
-    # L'ordre des attributs (id/action) du <form> n'est pas garanti, et l'id
-    # exact ("kc-login-form") n'est pas fiable (page de login personnalisee) :
-    # on isole plutot le <form> dont l'action pointe vers login-actions,
-    # l'URL Keycloak qui traite la soumission des identifiants.
-    form_action = None
-    for tag in re.findall(r'<form\b[^>]*>', page, re.DOTALL):
-        m = re.search(r'\baction="([^"]*login-actions[^"]*)"', tag)
-        if m:
-            form_action = html.unescape(m.group(1))
-            break
+    form_action = _extraire_form_action(page)
     if not form_action:
         print("    Shopopop : formulaire de connexion introuvable (page de login modifiée ?).")
         return None
 
+    # Depuis fin août 2026, Keycloak demande d'abord l'email seul (étape
+    # "identifier-first"), puis renvoie une seconde page — identique à
+    # l'ancienne page de connexion — avec le champ mot de passe. On ne
+    # soumet donc l'email à part que si cette première page n'a pas déjà de
+    # champ mot de passe (pour rester compatible si Shopopop revient à
+    # l'ancien formulaire unique).
+    if not re.search(r'\bname="password"', page):
+        try:
+            payload = urllib.parse.urlencode({
+                **_champs_caches(page), "username": email,
+            }).encode()
+            req = urllib.request.Request(
+                form_action, data=payload, method="POST",
+                headers={**_HEADERS_NAVIGATEUR, "Content-Type": "application/x-www-form-urlencoded"})
+            with opener.open(req, timeout=20) as resp:
+                page = resp.read().decode("utf-8", errors="replace")
+        except Exception as e:
+            print(f"    Connexion Shopopop échouée (envoi email) : {e}")
+            return None
+
+        form_action = _extraire_form_action(page)
+        if not form_action or not re.search(r'\bname="password"', page):
+            print("    Shopopop : page de mot de passe introuvable après saisie de l'email "
+                  "(email refusé ou page de login modifiée).")
+            return None
+
     try:
-        payload = urllib.parse.urlencode({"username": email, "password": mot_de_passe}).encode()
+        payload = urllib.parse.urlencode({
+            **_champs_caches(page), "username": email, "password": mot_de_passe,
+        }).encode()
         req = urllib.request.Request(
             form_action, data=payload, method="POST",
             headers={**_HEADERS_NAVIGATEUR, "Content-Type": "application/x-www-form-urlencoded"})
