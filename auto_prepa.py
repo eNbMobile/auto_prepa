@@ -1122,38 +1122,6 @@ def supprimer_commande_avoir_drive(drive_svc, numero):
     except Exception as e:
         print(f"    Suppression Drive GITHUB/Avoir/{AVOIR_SHEET_FILENAME} echouee : {e}")
 
-def _corriger_libelles_avec_point_virgule(lignes, nb_champs, idx_libelle=1):
-    """Corrige les lignes de bon_prepa.txt / bon_anticipation.txt dont le
-    libelle (issu tel quel du PDF, champ idx_libelle) contient un ';'.
-
-    Ce caractere, present dans certains libelles d'origine (ex. "Pick-Up
-    BAHLSEN, x5; 140g"), decale sinon tous les champs suivants et rend la
-    ligne invalide. On refusionne les champs excedentaires dans le libelle
-    en remplacant le ';' d'origine par une virgule (le libelle redevient un
-    champ unique, sans separateur, comme sur toutes les autres lignes), en
-    s'appuyant sur le nombre de champs de fin connus (gencod fixe en tete,
-    champs numeriques/techniques fixes en fin de ligne).
-
-    Retourne (lignes_corrigees, nb_corrections).
-    """
-    nb_fin = nb_champs - idx_libelle - 1
-    lignes_corrigees = []
-    nb_corrections = 0
-    for ligne in lignes:
-        eol = '\n' if ligne.endswith('\n') else ''
-        stripped = ligne.rstrip('\n\r')
-        if not stripped.strip():
-            lignes_corrigees.append(ligne)
-            continue
-        parts = stripped.split(';')
-        if len(parts) > nb_champs:
-            fin = parts[len(parts) - nb_fin:]
-            libelle = ','.join(parts[idx_libelle:len(parts) - nb_fin])
-            parts = parts[:idx_libelle] + [libelle] + fin
-            nb_corrections += 1
-        lignes_corrigees.append(';'.join(parts) + eol)
-    return lignes_corrigees, nb_corrections
-
 LOCK_FILE = os.path.expanduser("~/.auto_prepa.lock")
 
 def main():
@@ -1387,24 +1355,8 @@ def _main():
                 lignes[0] = lignes[0].rstrip('\n') + ',' + montant_pdf
             lignes[0] = lignes[0].rstrip('\n') + ',' + heure_pdf + '\n'
             lignes[1:] = [re.sub(r'^(?:-\d+)?;(\d{13};)', r'\1', l) for l in lignes[1:]]
-            lignes[1:], nb_corrections_libelle = _corriger_libelles_avec_point_virgule(
-                lignes[1:], nb_champs=15)
-            if nb_corrections_libelle:
-                print(f"    {nb_corrections_libelle} libelle(s) avec ';' corrige(s) dans bon_prepa.txt")
         with open(bon_prepa_path, 'w', encoding='utf-8') as f:
             f.writelines(lignes)
-
-        anticipation_path = os.path.join(WORK_DIR, "bon_anticipation.txt")
-        if os.path.exists(anticipation_path) and os.path.getsize(anticipation_path) > 0:
-            with open(anticipation_path, 'r', encoding='utf-8') as f:
-                lignes_antic = f.readlines()
-            lignes_antic = [re.sub(r'^(?:-\d+)?;(\d{13};)', r'\1', l) for l in lignes_antic]
-            lignes_antic, nb_corrections_antic = _corriger_libelles_avec_point_virgule(
-                lignes_antic, nb_champs=16)
-            if nb_corrections_antic:
-                print(f"    {nb_corrections_antic} libelle(s) avec ';' corrige(s) dans bon_anticipation.txt")
-                with open(anticipation_path, 'w', encoding='utf-8') as f:
-                    f.writelines(lignes_antic)
 
         if articles_pdf is not None and produits_pdf is not None:
             with open(bon_prepa_path, 'r', encoding='utf-8') as _f:
