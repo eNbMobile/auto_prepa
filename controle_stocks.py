@@ -33,10 +33,13 @@ CLASSEUR_DELOTAGE = "DRIVE DELOTAGE"  # comparé normalisé (majuscules, sans ac
 
 
 def _normaliser_classeur(texte):
-    """Majuscules sans accents, pour comparer un classeur insensiblement à la casse/accents."""
+    """Majuscules sans accents ni astérisques, pour comparer un classeur
+    insensiblement à la casse/accents (les classeurs sensibles sont notés
+    "**DRIVE XXX**" dans l'export)."""
     import unicodedata
     d = unicodedata.normalize('NFD', (texte or '').strip().upper())
-    return ''.join(c for c in d if unicodedata.category(c) != 'Mn')
+    sans_accents = ''.join(c for c in d if unicodedata.category(c) != 'Mn')
+    return sans_accents.replace('*', '').strip()
 
 DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
 
