@@ -29,6 +29,15 @@ _SORTIE_CANDIDATS = [
 
 SEUIL_STOCK_BAS = 2  # stock J <= ce seuil → alerte "stock insuffisant Drive"
 
+CLASSEUR_DELOTAGE = "DRIVE DELOTAGE"  # comparé normalisé (majuscules, sans accents)
+
+
+def _normaliser_classeur(texte):
+    """Majuscules sans accents, pour comparer un classeur insensiblement à la casse/accents."""
+    import unicodedata
+    d = unicodedata.normalize('NFD', (texte or '').strip().upper())
+    return ''.join(c for c in d if unicodedata.category(c) != 'Mn')
+
 DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
 
 DRIVE_CONTROLE_FOLDER_ID = ""
@@ -117,15 +126,18 @@ def _rows_depuis_csv(chemin):
 def lire_stock(chemin):
     """
     Lit un export stock multi-colonnes (.xlsx ou .csv).
-    Cherche les colonnes "Gencod", "Stock UC" et optionnellement "Libellé".
-    Retourne ({gencod: stock_uc}, {gencod: libelle}).
+    Cherche les colonnes "Gencod", "Stock UC" et optionnellement "Libellé"
+    et "Classeur" (classement du produit, ex. "DRIVE DÉLOTAGE" — absente des
+    exports actuels, ajoutée au besoin par les équipes).
+    Retourne ({gencod: stock_uc}, {gencod: libelle}, {gencod: classeur}).
     """
     ext = os.path.splitext(chemin)[1].lower()
     rows = _rows_depuis_xlsx(chemin) if ext in ('.xlsx', '.xls') else _rows_depuis_csv(chemin)
 
-    data     = {}
-    libelles = {}
-    idx_gencod = idx_stock = idx_libelle = None
+    data      = {}
+    libelles  = {}
+    classeurs = {}
+    idx_gencod = idx_stock = idx_libelle = idx_classeur = None
 
     for row in rows:
         if idx_gencod is None:
@@ -137,6 +149,8 @@ def lire_stock(chemin):
                         idx_stock = i
                     if re.match(r'lib', h):
                         idx_libelle = i
+                    if h == 'classeur':
+                        idx_classeur = i
                 if idx_stock is None:
                     raise ValueError(
                         f"Colonne 'Stock UC' introuvable dans {chemin}.\n"
@@ -161,10 +175,14 @@ def lire_stock(chemin):
             lib = row[idx_libelle].strip()
             if lib:
                 libelles[gencod] = lib
+        if idx_classeur is not None and len(row) > idx_classeur:
+            classeur = row[idx_classeur].strip()
+            if classeur:
+                classeurs[gencod] = classeur
 
     if idx_gencod is None:
         raise ValueError(f"Colonne 'Gencod' introuvable dans {chemin}.")
-    return data, libelles
+    return data, libelles, classeurs
 
 def _lire_config_drive(nom):
     """Retourne le contenu texte d'un fichier config Drive (cache mémoire par session)."""
@@ -828,9 +846,24 @@ def generer_pdf_stock_insuffisant(stock_bas, date_courante, vms_map=None):
     return _construire_pdf_tableau(stock_bas, titre_html, nom_pdf, complet=False, vms_map=vms_map)
 
 
-def envoyer_email_pdf(pdf_ecarts, pdf_stock_bas, date_j1, nb_ecart, manquant, surplus,
-                      nb_stock_bas, date_debut=None, date_courante=None):
-    """Envoie par email les PDF d'écarts et/ou de stocks insuffisants (Gmail API)."""
+def generer_pdf_a_deloter(a_deloter, date_courante, vms_map=None):
+    """Génère un PDF listant les produits en stock insuffisant (stock J <=
+    SEUIL_STOCK_BAS) mais rattachés au classeur "DRIVE DÉLOTAGE" — exclus du
+    PDF stock insuffisant, à traiter via le délotage plutôt qu'un
+    réapprovisionnement. Retourne le chemin ou None."""
+    if not a_deloter:
+        return None
+
+    nom_pdf = f"articles_a_deloter_{date_courante.strftime('%Y%m%d')}.pdf"
+    titre_html = (f"<b>Articles à deloter - {date_courante.strftime('%d/%m/%Y')}</b>"
+                  f"&nbsp;&nbsp;({len(a_deloter)} produit{'s' if len(a_deloter) > 1 else ''})")
+    return _construire_pdf_tableau(a_deloter, titre_html, nom_pdf, complet=False, vms_map=vms_map)
+
+
+def envoyer_email_pdf(pdf_ecarts, pdf_stock_bas, pdf_a_deloter, date_j1, nb_ecart, manquant, surplus,
+                      nb_stock_bas, nb_a_deloter, date_debut=None, date_courante=None):
+    """Envoie par email les PDF d'écarts, de stocks insuffisants et/ou
+    d'articles à déloter (Gmail API)."""
     try:
         import base64
         from email.mime.multipart import MIMEMultipart
@@ -853,6 +886,8 @@ def envoyer_email_pdf(pdf_ecarts, pdf_stock_bas, date_j1, nb_ecart, manquant, su
             parties_sujet.append(f"{nb_ecart} écart{'s' if nb_ecart > 1 else ''}")
         if nb_stock_bas > 0:
             parties_sujet.append(f"{nb_stock_bas} stock{'s' if nb_stock_bas > 1 else ''} bas")
+        if nb_a_deloter > 0:
+            parties_sujet.append(f"{nb_a_deloter} à déloter")
         msg['Subject'] = f"Contrôle stocks {label_dates}"
         if parties_sujet:
             msg['Subject'] += " — " + ", ".join(parties_sujet)
@@ -867,10 +902,14 @@ def envoyer_email_pdf(pdf_ecarts, pdf_stock_bas, date_j1, nb_ecart, manquant, su
             corps += (f"  Stocks insuffisant Drive - {date_label} "
                       f"(stock J ≤ {SEUIL_STOCK_BAS}) : {nb_stock_bas} produit"
                       f"{'s' if nb_stock_bas > 1 else ''}\n\n")
+        if pdf_a_deloter:
+            date_label = (date_courante or date_j1).strftime('%d/%m/%Y')
+            corps += (f"  Articles à deloter - {date_label} : {nb_a_deloter} produit"
+                      f"{'s' if nb_a_deloter > 1 else ''}\n\n")
         corps += "Détail en pièce(s) jointe(s)."
         msg.attach(MIMEText(corps, 'plain', 'utf-8'))
 
-        for pdf_path in (pdf_ecarts, pdf_stock_bas):
+        for pdf_path in (pdf_ecarts, pdf_stock_bas, pdf_a_deloter):
             if not pdf_path:
                 continue
             with open(pdf_path, 'rb') as f:
@@ -975,21 +1014,23 @@ def main():
     # 1. Lire les stocks
     if fichier_j1 and os.path.exists(fichier_j1):
         print(f"Lecture stock J-{nb_jours} : {fichier_j1}")
-        stock_j1, libelles_stock = lire_stock(fichier_j1)
+        stock_j1, libelles_stock, classeurs_stock = lire_stock(fichier_j1)
         print(f"  → {len(stock_j1)} gencods, {len(libelles_stock)} libellés xlsx")
     else:
         if fichier_j1:
             print(f"  {fichier_j1} absent — stock de départ vide.")
-        stock_j1, libelles_stock = {}, {}
+        stock_j1, libelles_stock, classeurs_stock = {}, {}, {}
 
     print(f"Lecture stock J   : {fichier_j}")
-    stock_j, libelles_stock_j = lire_stock(fichier_j)
+    stock_j, libelles_stock_j, classeurs_stock_j = lire_stock(fichier_j)
     print(f"  → {len(stock_j)} gencods")
     upload_to_archive(fichier_j, "stocks", f"stock_{date.today().strftime('%d_%m_%Y')}_j.xlsx",
                        root_id=DRIVE_CONFIG_FOLDER_ID)
     for g, l in libelles_stock_j.items():
         if g not in libelles_stock:
             libelles_stock[g] = l
+    for g, c in classeurs_stock_j.items():
+        classeurs_stock[g] = c  # classeur du jour prioritaire (le plus à jour)
 
     # Charger le dictionnaire complet coursesu.com (priorité sur xlsx tronqué)
     print("\nChargement libellés coursesu ...")
@@ -1019,6 +1060,7 @@ def main():
     compares   = []
     orphelins  = []
     stock_bas  = []
+    a_deloter  = []
 
     for gencod in sorted(tous):
         present_j1 = gencod in stock_j1
@@ -1049,7 +1091,11 @@ def main():
         row = (gencod, s_j1, v, s_theo, s_j, ecart, statut, lib)
 
         if present_j and s_j <= SEUIL_STOCK_BAS:
-            stock_bas.append(row)
+            classeur = classeurs_stock.get(gencod, '')
+            if _normaliser_classeur(classeur) == _normaliser_classeur(CLASSEUR_DELOTAGE):
+                a_deloter.append(row)
+            else:
+                stock_bas.append(row)
 
         # Stock à 0 deux jours de suite : écart non significatif, on ne le
         # remonte pas dans le rapport d'écarts (mais il reste dans stock_bas
@@ -1091,6 +1137,7 @@ def main():
     surplus   = sum(r[5] for r in compares if r[5] > 0)
 
     stock_bas.sort(key=lambda r: (r[4], r[0]))
+    a_deloter.sort(key=lambda r: (r[4], r[0]))
 
     print(f"\n── Résultats ──────────────────────────────────────")
     print(f"  Gencods appairés  : {len(compares)}")
@@ -1101,6 +1148,7 @@ def main():
     print(f"  Total manquant    : {manquant:.0f} unités")
     print(f"  Total surplus     : {+surplus:.0f} unités")
     print(f"  Stocks ≤ {SEUIL_STOCK_BAS}       : {len(stock_bas)} produit(s)")
+    print(f"  Dont à déloter    : {len(a_deloter)} produit(s)")
 
     if nb_ecart > 0:
         print(f"\n  Top 10 écarts (|écart| décroissant) :")
@@ -1123,15 +1171,20 @@ def main():
 
     date_courante = date.today()
     nom_pdf_stock_bas = None
-    if stock_bas:
-        vms_map = calculer_vms([r[0] for r in stock_bas], date_courante)
-        print("\nGénération PDF stocks insuffisants …")
-        nom_pdf_stock_bas = generer_pdf_stock_insuffisant(stock_bas, date_courante, vms_map)
+    nom_pdf_a_deloter = None
+    if stock_bas or a_deloter:
+        vms_map = calculer_vms([r[0] for r in stock_bas] + [r[0] for r in a_deloter], date_courante)
+        if stock_bas:
+            print("\nGénération PDF stocks insuffisants …")
+            nom_pdf_stock_bas = generer_pdf_stock_insuffisant(stock_bas, date_courante, vms_map)
+        if a_deloter:
+            print("\nGénération PDF articles à déloter …")
+            nom_pdf_a_deloter = generer_pdf_a_deloter(a_deloter, date_courante, vms_map)
 
-    if nom_pdf_ecarts or nom_pdf_stock_bas:
+    if nom_pdf_ecarts or nom_pdf_stock_bas or nom_pdf_a_deloter:
         print("\nEnvoi email …")
-        envoyer_email_pdf(nom_pdf_ecarts, nom_pdf_stock_bas, date_j1, nb_ecart,
-                          manquant, surplus, len(stock_bas), date_debut, date_courante)
+        envoyer_email_pdf(nom_pdf_ecarts, nom_pdf_stock_bas, nom_pdf_a_deloter, date_j1, nb_ecart,
+                          manquant, surplus, len(stock_bas), len(a_deloter), date_debut, date_courante)
 
 
 # ─────────────────────────────────────────────────────────────────
