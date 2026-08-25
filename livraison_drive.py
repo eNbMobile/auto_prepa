@@ -31,6 +31,7 @@ bon_prepa.txt). Le workflow "Livraison Drive - En attente" (déclenché à
 EN ATTENTE prévues pour le lendemain.
 """
 import sys
+import time
 import unicodedata
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -58,6 +59,17 @@ PREPARATEUR = "ER"
 _VERT_LIVREE = {"red": 0.0, "green": 1.0, "blue": 0.0}
 
 _MAX_LIGNES = 500  # profondeur de recherche de ligne libre / lecture EN ATTENTE
+
+# Delai avant une 2e tentative de recuperation du km dans le meme run, pour
+# laisser le temps a Shopopop de synchroniser une commande tres recente
+# (cf. traiter_commande_livraison).
+_DELAI_RETRY_KM_SECONDES = 30
+
+# Au-dela de ce nombre de jours de retard sur la date de livraison, une ligne
+# sans km n'est plus retentee par retenter_km_manquants (cf. plus bas) : la
+# commande a de toute facon deja ete signalee par email et completee a la
+# main si besoin.
+_FENETRE_RETENTATIVE_JOURS = 3
 
 
 def _lendemain_ouvre(aujourdhui):
@@ -422,6 +434,16 @@ def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
         km = None
         if shopopop_token:
             km = shopopop.distance_km(shopopop_token, shopopop_drive_id, date_cde, nom_complet)
+            if km is None:
+                print(f"    km Shopopop introuvable pour {nom_complet}, nouvelle tentative dans "
+                      f"{_DELAI_RETRY_KM_SECONDES}s (commande tres recente, pas encore synchronisee ?)...")
+                time.sleep(_DELAI_RETRY_KM_SECONDES)
+                km = shopopop.distance_km(shopopop_token, shopopop_drive_id, date_cde, nom_complet)
+                if km is None:
+                    print(f"    km Shopopop toujours introuvable pour {nom_complet} apres nouvelle "
+                          f"tentative (sera retente lors des prochaines executions).")
+        else:
+            print(f"    Pas de token Shopopop, km non recherche pour {nom_complet}.")
         if date_cde == aujourdhui or (
                 date_cde == _lendemain_ouvre(aujourdhui) and maintenant.hour >= 14):
             _inscrire_commande(sheets_svc, spreadsheet_id, date_cde, nom_complet, km)
@@ -431,6 +453,98 @@ def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
     except Exception as e:
         print(f"    Ecriture LIVRAISON DRIVE 2026 echouee ({nom_complet}) : {e}")
         return False
+
+
+def _lister_km_manquants(sheets_svc, spreadsheet_id, maintenant=None):
+    """Repere, sans appeler Shopopop, les lignes LIVRAISON dont la colonne km
+    est encore vide : onglets du mois courant et du mois du lendemain ouvre
+    (au cas ou la date de livraison soit a cheval sur un changement de mois),
+    plus l'onglet EN ATTENTE. Ignore les lignes dont la date de livraison
+    remonte a plus de _FENETRE_RETENTATIVE_JOURS jours (deja signalees par
+    email, pas la peine de continuer a les retenter indefiniment). Retourne
+    [(onglet, ligne, nom_complet, date_cible), ...]."""
+    maintenant = maintenant or datetime.now(_TZ)
+    aujourdhui = maintenant.date()
+    limite = aujourdhui - timedelta(days=_FENETRE_RETENTATIVE_JOURS)
+
+    a_retenter = []
+
+    mois_cibles = {MOIS_FR[aujourdhui.month - 1], MOIS_FR[_lendemain_ouvre(aujourdhui).month - 1]}
+    for mois in mois_cibles:
+        onglet = _trouver_onglet(sheets_svc, spreadsheet_id, mois)
+        if not onglet:
+            continue
+        res = sheets_svc.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{onglet}'!A2:D{1 + _MAX_LIGNES}").execute()
+        for i, row in enumerate(res.get("values", [])):
+            date_val = row[1].strip() if len(row) > 1 and row[1] else ""
+            nom_complet = row[2].strip() if len(row) > 2 and row[2] else ""
+            km_val = row[3].strip() if len(row) > 3 and row[3] else ""
+            if not date_val or not nom_complet or km_val:
+                continue
+            cible = _parser_jour(date_val, aujourdhui)
+            if cible is None or cible < limite:
+                continue
+            a_retenter.append((onglet, 2 + i, nom_complet, cible))
+
+    onglet_attente = _trouver_onglet(sheets_svc, spreadsheet_id, ONGLET_EN_ATTENTE)
+    if onglet_attente:
+        res = sheets_svc.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{onglet_attente}'!A2:D{1 + _MAX_LIGNES}").execute()
+        for i, row in enumerate(res.get("values", [])):
+            nom_complet = row[0].strip() if len(row) > 0 and row[0] else ""
+            jour = row[1].strip() if len(row) > 1 and row[1] else ""
+            km_val = row[3].strip() if len(row) > 3 and row[3] else ""
+            if not nom_complet or not jour or km_val:
+                continue
+            cible = _parser_jour(jour, aujourdhui)
+            if cible is None or cible < limite:
+                continue
+            a_retenter.append((onglet_attente, 2 + i, nom_complet, cible))
+
+    return a_retenter
+
+
+def km_manquants_en_attente(sheets_svc, spreadsheet_id, maintenant=None):
+    """True s'il existe au moins une ligne LIVRAISON avec un km encore vide a
+    retenter (cf. _lister_km_manquants). Ne fait que lire le classeur (aucun
+    appel Shopopop) : sert a decider, dans auto_prepa.py, s'il vaut la peine
+    de se connecter a Shopopop meme quand aucune nouvelle commande LIVRAISON
+    n'a ete rencontree lors du run en cours."""
+    return bool(_lister_km_manquants(sheets_svc, spreadsheet_id, maintenant))
+
+
+def retenter_km_manquants(sheets_svc, spreadsheet_id, shopopop_token, shopopop_drive_id, maintenant=None):
+    """Reparcourt les lignes LIVRAISON dont le km est reste vide (voir
+    _lister_km_manquants) et retente leur recuperation aupres de Shopopop —
+    la livraison a pu ne pas etre encore synchronisee cote Shopopop lors du
+    ou des essais precedents (recherche initiale + retentative dans
+    traiter_commande_livraison). Appelee a chaque execution du workflow
+    (auto_prepa.py), elle complete ainsi progressivement les km manques d'une
+    execution a l'autre, jusqu'a _FENETRE_RETENTATIVE_JOURS jours apres la
+    date de livraison. Met a jour la cellule km (colonne D) des que trouve.
+    Retourne le nombre de km recuperes."""
+    if not shopopop_token:
+        return 0
+    a_retenter = _lister_km_manquants(sheets_svc, spreadsheet_id, maintenant)
+    if not a_retenter:
+        return 0
+
+    print(f"    {len(a_retenter)} livraison(s) en attente de km, nouvelle tentative...")
+    trouves = 0
+    for onglet, ligne, nom_complet, cible in a_retenter:
+        km = shopopop.distance_km(shopopop_token, shopopop_drive_id, cible, nom_complet)
+        if km is None:
+            continue
+        sheets_svc.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id, range=f"'{onglet}'!D{ligne}",
+            valueInputOption="USER_ENTERED", body={"values": [[km]]}).execute()
+        print(f"    LIVRAISON DRIVE 2026 / {onglet} L{ligne} : km recupere en retentative "
+              f"pour {nom_complet} -> {km} km.")
+        trouves += 1
+    return trouves
 
 
 def lire_commandes_jour(sheets_svc, spreadsheet_id, aujourdhui):

@@ -205,10 +205,14 @@ def _rechercher_livraison_programmee(access_token, drive_id, date_livraison, nom
     `drive_id` prévues pour `date_livraison` (objet date), celle dont le
     destinataire correspond à `nom_complet` (comparaison par ensemble de mots
     normalisés, insensible à l'ordre nom/prénom, aux accents et à la casse).
-    Retourne l'item brut (dict) trouvé, ou None si absent. Peut lever une
-    exception en cas d'erreur réseau/API — à la charge de l'appelant de la
-    gérer, pour ne pas confondre un échec de vérification avec une absence
-    confirmée (livraison sortie de "Programmées")."""
+    Retourne l'item brut (dict) trouvé, ou None si absent — dans ce cas,
+    un message est affiché indiquant le motif precis (aucune livraison
+    "Programmee" ce jour-la, ou des livraisons existent mais aucune ne
+    correspond au nom, auquel cas les noms rencontres sont listes pour
+    faciliter le diagnostic d'un probleme de rapprochement nom/prenom).
+    Peut lever une exception en cas d'erreur réseau/API — à la charge de
+    l'appelant de la gérer, pour ne pas confondre un échec de vérification
+    avec une absence confirmée (livraison sortie de "Programmées")."""
     if not access_token:
         return None
     cible = _tokens(nom_complet)
@@ -220,6 +224,7 @@ def _rechercher_livraison_programmee(access_token, drive_id, date_livraison, nom
     debut_utc = debut_paris.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     fin_utc = fin_paris.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%S.999Z")
 
+    noms_vus = []
     page = 1
     while True:
         url = _API_BASE + "/deliveries?" + urllib.parse.urlencode({
@@ -240,10 +245,22 @@ def _rechercher_livraison_programmee(access_token, drive_id, date_livraison, nom
             nom_dest = f"{dest.get('first_name', '')} {dest.get('last_name', '')}"
             if _tokens(nom_dest) == cible:
                 return it
+            noms_vus.append(nom_dest)
 
         if len(items) < 50:
-            return None
+            break
         page += 1
+
+    if noms_vus:
+        print(f"    Shopopop : '{nom_complet}' absent des {len(noms_vus)} livraison(s) "
+              f"'Programmees' du {date_livraison.strftime('%d/%m/%Y')} (drive {drive_id}). "
+              f"Destinataires vus : {', '.join(noms_vus[:10])}"
+              + (", ..." if len(noms_vus) > 10 else "") + ".")
+    else:
+        print(f"    Shopopop : aucune livraison 'Programmee' pour le "
+              f"{date_livraison.strftime('%d/%m/%Y')} (drive {drive_id}) — la commande n'a "
+              f"peut-etre pas encore ete synchronisee cote Shopopop.")
+    return None
 
 
 def distance_km(access_token, drive_id, date_livraison, nom_complet):
