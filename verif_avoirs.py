@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Workflow "vav" : pour chaque commande listee dans Drive GITHUB/Avoir/
-"Commandes en cours" (civilite, nom, prenom, date, creneau), verifie si le
+"Commandes en cours" (civilite, numero, nom, prenom, date, creneau), verifie si le
 client a un avoir jaune (du, pas encore deduit) dans le classeur Google
 Sheets "Avoir/Demarque" — un avoir etant valable 3 mois a compter de sa
 DATE DEBUT, les onglets du mois courant et des 3 mois precedents sont
@@ -300,14 +300,16 @@ def _trouver_fichier_commandes(drive_svc):
 
 
 def _lire_commandes_en_cours(sheets_svc, file_id):
-    """Retourne [(civilite, nom, prenom, date, creneau), ...] (lignes non vides, hors en-tete)."""
+    """Retourne [(civilite, numero, nom, prenom, date, creneau), ...] (lignes
+    non vides, hors en-tete). Colonnes A:F, alignees sur AVOIR_ENTETE
+    (auto_prepa.py) depuis l'ajout du n° de commande en 2e colonne."""
     res = sheets_svc.spreadsheets().values().get(
-        spreadsheetId=file_id, range="A2:E1000").execute()
+        spreadsheetId=file_id, range="A2:F1000").execute()
     lignes = []
     for row in res.get("values", []):
-        row = row + [""] * (5 - len(row))
-        if row[1].strip() or row[2].strip():
-            lignes.append(tuple(c.strip() for c in row[:5]))
+        row = row + [""] * (6 - len(row))
+        if row[2].strip() or row[3].strip():
+            lignes.append(tuple(c.strip() for c in row[:6]))
     return lignes
 
 
@@ -315,7 +317,7 @@ def _vider_commandes_en_cours(sheets_svc, file_id):
     """Vide les lignes de donnees (garde l'en-tete) pour ne pas retraiter ces
     commandes au prochain declenchement."""
     sheets_svc.spreadsheets().values().clear(
-        spreadsheetId=file_id, range="A2:E1000", body={}).execute()
+        spreadsheetId=file_id, range="A2:F1000", body={}).execute()
     print("  'Commandes en cours' vide.")
 
 
@@ -382,7 +384,7 @@ def main():
 
     gmail_svc = cs._get_gmail_service()
     nb_envoyes = 0
-    for civilite, nom, prenom, date_cde, creneau in commandes:
+    for civilite, numero, nom, prenom, date_cde, creneau in commandes:
         print(f"\nVerification : {civilite} {nom} {prenom} (commande du {date_cde}, {creneau})")
         trouve = False
         for avoir in avoirs_jaunes:
