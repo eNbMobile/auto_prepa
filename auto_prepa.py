@@ -1215,6 +1215,26 @@ def _main():
     if os.path.exists(chemin_csv):
         upload_bon(drive_svc, chemin_csv)
 
+    # Connexion Shopopop differee : uniquement quand une commande LIVRAISON
+    # est effectivement rencontree plus bas (5 a 10 fois/jour), ou quand il y
+    # a des km en attente de retentative (voir juste ci-dessous) — pas a
+    # chaque run.
+    shopopop_token, shopopop_drive_id, shopopop_connecte = None, None, False
+
+    # Retentative des km Shopopop non recuperes lors d'un run precedent (la
+    # commande n'etait pas encore synchronisee cote Shopopop au moment du
+    # premier essai, cf. livraison_drive.traiter_commande_livraison). Faite a
+    # chaque run, meme sans nouvelle commande a traiter ci-dessous : c'est le
+    # "run d'apres" qui rattrape le km, une connexion Shopopop dediee n'etant
+    # ouverte que s'il y a effectivement quelque chose a retenter. Le token
+    # obtenu ici est reutilise plus bas si une nouvelle commande LIVRAISON
+    # est aussi rencontree dans ce run (pas de 2e connexion).
+    if livraison_drive.km_manquants_en_attente(sheets_svc, LIVRAISON_SPREADSHEET_ID):
+        shopopop_token, shopopop_drive_id = livraison_drive.connecter_shopopop(drive_svc)
+        shopopop_connecte = True
+        livraison_drive.retenter_km_manquants(
+            sheets_svc, LIVRAISON_SPREADSHEET_ID, shopopop_token, shopopop_drive_id)
+
     traites = charger_traites(drive_svc)
     traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites)
     nouveaux = telecharger_bons_email(gmail_svc, CACHE_DIR, traites)
@@ -1226,11 +1246,6 @@ def _main():
     print(f"{len(nouveaux)} nouvelle(s) commande(s) detectee(s) :")
     for pdf in sorted(nouveaux):
         print(f"  - {pdf}")
-
-    # Connexion Shopopop differee : uniquement quand une commande LIVRAISON
-    # est effectivement rencontree ci-dessous (5 a 10 fois/jour), pas a
-    # chaque run avec de nouvelles commandes (qui peuvent etre en Drive).
-    shopopop_token, shopopop_drive_id, shopopop_connecte = None, None, False
 
     os.makedirs(BDC_DIR, exist_ok=True)
     processed = set()
