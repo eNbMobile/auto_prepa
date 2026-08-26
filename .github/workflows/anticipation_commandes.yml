@@ -7,11 +7,6 @@ on:
         description: "Date (JJ/MM/AAAA) — laisser vide pour aujourd'hui"
         required: false
         type: string
-      auto:
-        description: "Déclenchement automatique (cron externe) : récupère directement le brouillon déjà assemblé, sans recalcul"
-        required: false
-        type: boolean
-        default: false
 
 concurrency:
   group: anticipation_commandes
@@ -35,7 +30,7 @@ jobs:
       - name: Installer les dépendances pip
         run: pip install -r requirements.txt
 
-      - name: Extraire les produits anticipables des commandes du jour
+      - name: Récupérer, archiver et envoyer le PDF d'anticipation du jour
         env:
           GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
           DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
@@ -45,11 +40,7 @@ jobs:
           if [ -n "${{ inputs.date }}" ]; then
             DATE_ARG="--date ${{ inputs.date }}"
           fi
-          AUTO_ARG=""
-          if [ "${{ inputs.auto }}" = "true" ]; then
-            AUTO_ARG="--auto"
-          fi
-          python3 anticipation_commandes.py $DATE_ARG $AUTO_ARG
+          python3 anticipation_commandes.py $DATE_ARG
 
       - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
         continue-on-error: true

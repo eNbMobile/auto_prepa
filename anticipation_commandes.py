@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
-Recupere bon_anticipation_JJ_MM.txt, deja assemble au fil de l'eau par
-assembler_anticipation.py sur Drive (GITHUB/Anticipation/MM_AAAA/JJ_MM),
-regroupe ses produits par lettre d'anticipation et genere le PDF final
-anticipation_JJ_MM.pdf (un rayon par page), archive sur Drive.
+Recupere anticipation_JJ_MM.pdf, deja genere au fil de l'eau par
+assembler_anticipation.py sur Drive (GITHUB/Anticipation/MM_AAAA/JJ_MM), et
+l'archive + l'envoie par mail — sans aucun recalcul.
+
+Ce module fournit aussi (utilisees par assembler_anticipation.py, qui fait le
+calcul reel a chaque commande) le parsing de bon_anticipation_JJ_MM.txt, le
+regroupement par lettre d'anticipation et la generation du PDF (un rayon par
+page).
 """
 
 import base64
@@ -12,7 +16,6 @@ import os
 import re
 import sys
 import urllib.request
-from collections import defaultdict
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -42,23 +45,6 @@ RAYONS_LETTRE = {
 # par ligne de commande (comme la Boucherie) : cf. avec_poids/poids_variable
 # dans _elements_rayon.
 _LETTRES_AVEC_POIDS_SYSTEMATIQUE = ("B", "D")
-
-# Chaque run lance le matin (creneau 4h00-6h30) ajoute d'office 4 baguettes
-# tradition, commande "Drive" (pas liees a une vraie commande client), sur la
-# meme page BVP (lettre C) que les autres commandes de ce rayon.
-_HEURE_BAGUETTES_DEBUT = (4, 0)
-_HEURE_BAGUETTES_FIN   = (6, 30)
-_LETTRE_BAGUETTES_DRIVE = "C"
-_GENCOD_BAGUETTE_DRIVE  = "2000000286235"
-_LIBELLE_BAGUETTE_DRIVE = "Baguette tradition française à base de farine LABEL ROUGE, 1 pièce, 250g"
-_PRIX_BAGUETTE_DRIVE    = "1,05"
-_QTE_BAGUETTES_DRIVE    = 4
-_HEURE_BAGUETTES_DRIVE  = "07:30"
-
-
-def _dans_creneau_matin(dt):
-    """Vrai si l'heure (Paris) de dt est dans le creneau 4h00-6h30 inclus."""
-    return _HEURE_BAGUETTES_DEBUT <= (dt.hour, dt.minute) <= _HEURE_BAGUETTES_FIN
 
 
 # Format des lignes de bon_anticipation.txt (16 champs separes par ';') :
@@ -515,28 +501,6 @@ def _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf):
         print(f"  Envoi email anticipation echoue : {e}")
 
 
-def _supprimer_brouillon_pdf_jour(drive_svc, folder_id, dossier_jj_mm):
-    """Met a la corbeille l'eventuel PDF brouillon anticipation_JJ_MM.pdf
-    (tenu a jour au fil des commandes par assembler_anticipation.py, dans
-    GITHUB/Anticipation/MM_AAAA/JJ_MM/) avant de regenerer le PDF final du
-    jour, pour ne pas laisser un brouillon perime a cote du resultat
-    archive. Mis a la corbeille (trashed=True) plutot que supprime
-    definitivement, pour rester restaurable depuis Drive en cas de besoin."""
-    if not folder_id:
-        return
-    nom = f"anticipation_{dossier_jj_mm}.pdf"
-    try:
-        res = drive_svc.files().list(
-            q=f"name='{nom}' and '{folder_id}' in parents and trashed=false",
-            fields="files(id)",
-        ).execute()
-        for f in res.get("files", []):
-            drive_svc.files().update(fileId=f["id"], body={"trashed": True}).execute()
-            print(f"    Brouillon supprime (corbeille) : {nom}")
-    except Exception as e:
-        print(f"    Suppression brouillon {nom} echouee : {e}")
-
-
 def _cle_tri_commande(numero):
     """Tri numerique quand possible (numeros de commande), alphabetique sinon."""
     return (0, int(numero)) if numero.isdigit() else (1, numero)
@@ -606,7 +570,6 @@ def main():
 
     jour_cible = datetime.now(_TZ)
     args = sys.argv[1:]
-    mode_auto = "--auto" in args
     if "--date" in args:
         i = args.index("--date")
         if i + 1 < len(args):
@@ -620,115 +583,37 @@ def main():
     dossier_mm_aaaa = jour_cible.strftime("%m_%Y")
     dossier_jj_mm = jour_cible.strftime("%d_%m")
 
-    print(f"Recherche de l'anticipation assemblee du {dossier_jj_mm}/{dossier_mm_aaaa} "
+    # Aucun calcul ici : anticipation_JJ_MM.pdf est deja a jour, regenere a
+    # chaque commande par assembler_anticipation.py. On le recupere tel
+    # quel, on l'archive sous archives/ et on l'envoie par mail.
+    print(f"Recuperation du PDF d'anticipation du {dossier_jj_mm}/{dossier_mm_aaaa} "
           f"sur Drive GITHUB/Anticipation...")
     folder_id = ap._dossier_anticipation_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm, creer=False)
 
-    if mode_auto:
-        # Declenchement automatique (cron externe) : le brouillon
-        # anticipation_JJ_MM.pdf est deja a jour (regenere a chaque commande
-        # par assembler_anticipation.py) — on le recupere tel quel, on
-        # l'archive sous archives/ et on l'envoie par mail, sans rien
-        # recalculer.
-        print("Mode automatique : recuperation directe du brouillon, sans recalcul.")
-        nom_pdf_brouillon = f"anticipation_{dossier_jj_mm}.pdf"
-        chemin_pdf = None
-        if folder_id:
-            res = drive_svc.files().list(
-                q=f"name='{nom_pdf_brouillon}' and '{folder_id}' in parents and trashed=false",
-                fields="files(id)",
-            ).execute()
-            fichiers_pdf = res.get("files", [])
-            if fichiers_pdf:
-                chemin_pdf = os.path.join(ap.WORK_DIR, nom_pdf_brouillon)
-                ap.download_pdf(drive_svc, fichiers_pdf[0]["id"], chemin_pdf)
-        if not chemin_pdf or not os.path.exists(chemin_pdf):
-            print("  Aucun brouillon anticipation_JJ_MM.pdf trouve pour ce jour — rien a envoyer.")
-            return
-        try:
-            archive_ok = ap.archiver_resultat_anticipation_drive(
-                drive_svc, chemin_pdf, dossier_mm_aaaa, dossier_jj_mm)
-            if archive_ok:
-                print(f"\nanticipation_{dossier_jj_mm}.pdf => Drive Anticipation/archives OK "
-                      f"(mode automatique)")
-                _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf)
-        finally:
-            if os.path.exists(chemin_pdf):
-                os.remove(chemin_pdf)
-        return
-
-    # Le PDF brouillon (tenu a jour au fil des commandes par
-    # assembler_anticipation.py) est supprime a chaque lancement : le PDF
-    # final regenere plus bas, lui, est archive separement sous archives/.
-    _supprimer_brouillon_pdf_jour(drive_svc, folder_id, dossier_jj_mm)
-
-    contenu_jour = ""
+    nom_pdf = f"anticipation_{dossier_jj_mm}.pdf"
+    chemin_pdf = None
     if folder_id:
         res = drive_svc.files().list(
-            q=(f"name='bon_anticipation_{dossier_jj_mm}.txt' and '{folder_id}' in parents "
-               f"and trashed=false"),
+            q=f"name='{nom_pdf}' and '{folder_id}' in parents and trashed=false",
             fields="files(id)",
         ).execute()
-        fichiers = res.get("files", [])
-        if fichiers:
-            contenu_jour = _telecharger_texte(drive_svc, fichiers[0]["id"])
+        fichiers_pdf = res.get("files", [])
+        if fichiers_pdf:
+            chemin_pdf = os.path.join(ap.WORK_DIR, nom_pdf)
+            ap.download_pdf(drive_svc, fichiers_pdf[0]["id"], chemin_pdf)
 
-    tous_produits = _parser_lignes_anticipation_jour(contenu_jour) if contenu_jour.strip() else []
-    nb_commandes = len({p["commande"] for p in tous_produits})
-    print(f"{nb_commandes} commande(s) avec anticipation trouvee(s).")
-
-    par_lettre = defaultdict(list)
-    for p in tous_produits:
-        par_lettre[p["lettre"]].append(p)
-
-    # Lettres avec rayon connu (RAYONS_LETTRE) : format PDF dedie.
-    produits_pdf = {lettre: par_lettre.pop(lettre)
-                    for lettre in list(par_lettre.keys()) if lettre in RAYONS_LETTRE}
-
-    for lettre in sorted(par_lettre.keys()):
-        print(f"  Lettre {lettre} ({len(par_lettre[lettre])} produit(s)) : "
-              f"rayon non defini, ignoree (pas de PDF)")
-
-    commandes_anticipees = sorted(
-        {p["commande"] for produits in produits_pdf.values() for p in produits},
-        key=_cle_tri_commande)
-    _maj_fichier_commandes_anticipees(drive_svc, commandes_anticipees, dossier_mm_aaaa, dossier_jj_mm)
-
-    if _dans_creneau_matin(jour_cible):
-        produits_pdf.setdefault(_LETTRE_BAGUETTES_DRIVE, []).append({
-            "commande": "Drive",
-            "gencod":   _GENCOD_BAGUETTE_DRIVE,
-            "libelle":  _LIBELLE_BAGUETTE_DRIVE,
-            "prix":     _PRIX_BAGUETTE_DRIVE,
-            "prix_kg":  "",
-            "qte":      str(_QTE_BAGUETTES_DRIVE),
-            "poids":    "",
-            "heure":    _HEURE_BAGUETTES_DRIVE,
-            "adresse":  "",
-            "lettre":   _LETTRE_BAGUETTES_DRIVE,
-        })
-        print(f"  Ajout automatique (run du matin) : {_QTE_BAGUETTES_DRIVE} baguettes "
-              f"tradition, commande Drive")
-
-    if not produits_pdf:
-        print("Aucun produit anticipable avec rayon defini aujourd'hui.")
+    if not chemin_pdf or not os.path.exists(chemin_pdf):
+        print(f"  Aucun {nom_pdf} trouve pour ce jour — rien a envoyer.")
         return
 
-    date_complete = jour_cible.strftime("%d/%m/%Y")
-    ordre_chemin = _charger_ordre_chemin_prepa(drive_svc)
-    print(f"\nGeneration du PDF anticipation ({len(produits_pdf)} rayon(s)) ...")
-    chemin_pdf = _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin)
-
     try:
-        if chemin_pdf:
-            archive_ok = ap.archiver_resultat_anticipation_drive(
-                drive_svc, chemin_pdf, dossier_mm_aaaa, dossier_jj_mm)
-            if archive_ok:
-                print(f"\nanticipation_{dossier_jj_mm}.pdf => Drive Anticipation/archives OK "
-                      f"({nb_commandes} commande(s) avec produits anticipables)")
-                _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf)
+        archive_ok = ap.archiver_resultat_anticipation_drive(
+            drive_svc, chemin_pdf, dossier_mm_aaaa, dossier_jj_mm)
+        if archive_ok:
+            print(f"\n{nom_pdf} => Drive Anticipation/archives OK")
+            _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf)
     finally:
-        if chemin_pdf and os.path.exists(chemin_pdf):
+        if os.path.exists(chemin_pdf):
             os.remove(chemin_pdf)
 
 

@@ -2,14 +2,18 @@
 """
 Assemble, a chaque commande anticipable traitee par auto_prepa.py, le
 bon_anticipation_NUMERO.txt de cette commande dans le fichier du jour
-bon_anticipation_JJ_MM.txt (Drive GITHUB/Anticipation/MM_AAAA/JJ_MM/), puis
-regenere le PDF brouillon anticipation_JJ_MM.pdf correspondant (memes
-dossier/fichier, ecrases a chaque appel).
+bon_anticipation_JJ_MM.txt (Drive GITHUB/Anticipation/MM_AAAA/JJ_MM/), met a
+jour commandes_anticipées_JJ_MM.txt (utilise par auto_prepa.py pour alerter
+si une commande annulee faisait partie de l'anticipation), puis regenere le
+PDF brouillon anticipation_JJ_MM.pdf correspondant (memes dossier/fichier,
+ecrases a chaque appel).
 
 Declenche en fire-and-forget par auto_prepa.py (repository_dispatch) : cet
 assemblage (telechargement/reupload Drive, generation PDF avec photos et
 codes-barres) tourne dans ce workflow separe pour ne jamais retarder le cron
-toutes les minutes d'aut_prep.
+toutes les minutes d'aut_prep. Le WF Anticipation, lui, ne fait plus aucun
+calcul : il recupere directement ce brouillon deja a jour, l'archive et
+l'envoie par mail (cf. anticipation_commandes.py).
 """
 
 import os
@@ -92,6 +96,12 @@ def main():
     for p in produits:
         par_lettre.setdefault(p["lettre"], []).append(p)
     produits_pdf = {lettre: v for lettre, v in par_lettre.items() if lettre in ac.RAYONS_LETTRE}
+
+    commandes_anticipees = sorted(
+        {p["commande"] for produits_l in produits_pdf.values() for p in produits_l},
+        key=ac._cle_tri_commande)
+    ac._maj_fichier_commandes_anticipees(drive_svc, commandes_anticipees, dossier_mm_aaaa, dossier_jj_mm)
+
     if not produits_pdf:
         print("  Aucun produit avec rayon defini, pas de PDF brouillon a generer.")
         return
