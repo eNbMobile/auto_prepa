@@ -1266,9 +1266,12 @@ def main():
     # seulement ceux sous SEUIL_STOCK_BAS) dont le Stock UC est inférieur à
     # 2× leur VMS (moyenne des 3 dernières semaines de ventes cumulées).
     # Email séparé, au destinataire principal uniquement. Ne se declenche que
-    # si j.xlsx a bien ete importe aujourd'hui (et non un jour de la semaine
-    # donne) : un stock J perime rendrait l'alerte non fiable.
-    if not _j_importe_aujourdhui(date_courante):
+    # le samedi, et seulement si j.xlsx a bien ete importe aujourd'hui (un
+    # stock J perime rendrait l'alerte non fiable) — pas de garde-fou sur le
+    # nombre de lancements dans la journee, un renvoi eventuel est accepte.
+    if date_courante.weekday() != 5:
+        print("\nLGV à commander : hors samedi, alerte ignorée.")
+    elif not _j_importe_aujourdhui(date_courante):
         print("\nLGV à commander : j.xlsx n'a pas été importé aujourd'hui, alerte ignorée.")
     else:
         gencods_lgv = sorted(g for g, c in classeurs_stock.items()
