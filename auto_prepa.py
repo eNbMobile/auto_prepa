@@ -11,6 +11,7 @@ import base64
 import csv
 import tempfile
 import fcntl
+import urllib.request
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 _TZ = ZoneInfo("Europe/Paris")
@@ -508,6 +509,32 @@ def archiver_pdf_drive(drive_svc, pdf_path, dossier_jj_mm, dossier_mm_aaaa=""):
         path = f"BDC/{dossier_mm_aaaa}/{dossier_jj_mm}" if dossier_mm_aaaa else f"BDC/{dossier_jj_mm}"
         print(f"    Archivage Drive {path}/ echoue : {e}")
 
+def _dossier_anticipation_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm, archives=False, creer=True):
+    """Retourne l'ID du dossier Drive GITHUB/Anticipation/[archives/]MM_AAAA/JJ_MM,
+    en le creant si necessaire (creer=True) ou en le recherchant seulement
+    (creer=False, retourne None si un niveau du chemin n'existe pas encore)."""
+    def _sous_dossier(parent_id, nom):
+        if not parent_id:
+            return None
+        if creer:
+            return _get_or_create_subfolder(drive_svc, parent_id, nom)
+        res = drive_svc.files().list(
+            q=(f"name='{nom}' and '{parent_id}' in parents "
+               f"and mimeType='application/vnd.google-apps.folder' and trashed=false"),
+            fields="files(id)",
+        ).execute()
+        files = res.get("files", [])
+        return files[0]["id"] if files else None
+
+    github_id = _sous_dossier("root", "GITHUB")
+    anticipation_id = _sous_dossier(github_id, "Anticipation")
+    base_id = anticipation_id
+    if archives:
+        base_id = _sous_dossier(anticipation_id, "archives")
+    mois_id = _sous_dossier(base_id, dossier_mm_aaaa)
+    return _sous_dossier(mois_id, dossier_jj_mm)
+
+
 def archiver_anticipation_drive(drive_svc, anticipation_path, dossier_jj_mm, dossier_mm_aaaa):
     """Copie bon_anticipation_NUMERO.txt dans Drive GITHUB/Anticipation/MM_AAAA/JJ_MM/."""
     if not dossier_jj_mm or not dossier_mm_aaaa:
@@ -515,16 +542,7 @@ def archiver_anticipation_drive(drive_svc, anticipation_path, dossier_jj_mm, dos
     filename = os.path.basename(anticipation_path)
     path = f"GITHUB/Anticipation/{dossier_mm_aaaa}/{dossier_jj_mm}"
     try:
-        github_id = _get_or_create_subfolder(drive_svc, "root", "GITHUB")
-        if not github_id:
-            return
-        anticipation_id = _get_or_create_subfolder(drive_svc, github_id, "Anticipation")
-        if not anticipation_id:
-            return
-        mois_id = _get_or_create_subfolder(drive_svc, anticipation_id, dossier_mm_aaaa)
-        if not mois_id:
-            return
-        subfolder_id = _get_or_create_subfolder(drive_svc, mois_id, dossier_jj_mm)
+        subfolder_id = _dossier_anticipation_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm)
         if not subfolder_id:
             return
         res = drive_svc.files().list(
@@ -549,19 +567,7 @@ def archiver_resultat_anticipation_drive(drive_svc, local_path, dossier_mm_aaaa,
     filename = os.path.basename(local_path)
     path = f"GITHUB/Anticipation/archives/{dossier_mm_aaaa}/{dossier_jj_mm}"
     try:
-        github_id = _get_or_create_subfolder(drive_svc, "root", "GITHUB")
-        if not github_id:
-            return False
-        anticipation_id = _get_or_create_subfolder(drive_svc, github_id, "Anticipation")
-        if not anticipation_id:
-            return False
-        archives_id = _get_or_create_subfolder(drive_svc, anticipation_id, "archives")
-        if not archives_id:
-            return False
-        mois_id = _get_or_create_subfolder(drive_svc, archives_id, dossier_mm_aaaa)
-        if not mois_id:
-            return False
-        subfolder_id = _get_or_create_subfolder(drive_svc, mois_id, dossier_jj_mm)
+        subfolder_id = _dossier_anticipation_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm, archives=True)
         if not subfolder_id:
             return False
 
@@ -586,6 +592,75 @@ def archiver_resultat_anticipation_drive(drive_svc, local_path, dossier_mm_aaaa,
     except Exception as e:
         print(f"    Archivage Drive {path}/ echoue : {e}")
         return False
+
+def deposer_fichier_jour_anticipation(drive_svc, local_path, dossier_mm_aaaa, dossier_jj_mm):
+    """Depose/ecrase, dans Drive GITHUB/Anticipation/MM_AAAA/JJ_MM/, un fichier
+    'brouillon' tenu a jour au fil des commandes (bon_anticipation_JJ_MM.txt
+    assemble, ou son PDF anticipation_JJ_MM.pdf) — a distinguer du resultat
+    final depose par archiver_resultat_anticipation_drive dans archives/."""
+    filename = os.path.basename(local_path)
+    path = f"GITHUB/Anticipation/{dossier_mm_aaaa}/{dossier_jj_mm}"
+    try:
+        subfolder_id = _dossier_anticipation_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm)
+        if not subfolder_id:
+            return False
+
+        res = drive_svc.files().list(
+            q=f"name='{filename}' and '{subfolder_id}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        existing = res.get("files", [])
+
+        mimetype = "application/pdf" if filename.lower().endswith(".pdf") else "text/plain"
+        media = MediaFileUpload(local_path, mimetype=mimetype, resumable=False)
+        if existing:
+            drive_svc.files().update(fileId=existing[0]["id"], media_body=media).execute()
+        else:
+            drive_svc.files().create(
+                body={"name": filename, "parents": [subfolder_id]},
+                media_body=media,
+                fields="id",
+            ).execute()
+        print(f"    {filename} => Drive {path}/ OK")
+        return True
+    except Exception as e:
+        print(f"    Depot Drive {path}/ echoue : {e}")
+        return False
+
+def declencher_assemblage_anticipation(numero, dossier_jj_mm, dossier_mm_aaaa):
+    """Declenche en fire-and-forget (repository_dispatch) le workflow GitHub
+    anticipation_assemble.yml, qui integre bon_anticipation_{numero}.txt dans
+    le fichier du jour bon_anticipation_JJ_MM.txt et regenere son PDF
+    brouillon. Fait dans un workflow separe (et non ici) car l'assemblage —
+    telechargement/reupload Drive, generation PDF avec photos et
+    codes-barres — prend du temps, et aut_prep tourne toutes les minutes :
+    le faire ici bloquerait le run suivant."""
+    if not dossier_jj_mm or not dossier_mm_aaaa:
+        return
+    token = os.environ.get("GH_PAT", "").strip()
+    repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if not token or not repo:
+        print("    Assemblage anticipation non declenche (GH_PAT/GITHUB_REPOSITORY manquant).")
+        return
+    url = f"https://api.github.com/repos/{repo}/dispatches"
+    body = json.dumps({
+        "event_type": "anticipation_assemble",
+        "client_payload": {
+            "numero": numero,
+            "dossier_jj_mm": dossier_jj_mm,
+            "dossier_mm_aaaa": dossier_mm_aaaa,
+        },
+    }).encode()
+    req = urllib.request.Request(url, data=body, method="POST", headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "Content-Type": "application/json",
+    })
+    try:
+        urllib.request.urlopen(req, timeout=15)
+        print(f"    Assemblage anticipation declenche (cde {numero})")
+    except Exception as e:
+        print(f"    Declenchement assemblage anticipation {numero} echoue : {e}")
 
 def _supprimer_anticipation_archive_drive(drive_svc, numero):
     """Met a la corbeille la copie de bon_anticipation_NUMERO.txt archivee sous
@@ -1417,6 +1492,7 @@ def _main():
         anticipation_dst = os.path.join(WORK_DIR, f"bon_anticipation_{order_num}.txt")
         if os.path.exists(anticipation_dst) and os.path.getsize(anticipation_dst) > 0:
             archiver_anticipation_drive(drive_svc, anticipation_dst, dossier_jj_mm, dossier_mm_aaaa)
+            declencher_assemblage_anticipation(order_num, dossier_jj_mm, dossier_mm_aaaa)
 
         for fname in [f"bon_prepa_{order_num}.txt",
                       f"bon_anticipation_{order_num}.txt"]:

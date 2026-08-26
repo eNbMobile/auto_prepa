@@ -205,6 +205,7 @@ jobs:
         env:
           GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
           DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          GH_PAT:                 ${{ secrets.GH_PAT }}
           WORK_DIR: "v 4.0.0"
         run: python3 bootstrap.py auto_prepa.py
 

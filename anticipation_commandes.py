@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Recupere tous les bon_anticipation_NUMERO.txt deja archives dans la journee
-sur Drive (GITHUB/Anticipation/MM_AAAA/JJ_MM, deposes au fil de l'eau par
-auto_prepa.py), les regroupe par lettre d'anticipation et genere le PDF
-anticipation_JJ_MM.pdf (un rayon par page), uploade sur Drive.
+Recupere bon_anticipation_JJ_MM.txt, deja assemble au fil de l'eau par
+assembler_anticipation.py sur Drive (GITHUB/Anticipation/MM_AAAA/JJ_MM),
+regroupe ses produits par lettre d'anticipation et genere le PDF final
+anticipation_JJ_MM.pdf (un rayon par page), archive sur Drive.
 """
 
 import base64
@@ -115,61 +115,33 @@ def _parser_lignes_anticipation(contenu, numero_commande):
     return produits
 
 
-def _extraire_numero(filename):
-    m = re.search(r'bon_anticipation_(\w+)\.txt', filename, re.IGNORECASE)
-    return m.group(1) if m else filename
+_RE_MARQUEUR_CDE = re.compile(r'^#CDE:(\S+)\s*$')
 
 
-def _lister_anticipations_du_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm):
-    """Retourne [(file_id, filename), ...] des bon_anticipation_*.txt deja archives
-    aujourd'hui sur Drive sous GITHUB/Anticipation/MM_AAAA/JJ_MM."""
-    res = drive_svc.files().list(
-        q=("name='GITHUB' and 'root' in parents "
-           "and mimeType='application/vnd.google-apps.folder' and trashed=false"),
-        fields="files(id)",
-    ).execute()
-    github = res.get("files", [])
-    if not github:
-        print("  Dossier GITHUB/ introuvable sur Drive.")
-        return []
+def _parser_lignes_anticipation_jour(contenu):
+    """Parse bon_anticipation_JJ_MM.txt, assemble au fil de l'eau par
+    assembler_anticipation.py : succession de blocs '#CDE:NUMERO' suivis des
+    lignes de bon_anticipation.txt de cette commande. Reutilise
+    _parser_lignes_anticipation par bloc et retourne la liste consolidee de
+    tous les produits, toutes commandes confondues."""
+    produits = []
+    numero_courant = None
+    bloc = []
 
-    res = drive_svc.files().list(
-        q=(f"name='Anticipation' and '{github[0]['id']}' in parents "
-           f"and mimeType='application/vnd.google-apps.folder' and trashed=false"),
-        fields="files(id)",
-    ).execute()
-    anticipation = res.get("files", [])
-    if not anticipation:
-        print("  Dossier GITHUB/Anticipation/ introuvable sur Drive.")
-        return []
+    def _flush():
+        if numero_courant is not None and bloc:
+            produits.extend(_parser_lignes_anticipation("\n".join(bloc), numero_courant))
 
-    res = drive_svc.files().list(
-        q=(f"name='{dossier_mm_aaaa}' and '{anticipation[0]['id']}' in parents "
-           f"and mimeType='application/vnd.google-apps.folder' and trashed=false"),
-        fields="files(id)",
-    ).execute()
-    mois = res.get("files", [])
-    if not mois:
-        print(f"  Dossier GITHUB/Anticipation/{dossier_mm_aaaa}/ introuvable sur Drive.")
-        return []
-
-    res = drive_svc.files().list(
-        q=(f"name='{dossier_jj_mm}' and '{mois[0]['id']}' in parents "
-           f"and mimeType='application/vnd.google-apps.folder' and trashed=false"),
-        fields="files(id)",
-    ).execute()
-    jour = res.get("files", [])
-    if not jour:
-        print(f"  Dossier GITHUB/Anticipation/{dossier_mm_aaaa}/{dossier_jj_mm}/ introuvable sur Drive.")
-        return []
-
-    res = drive_svc.files().list(
-        q=(f"'{jour[0]['id']}' in parents and name contains 'bon_anticipation_' "
-           f"and trashed=false"),
-        fields="files(id,name)",
-        pageSize=200,
-    ).execute()
-    return [(f["id"], f["name"]) for f in res.get("files", [])]
+    for ligne in contenu.splitlines():
+        m = _RE_MARQUEUR_CDE.match(ligne)
+        if m:
+            _flush()
+            numero_courant = m.group(1)
+            bloc = []
+        else:
+            bloc.append(ligne)
+    _flush()
+    return produits
 
 
 def _telecharger_texte(drive_svc, file_id):
@@ -543,17 +515,26 @@ def _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf):
         print(f"  Envoi email anticipation echoue : {e}")
 
 
-def _supprimer_bons_anticipation_traites(drive_svc, fichiers):
-    """Met a la corbeille sur Drive les bon_anticipation_NUMERO.txt une fois inclus
-    dans le PDF archive, pour eviter qu'ils ne soient retraites lors d'une relance.
-    Mis a la corbeille (trashed=True) plutot que supprimes definitivement (delete),
-    pour rester restaurables depuis Drive en cas de besoin."""
-    for file_id, filename in fichiers:
-        try:
-            drive_svc.files().update(fileId=file_id, body={"trashed": True}).execute()
-            print(f"    Mis a la corbeille Drive GITHUB/Anticipation : {filename}")
-        except Exception as e:
-            print(f"    Suppression {filename} echouee : {e}")
+def _supprimer_brouillon_pdf_jour(drive_svc, folder_id, dossier_jj_mm):
+    """Met a la corbeille l'eventuel PDF brouillon anticipation_JJ_MM.pdf
+    (tenu a jour au fil des commandes par assembler_anticipation.py, dans
+    GITHUB/Anticipation/MM_AAAA/JJ_MM/) avant de regenerer le PDF final du
+    jour, pour ne pas laisser un brouillon perime a cote du resultat
+    archive. Mis a la corbeille (trashed=True) plutot que supprime
+    definitivement, pour rester restaurable depuis Drive en cas de besoin."""
+    if not folder_id:
+        return
+    nom = f"anticipation_{dossier_jj_mm}.pdf"
+    try:
+        res = drive_svc.files().list(
+            q=f"name='{nom}' and '{folder_id}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        for f in res.get("files", []):
+            drive_svc.files().update(fileId=f["id"], body={"trashed": True}).execute()
+            print(f"    Brouillon supprime (corbeille) : {nom}")
+    except Exception as e:
+        print(f"    Suppression brouillon {nom} echouee : {e}")
 
 
 def _cle_tri_commande(numero):
@@ -638,17 +619,29 @@ def main():
     dossier_mm_aaaa = jour_cible.strftime("%m_%Y")
     dossier_jj_mm = jour_cible.strftime("%d_%m")
 
-    print(f"Recherche des anticipations du {dossier_jj_mm}/{dossier_mm_aaaa} "
+    print(f"Recherche de l'anticipation assemblee du {dossier_jj_mm}/{dossier_mm_aaaa} "
           f"sur Drive GITHUB/Anticipation...")
-    fichiers = _lister_anticipations_du_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm)
-    print(f"{len(fichiers)} commande(s) avec anticipation trouvee(s).")
+    folder_id = ap._dossier_anticipation_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm, creer=False)
 
-    tous_produits = []
-    for file_id, filename in sorted(fichiers, key=lambda p: p[1]):
-        numero = _extraire_numero(filename)
-        contenu = _telecharger_texte(drive_svc, file_id)
-        produits = _parser_lignes_anticipation(contenu, numero)
-        tous_produits.extend(produits)
+    # Le PDF brouillon (tenu a jour au fil des commandes par
+    # assembler_anticipation.py) est supprime a chaque lancement : le PDF
+    # final regenere plus bas, lui, est archive separement sous archives/.
+    _supprimer_brouillon_pdf_jour(drive_svc, folder_id, dossier_jj_mm)
+
+    contenu_jour = ""
+    if folder_id:
+        res = drive_svc.files().list(
+            q=(f"name='bon_anticipation_{dossier_jj_mm}.txt' and '{folder_id}' in parents "
+               f"and trashed=false"),
+            fields="files(id)",
+        ).execute()
+        fichiers = res.get("files", [])
+        if fichiers:
+            contenu_jour = _telecharger_texte(drive_svc, fichiers[0]["id"])
+
+    tous_produits = _parser_lignes_anticipation_jour(contenu_jour) if contenu_jour.strip() else []
+    nb_commandes = len({p["commande"] for p in tous_produits})
+    print(f"{nb_commandes} commande(s) avec anticipation trouvee(s).")
 
     par_lettre = defaultdict(list)
     for p in tous_produits:
@@ -698,9 +691,8 @@ def main():
                 drive_svc, chemin_pdf, dossier_mm_aaaa, dossier_jj_mm)
             if archive_ok:
                 print(f"\nanticipation_{dossier_jj_mm}.pdf => Drive Anticipation/archives OK "
-                      f"({len(fichiers)} commande(s) avec produits anticipables)")
+                      f"({nb_commandes} commande(s) avec produits anticipables)")
                 _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf)
-                _supprimer_bons_anticipation_traites(drive_svc, fichiers)
     finally:
         if chemin_pdf and os.path.exists(chemin_pdf):
             os.remove(chemin_pdf)
