@@ -7,6 +7,11 @@ on:
         description: "Date (JJ/MM/AAAA) — laisser vide pour aujourd'hui"
         required: false
         type: string
+      auto:
+        description: "Déclenchement automatique (cron externe) : récupère directement le brouillon déjà assemblé, sans recalcul"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: anticipation_commandes
@@ -40,7 +45,11 @@ jobs:
           if [ -n "${{ inputs.date }}" ]; then
             DATE_ARG="--date ${{ inputs.date }}"
           fi
-          python3 anticipation_commandes.py $DATE_ARG
+          AUTO_ARG=""
+          if [ "${{ inputs.auto }}" = "true" ]; then
+            AUTO_ARG="--auto"
+          fi
+          python3 anticipation_commandes.py $DATE_ARG $AUTO_ARG
 
       - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
         continue-on-error: true

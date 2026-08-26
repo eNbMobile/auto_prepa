@@ -30,6 +30,7 @@ _SORTIE_CANDIDATS = [
 SEUIL_STOCK_BAS = 2  # stock J <= ce seuil → alerte "stock insuffisant Drive"
 
 CLASSEUR_DELOTAGE = "DRIVE DELOTAGE"  # comparé normalisé (majuscules, sans accents)
+CLASSEUR_LGV       = "DRIVE LGV"      # idem, pour l'alerte "LGV à commander"
 
 
 def _normaliser_classeur(texte):
@@ -863,6 +864,19 @@ def generer_pdf_a_deloter(a_deloter, date_courante, vms_map=None):
     return _construire_pdf_tableau(a_deloter, titre_html, nom_pdf, complet=False, vms_map=vms_map)
 
 
+def generer_pdf_lgv(a_commander, date_courante, vms_map, semaine_suivante):
+    """Génère un PDF listant les produits du classeur DRIVE LGV dont le stock
+    est insuffisant au regard de leurs ventes (Stock UC < 2×VMS). Retourne le
+    chemin ou None."""
+    if not a_commander:
+        return None
+
+    nom_pdf = f"lgv_a_commander_{date_courante.strftime('%Y%m%d')}.pdf"
+    titre_html = (f"<b>LGV à commander S{semaine_suivante:02d}</b>"
+                  f"&nbsp;&nbsp;({len(a_commander)} produit{'s' if len(a_commander) > 1 else ''})")
+    return _construire_pdf_tableau(a_commander, titre_html, nom_pdf, complet=False, vms_map=vms_map)
+
+
 def envoyer_email_pdf(pdf_ecarts, pdf_stock_bas, pdf_a_deloter, date_j1, nb_ecart, manquant, surplus,
                       nb_stock_bas, nb_a_deloter, date_debut=None, date_courante=None):
     """Envoie par email les PDF d'écarts, de stocks insuffisants et/ou
@@ -926,6 +940,41 @@ def envoyer_email_pdf(pdf_ecarts, pdf_stock_bas, pdf_a_deloter, date_j1, nb_ecar
         print(f"  Email envoyé → {EMAIL_DESTINATAIRE} (cc: {EMAIL_COPIE_STOCK})")
     except Exception as e:
         print(f"  Email échoué : {e}")
+
+
+def envoyer_email_lgv(pdf_lgv, nb, semaine_suivante):
+    """Envoie par email (au destinataire principal uniquement, sans copie) le
+    PDF des produits du classeur DRIVE LGV à commander (Stock UC < 2×VMS)."""
+    try:
+        import base64
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        from email.mime.application import MIMEApplication
+
+        svc = _get_gmail_service()
+        if not svc:
+            return
+
+        msg = MIMEMultipart()
+        msg['To']      = EMAIL_DESTINATAIRE
+        msg['Subject'] = f"LGV à commander S{semaine_suivante:02d}"
+
+        corps = (f"LGV à commander pour la semaine S{semaine_suivante:02d}\n\n"
+                 f"  {nb} produit{'s' if nb > 1 else ''} (classeur {CLASSEUR_LGV}, "
+                 f"Stock UC < 2×VMS)\n\n"
+                 f"Détail en pièce jointe.")
+        msg.attach(MIMEText(corps, 'plain', 'utf-8'))
+
+        with open(pdf_lgv, 'rb') as f:
+            part = MIMEApplication(f.read(), 'pdf')
+        part.add_header('Content-Disposition', 'attachment', filename=os.path.basename(pdf_lgv))
+        msg.attach(part)
+
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        svc.users().messages().send(userId='me', body={'raw': raw}).execute()
+        print(f"  Email LGV à commander envoyé → {EMAIL_DESTINATAIRE}")
+    except Exception as e:
+        print(f"  Email LGV échoué : {e}")
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -1183,6 +1232,34 @@ def main():
         if a_deloter:
             print("\nGénération PDF articles à déloter …")
             nom_pdf_a_deloter = generer_pdf_a_deloter(a_deloter, date_courante, vms_map)
+
+    # LGV à commander : tous les produits du classeur DRIVE LGV (pas
+    # seulement ceux sous SEUIL_STOCK_BAS) dont le Stock UC est inférieur à
+    # 2× leur VMS (moyenne des 3 dernières semaines de ventes cumulées).
+    # Email séparé, au destinataire principal uniquement.
+    gencods_lgv = sorted(g for g, c in classeurs_stock.items()
+                        if g in stock_j and _normaliser_classeur(c) == _normaliser_classeur(CLASSEUR_LGV))
+    if gencods_lgv:
+        vms_lgv = calculer_vms(gencods_lgv, date_courante, nb_semaines=3)
+        a_commander_lgv = []
+        for gencod in gencods_lgv:
+            stock_uc = stock_j.get(gencod, 0.0)
+            if stock_uc < 2 * vms_lgv.get(gencod, 0.0):
+                lib = (libelles_dict.get(gencod)
+                      or libelles_stock.get(gencod)
+                      or libelles_extra.get(gencod, ''))
+                a_commander_lgv.append((gencod, 0, 0, 0, stock_uc, 0, '', lib))
+        a_commander_lgv.sort(key=lambda r: r[0])
+        if a_commander_lgv:
+            lundi_prochain = (date_courante - timedelta(days=date_courante.weekday())
+                              + timedelta(weeks=1))
+            semaine_suivante = lundi_prochain.isocalendar()[1]
+            print(f"\nLGV à commander : {len(a_commander_lgv)} produit(s) "
+                  f"(classeur {CLASSEUR_LGV}, Stock UC < 2×VMS)")
+            nom_pdf_lgv = generer_pdf_lgv(a_commander_lgv, date_courante, vms_lgv, semaine_suivante)
+            if nom_pdf_lgv:
+                print("Envoi email LGV …")
+                envoyer_email_lgv(nom_pdf_lgv, len(a_commander_lgv), semaine_suivante)
 
     if nom_pdf_ecarts or nom_pdf_stock_bas or nom_pdf_a_deloter:
         print("\nEnvoi email …")

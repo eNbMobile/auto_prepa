@@ -606,6 +606,7 @@ def main():
 
     jour_cible = datetime.now(_TZ)
     args = sys.argv[1:]
+    mode_auto = "--auto" in args
     if "--date" in args:
         i = args.index("--date")
         if i + 1 < len(args):
@@ -622,6 +623,39 @@ def main():
     print(f"Recherche de l'anticipation assemblee du {dossier_jj_mm}/{dossier_mm_aaaa} "
           f"sur Drive GITHUB/Anticipation...")
     folder_id = ap._dossier_anticipation_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm, creer=False)
+
+    if mode_auto:
+        # Declenchement automatique (cron externe) : le brouillon
+        # anticipation_JJ_MM.pdf est deja a jour (regenere a chaque commande
+        # par assembler_anticipation.py) — on le recupere tel quel, on
+        # l'archive sous archives/ et on l'envoie par mail, sans rien
+        # recalculer.
+        print("Mode automatique : recuperation directe du brouillon, sans recalcul.")
+        nom_pdf_brouillon = f"anticipation_{dossier_jj_mm}.pdf"
+        chemin_pdf = None
+        if folder_id:
+            res = drive_svc.files().list(
+                q=f"name='{nom_pdf_brouillon}' and '{folder_id}' in parents and trashed=false",
+                fields="files(id)",
+            ).execute()
+            fichiers_pdf = res.get("files", [])
+            if fichiers_pdf:
+                chemin_pdf = os.path.join(ap.WORK_DIR, nom_pdf_brouillon)
+                ap.download_pdf(drive_svc, fichiers_pdf[0]["id"], chemin_pdf)
+        if not chemin_pdf or not os.path.exists(chemin_pdf):
+            print("  Aucun brouillon anticipation_JJ_MM.pdf trouve pour ce jour — rien a envoyer.")
+            return
+        try:
+            archive_ok = ap.archiver_resultat_anticipation_drive(
+                drive_svc, chemin_pdf, dossier_mm_aaaa, dossier_jj_mm)
+            if archive_ok:
+                print(f"\nanticipation_{dossier_jj_mm}.pdf => Drive Anticipation/archives OK "
+                      f"(mode automatique)")
+                _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf)
+        finally:
+            if os.path.exists(chemin_pdf):
+                os.remove(chemin_pdf)
+        return
 
     # Le PDF brouillon (tenu a jour au fil des commandes par
     # assembler_anticipation.py) est supprime a chaque lancement : le PDF
