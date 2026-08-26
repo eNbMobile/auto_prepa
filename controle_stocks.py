@@ -10,7 +10,10 @@ import shutil
 import subprocess
 import zipfile
 import xml.etree.ElementTree as ET
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
+
+_TZ = ZoneInfo("Europe/Paris")
 
 _BASE    = os.path.dirname(os.path.abspath(__file__))
 WORK_DIR = os.environ.get("WORK_DIR", os.path.join(_BASE, "v 4.0.0"))
@@ -424,6 +427,32 @@ def _get_drive_service():
     except Exception as e:
         print(f"  Drive inaccessible : {e}")
         return None
+
+
+def _j_importe_aujourdhui(date_reference):
+    """Vrai si j.xlsx (dossier Drive DRIVE_CONTROLE_FOLDER_ID) a ete importe
+    (derniere modification Drive) le jour de date_reference — condition pour
+    l'alerte LGV a commander, qui ne doit se baser que sur un stock J
+    reellement a jour (et non sur le jour de la semaine du lancement)."""
+    if not DRIVE_CONTROLE_FOLDER_ID:
+        return False
+    svc = _get_drive_service()
+    if not svc:
+        return False
+    try:
+        res = svc.files().list(
+            q=f"name='j.xlsx' and '{DRIVE_CONTROLE_FOLDER_ID}' in parents and trashed=false",
+            fields="files(modifiedTime)",
+        ).execute()
+        files = res.get("files", [])
+        if not files:
+            return False
+        modifie = datetime.fromisoformat(
+            files[0]["modifiedTime"].replace("Z", "+00:00")).astimezone(_TZ)
+        return modifie.date() == date_reference
+    except Exception as e:
+        print(f"  Verification de la date d'import de j.xlsx echouee : {e}")
+        return False
 
 
 def _get_gmail_service():
@@ -1236,30 +1265,35 @@ def main():
     # LGV à commander : tous les produits du classeur DRIVE LGV (pas
     # seulement ceux sous SEUIL_STOCK_BAS) dont le Stock UC est inférieur à
     # 2× leur VMS (moyenne des 3 dernières semaines de ventes cumulées).
-    # Email séparé, au destinataire principal uniquement.
-    gencods_lgv = sorted(g for g, c in classeurs_stock.items()
-                        if g in stock_j and _normaliser_classeur(c) == _normaliser_classeur(CLASSEUR_LGV))
-    if gencods_lgv:
-        vms_lgv = calculer_vms(gencods_lgv, date_courante, nb_semaines=3)
-        a_commander_lgv = []
-        for gencod in gencods_lgv:
-            stock_uc = stock_j.get(gencod, 0.0)
-            if stock_uc < 2 * vms_lgv.get(gencod, 0.0):
-                lib = (libelles_dict.get(gencod)
-                      or libelles_stock.get(gencod)
-                      or libelles_extra.get(gencod, ''))
-                a_commander_lgv.append((gencod, 0, 0, 0, stock_uc, 0, '', lib))
-        a_commander_lgv.sort(key=lambda r: r[0])
-        if a_commander_lgv:
-            lundi_prochain = (date_courante - timedelta(days=date_courante.weekday())
-                              + timedelta(weeks=1))
-            semaine_suivante = lundi_prochain.isocalendar()[1]
-            print(f"\nLGV à commander : {len(a_commander_lgv)} produit(s) "
-                  f"(classeur {CLASSEUR_LGV}, Stock UC < 2×VMS)")
-            nom_pdf_lgv = generer_pdf_lgv(a_commander_lgv, date_courante, vms_lgv, semaine_suivante)
-            if nom_pdf_lgv:
-                print("Envoi email LGV …")
-                envoyer_email_lgv(nom_pdf_lgv, len(a_commander_lgv), semaine_suivante)
+    # Email séparé, au destinataire principal uniquement. Ne se declenche que
+    # si j.xlsx a bien ete importe aujourd'hui (et non un jour de la semaine
+    # donne) : un stock J perime rendrait l'alerte non fiable.
+    if not _j_importe_aujourdhui(date_courante):
+        print("\nLGV à commander : j.xlsx n'a pas été importé aujourd'hui, alerte ignorée.")
+    else:
+        gencods_lgv = sorted(g for g, c in classeurs_stock.items()
+                            if g in stock_j and _normaliser_classeur(c) == _normaliser_classeur(CLASSEUR_LGV))
+        if gencods_lgv:
+            vms_lgv = calculer_vms(gencods_lgv, date_courante, nb_semaines=3)
+            a_commander_lgv = []
+            for gencod in gencods_lgv:
+                stock_uc = stock_j.get(gencod, 0.0)
+                if stock_uc < 2 * vms_lgv.get(gencod, 0.0):
+                    lib = (libelles_dict.get(gencod)
+                          or libelles_stock.get(gencod)
+                          or libelles_extra.get(gencod, ''))
+                    a_commander_lgv.append((gencod, 0, 0, 0, stock_uc, 0, '', lib))
+            a_commander_lgv.sort(key=lambda r: r[0])
+            if a_commander_lgv:
+                lundi_prochain = (date_courante - timedelta(days=date_courante.weekday())
+                                  + timedelta(weeks=1))
+                semaine_suivante = lundi_prochain.isocalendar()[1]
+                print(f"\nLGV à commander : {len(a_commander_lgv)} produit(s) "
+                      f"(classeur {CLASSEUR_LGV}, Stock UC < 2×VMS)")
+                nom_pdf_lgv = generer_pdf_lgv(a_commander_lgv, date_courante, vms_lgv, semaine_suivante)
+                if nom_pdf_lgv:
+                    print("Envoi email LGV …")
+                    envoyer_email_lgv(nom_pdf_lgv, len(a_commander_lgv), semaine_suivante)
 
     if nom_pdf_ecarts or nom_pdf_stock_bas or nom_pdf_a_deloter:
         print("\nEnvoi email …")
