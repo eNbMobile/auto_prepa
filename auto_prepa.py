@@ -637,10 +637,10 @@ def declencher_assemblage_anticipation(numero, dossier_jj_mm, dossier_mm_aaaa):
     le faire ici bloquerait le run suivant."""
     if not dossier_jj_mm or not dossier_mm_aaaa:
         return
-    token = os.environ.get("GH_PAT", "").strip()
+    token = os.environ.get("GITHUB_TOKEN", "").strip() or os.environ.get("GH_PAT", "").strip()
     repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
     if not token or not repo:
-        print("    Assemblage anticipation non declenche (GH_PAT/GITHUB_REPOSITORY manquant).")
+        print("    Assemblage anticipation non declenche (GITHUB_TOKEN/GH_PAT/GITHUB_REPOSITORY manquant).")
         return
     url = f"https://api.github.com/repos/{repo}/dispatches"
     body = json.dumps({
