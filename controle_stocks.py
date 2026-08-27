@@ -32,8 +32,9 @@ _SORTIE_CANDIDATS = [
 
 SEUIL_STOCK_BAS = 2  # stock J <= ce seuil → alerte "stock insuffisant Drive"
 
-CLASSEUR_DELOTAGE = "DRIVE DELOTAGE"  # comparé normalisé (majuscules, sans accents)
-CLASSEUR_LGV       = "DRIVE LGV"      # idem, pour l'alerte "LGV à commander"
+CLASSEUR_DELOTAGE   = "DRIVE DELOTAGE"          # comparé normalisé (majuscules, sans accents)
+CLASSEUR_LGV        = "DRIVE LGV"               # idem, pour l'alerte "LGV à commander"
+CLASSEUR_A_ENLEVER  = "** PRODUITS A ENLEVER **"  # idem, exclu des stocks insuffisants
 
 
 def _normaliser_classeur(texte):
@@ -1173,7 +1174,9 @@ def main():
 
         if present_j and s_j <= SEUIL_STOCK_BAS:
             classeur = classeurs_stock.get(gencod, '')
-            if _normaliser_classeur(classeur) == _normaliser_classeur(CLASSEUR_DELOTAGE):
+            if _normaliser_classeur(classeur) == _normaliser_classeur(CLASSEUR_A_ENLEVER):
+                pass  # produit à enlever du catalogue, exclu des stocks insuffisants
+            elif _normaliser_classeur(classeur) == _normaliser_classeur(CLASSEUR_DELOTAGE):
                 a_deloter.append(row)
             else:
                 stock_bas.append(row)
