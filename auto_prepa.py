@@ -1311,6 +1311,16 @@ def _main():
         livraison_drive.retenter_km_manquants(
             sheets_svc, LIVRAISON_SPREADSHEET_ID, shopopop_token, shopopop_drive_id)
 
+    # Garde-fou : le workflow dedie "Livraison Drive - En attente" (declenche
+    # a 14h pile) peut etre saute par GitHub Actions en cas de forte charge
+    # (declenchements 'schedule' a l'heure ronde). Rattrapage ici a chaque
+    # execution d'auto_prepa.py une fois 14h passees, tant qu'il reste
+    # effectivement quelque chose a promouvoir (lecture seule sinon).
+    if (datetime.now(_TZ).hour >= 14
+            and livraison_drive.promotion_en_attente_necessaire(sheets_svc, LIVRAISON_SPREADSHEET_ID)):
+        print("  Rattrapage EN ATTENTE (workflow 14h non detecte pour aujourd'hui).")
+        livraison_drive.traiter_en_attente(sheets_svc, LIVRAISON_SPREADSHEET_ID)
+
     traites = charger_traites(drive_svc)
     traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites)
     nouveaux = telecharger_bons_email(gmail_svc, CACHE_DIR, traites)
