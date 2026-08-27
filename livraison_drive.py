@@ -347,8 +347,9 @@ def _chercher_et_supprimer_numero(sheets_svc, spreadsheet_id, titre_onglet,
 
 
 def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde_str, numero_commande=None):
-    """A appeler pour une commande en LIVRAISON strictement annulee (pas une
-    modification/remplacement, qui ne change pas la date de livraison).
+    """A appeler pour une commande en LIVRAISON annulee ou remplacee par une
+    nouvelle commande, afin que l'ancienne ligne ne reste pas (ou ne soit pas
+    dupliquee) dans LIVRAISON DRIVE 2026.
     Localise la ligne correspondante dans LIVRAISON DRIVE 2026 — d'abord
     l'onglet du mois de la commande, puis EN ATTENTE si absente du mois — et
     la supprime.
