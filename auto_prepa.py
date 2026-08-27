@@ -282,10 +282,10 @@ def _telecharger_bdc_archive_drive(drive_svc, numero):
 
 
 def _traiter_annulation_livraison(drive_svc, sheets_svc, numero):
-    """Si la commande annulee etait une LIVRAISON, supprime sa ligne dans
-    LIVRAISON DRIVE 2026. Nom/prenom/date sont extraits de l'archive BDC
-    Drive, seule source encore disponible a ce stade (le mail d'annulation
-    ne contient que le numero de commande)."""
+    """Si la commande annulee ou remplacee etait une LIVRAISON, supprime sa
+    ligne dans LIVRAISON DRIVE 2026. Nom/prenom/date sont extraits de
+    l'archive BDC Drive, seule source encore disponible a ce stade (le mail
+    d'annulation/remplacement ne contient que le numero de commande)."""
     pdf_path = _telecharger_bdc_archive_drive(drive_svc, numero)
     if not pdf_path:
         return
@@ -351,6 +351,7 @@ def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites):
                             if contenu_antici:
                                 _envoyer_email_anticipation(gmail_svc, num_ancien, contenu_antici)
                 _alerter_si_commande_anticipee_annulee(drive_svc, gmail_svc, num_ancien, num_nouveau)
+                _traiter_annulation_livraison(drive_svc, sheets_svc, num_ancien)
                 _supprimer_bons_drive(drive_svc, num_ancien)
                 _supprimer_anticipation_archive_drive(drive_svc, num_ancien)
                 _supprimer_bdc_drive(drive_svc, num_ancien)
