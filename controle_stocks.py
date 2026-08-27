@@ -134,9 +134,8 @@ def _rows_depuis_csv(chemin):
 def lire_stock(chemin):
     """
     Lit un export stock multi-colonnes (.xlsx ou .csv).
-    Cherche les colonnes "Gencod", "Stock UC" et optionnellement "Libellé"
-    et "Classeur" (classement du produit, ex. "DRIVE DÉLOTAGE" — absente des
-    exports actuels, ajoutée au besoin par les équipes).
+    Cherche les colonnes "Gencod", "Stock UC", "Classeur" (classement du
+    produit, ex. "DRIVE DÉLOTAGE") et optionnellement "Libellé".
     Retourne ({gencod: stock_uc}, {gencod: libelle}, {gencod: classeur}).
     """
     ext = os.path.splitext(chemin)[1].lower()
@@ -162,6 +161,10 @@ def lire_stock(chemin):
                 if idx_stock is None:
                     raise ValueError(
                         f"Colonne 'Stock UC' introuvable dans {chemin}.\n"
+                        f"En-têtes trouvées : {[c.strip() for c in row]}")
+                if idx_classeur is None:
+                    raise ValueError(
+                        f"Colonne 'Classeur' introuvable dans {chemin}.\n"
                         f"En-têtes trouvées : {[c.strip() for c in row]}")
             continue
 
