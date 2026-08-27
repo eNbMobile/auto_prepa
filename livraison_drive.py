@@ -594,13 +594,41 @@ def _parser_jour(jour_str, aujourdhui):
     return meilleure
 
 
+def promotion_en_attente_necessaire(sheets_svc, spreadsheet_id, maintenant=None):
+    """True s'il existe au moins une ligne dans EN ATTENTE dont la date cible
+    est le lendemain ouvre (par rapport a `maintenant`), c'est-a-dire une
+    ligne que traiter_en_attente() devrait promouvoir dans l'onglet du mois.
+    Ne fait qu'une lecture (aucune ecriture) : sert de garde-fou, appele a
+    chaque execution d'auto_prepa.py une fois 14h passees, pour rattraper la
+    promotion si le workflow dedie declenche a 14h a ete manque (les
+    declenchements 'schedule' GitHub Actions pile a l'heure ronde peuvent
+    etre retardes voire sautes en cas de forte charge)."""
+    onglet = _trouver_onglet(sheets_svc, spreadsheet_id, ONGLET_EN_ATTENTE)
+    if not onglet:
+        return False
+
+    maintenant = maintenant or datetime.now(_TZ)
+    aujourdhui = maintenant.date()
+    lendemain = _lendemain_ouvre(aujourdhui)
+
+    res = sheets_svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!B2:B{1 + _MAX_LIGNES}").execute()
+    for row in res.get("values", []):
+        jour = row[0].strip() if row and row[0] else ""
+        if jour and _parser_jour(jour, aujourdhui) == lendemain:
+            return True
+    return False
+
+
 def traiter_en_attente(sheets_svc, spreadsheet_id, maintenant=None):
     """Renseigne dans l'onglet du mois les commandes de EN ATTENTE prevues
     pour le lendemain ouvre (par rapport a `maintenant` ; le lendemain, sauf
     le samedi ou c'est le lundi, le dimanche etant ferme), et les retire de
-    EN ATTENTE. Appelee par le workflow declenche a 14h. Le km, deja recupere
-    sur Shopopop au moment ou la commande a ete mise en EN ATTENTE (colonne
-    D), est simplement reporte tel quel — pas de nouvel appel Shopopop ici."""
+    EN ATTENTE. Appelee par le workflow declenche a 14h, et en garde-fou par
+    auto_prepa.py (cf. promotion_en_attente_necessaire) si ce declenchement a
+    ete manque. Le km, deja recupere sur Shopopop au moment ou la commande a
+    ete mise en EN ATTENTE (colonne D), est simplement reporte tel quel — pas
+    de nouvel appel Shopopop ici."""
     onglet = _trouver_onglet(sheets_svc, spreadsheet_id, ONGLET_EN_ATTENTE)
     if not onglet:
         print(f"  Onglet '{ONGLET_EN_ATTENTE}' introuvable, rien a traiter.")

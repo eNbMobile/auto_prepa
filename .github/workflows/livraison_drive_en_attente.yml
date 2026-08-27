@@ -2,7 +2,10 @@ name: Livraison Drive - En attente
 
 on:
   schedule:
-    - cron: '0 12 * * *'   # 14h00 Paris (CEST = UTC+2)
+    - cron: '3 12 * * *'   # 14h03 Paris (CEST = UTC+2) - decale de l'heure ronde pour
+                            # limiter le risque de declenchement 'schedule' saute par
+                            # GitHub Actions en cas de forte charge (cf. garde-fou dans
+                            # auto_prepa.py : promotion_en_attente_necessaire)
   workflow_dispatch:
 
 concurrency:
