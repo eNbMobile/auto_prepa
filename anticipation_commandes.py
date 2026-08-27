@@ -470,9 +470,9 @@ def _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf):
     destinataire_cc = ap.EMAIL_ANTICIPATION_2
     if not destinataire:
         print("  Envoi email anticipation ignore : email_destinataire absent de config.json")
-        return
+        return False
     if not chemin_pdf or not os.path.exists(chemin_pdf):
-        return
+        return False
 
     from email.mime.application import MIMEApplication
     from email.mime.multipart import MIMEMultipart
@@ -497,8 +497,10 @@ def _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf):
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
         print(f"  Email anticipation envoye => {destinataire} (cc: {destinataire_cc})")
+        return True
     except Exception as e:
         print(f"  Envoi email anticipation echoue : {e}")
+        return False
 
 
 def _cle_tri_commande(numero):
@@ -559,6 +561,18 @@ def _maj_fichier_commandes_anticipees(drive_svc, commandes, dossier_mm_aaaa, dos
         print(f"    Mise a jour {nom_fichier} echouee : {e}")
 
 
+def _supprimer_pdf_jour_anticipation(drive_svc, file_id, nom_pdf):
+    """Met a la corbeille anticipation_JJ_MM.pdf dans GITHUB/Anticipation/MM_AAAA/JJ_MM/
+    une fois archive + envoye par mail (trashed=True plutot que suppression
+    definitive, pour rester restaurable) — evite qu'un second lancement du
+    WF Anticipation ne retrouve ce brouillon et renvoie les memes produits."""
+    try:
+        drive_svc.files().update(fileId=file_id, body={"trashed": True}).execute()
+        print(f"  {nom_pdf} retire du dossier du jour (conserve dans archives/)")
+    except Exception as e:
+        print(f"  Suppression {nom_pdf} du dossier du jour echouee : {e}")
+
+
 def main():
     os.makedirs(ap.WORK_DIR, exist_ok=True)
 
@@ -592,6 +606,7 @@ def main():
 
     nom_pdf = f"anticipation_{dossier_jj_mm}.pdf"
     chemin_pdf = None
+    pdf_file_id = None
     if folder_id:
         res = drive_svc.files().list(
             q=f"name='{nom_pdf}' and '{folder_id}' in parents and trashed=false",
@@ -599,8 +614,9 @@ def main():
         ).execute()
         fichiers_pdf = res.get("files", [])
         if fichiers_pdf:
+            pdf_file_id = fichiers_pdf[0]["id"]
             chemin_pdf = os.path.join(ap.WORK_DIR, nom_pdf)
-            ap.download_pdf(drive_svc, fichiers_pdf[0]["id"], chemin_pdf)
+            ap.download_pdf(drive_svc, pdf_file_id, chemin_pdf)
 
     if not chemin_pdf or not os.path.exists(chemin_pdf):
         print(f"  Aucun {nom_pdf} trouve pour ce jour — rien a envoyer.")
@@ -611,7 +627,9 @@ def main():
             drive_svc, chemin_pdf, dossier_mm_aaaa, dossier_jj_mm)
         if archive_ok:
             print(f"\n{nom_pdf} => Drive Anticipation/archives OK")
-            _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf)
+            email_ok = _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf)
+            if email_ok and pdf_file_id:
+                _supprimer_pdf_jour_anticipation(drive_svc, pdf_file_id, nom_pdf)
     finally:
         if os.path.exists(chemin_pdf):
             os.remove(chemin_pdf)
