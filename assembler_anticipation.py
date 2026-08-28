@@ -36,6 +36,16 @@ def _telecharger_texte_dossier(drive_svc, folder_id, filename):
     return ac._telecharger_texte(drive_svc, files[0]["id"])
 
 
+def _commandes_deja_assemblees(contenu_jour):
+    """Numeros de commande deja marques '#CDE:NUMERO' dans bon_anticipation_JJ_MM.txt."""
+    marqueurs = set()
+    for ligne in contenu_jour.splitlines():
+        m = ac._RE_MARQUEUR_CDE.match(ligne.strip())
+        if m:
+            marqueurs.add(m.group(1))
+    return marqueurs
+
+
 def _parser_args(argv):
     valeurs = {}
     for nom in ("--numero", "--jour", "--mois"):
@@ -64,23 +74,43 @@ def main():
         sys.exit(1)
 
     nom_jour = f"bon_anticipation_{dossier_jj_mm}.txt"
-    nom_cde = f"bon_anticipation_{numero}.txt"
 
     contenu_jour = _telecharger_texte_dossier(drive_svc, folder_id, nom_jour) or ""
-    marqueur = f"#CDE:{numero}"
-    if any(l.strip() == marqueur for l in contenu_jour.splitlines()):
+    deja_assemblees = _commandes_deja_assemblees(contenu_jour)
+
+    # Ne se fie pas uniquement a --numero : le concurrency group GitHub
+    # Actions de ce workflow (anticipation_assemble, cancel-in-progress:
+    # false) ne conserve qu'un seul run "pending" a la fois. Quand plusieurs
+    # commandes sont dispatchees en rafale (meme minute de cron aut_prep),
+    # un run peut se faire silencieusement annuler/remplacer par le suivant
+    # dans la queue sans jamais s'executer, faisant disparaitre l'integration
+    # de sa commande sans aucune erreur visible (cf. commande 54216286 du
+    # 28/08/2026, dont le run assembleur avait ete ainsi annule). On reprend
+    # donc ici, a chaque run, TOUTES les commandes dont le
+    # bon_anticipation_NUMERO.txt est present sur Drive mais pas encore
+    # integre dans bon_anticipation_JJ_MM.txt — pas seulement celle qui a
+    # declenche ce run — pour que le run suivant (n'importe quelle commande)
+    # rattrape automatiquement celles perdues en route.
+    bons_dossier = {num: file_id for file_id, num in ac._lister_bons_commande(drive_svc, folder_id)}
+    if numero not in bons_dossier and numero not in deja_assemblees:
+        print(f"ERREUR : bon_anticipation_{numero}.txt introuvable dans Drive "
+              f"GITHUB/Anticipation/{dossier_mm_aaaa}/{dossier_jj_mm}/.")
+        sys.exit(1)
+
+    a_integrer = sorted(
+        (num for num in bons_dossier if num not in deja_assemblees),
+        key=ac._cle_tri_commande)
+    if not a_integrer:
         print(f"Commande {numero} deja assemblee dans {nom_jour}, rien a faire.")
         return
 
-    contenu_cde = _telecharger_texte_dossier(drive_svc, folder_id, nom_cde)
-    if not contenu_cde or not contenu_cde.strip():
-        print(f"ERREUR : {nom_cde} introuvable dans Drive GITHUB/Anticipation/"
-              f"{dossier_mm_aaaa}/{dossier_jj_mm}/.")
-        sys.exit(1)
-
     if contenu_jour and not contenu_jour.endswith("\n"):
         contenu_jour += "\n"
-    contenu_jour += f"{marqueur}\n{contenu_cde.rstrip(chr(10))}\n"
+    for num in a_integrer:
+        contenu_cde = ac._telecharger_texte(drive_svc, bons_dossier[num])
+        if not contenu_cde.strip():
+            continue
+        contenu_jour += f"#CDE:{num}\n{contenu_cde.rstrip(chr(10))}\n"
 
     chemin_local_txt = os.path.join(ap.WORK_DIR, nom_jour)
     with open(chemin_local_txt, "w", encoding="utf-8") as f:
@@ -89,7 +119,7 @@ def main():
         ap.deposer_fichier_jour_anticipation(drive_svc, chemin_local_txt, dossier_mm_aaaa, dossier_jj_mm)
     finally:
         os.remove(chemin_local_txt)
-    print(f"  {nom_jour} mis a jour (commande {numero} integree)")
+    print(f"  {nom_jour} mis a jour ({len(a_integrer)} commande(s) integree(s) : {', '.join(a_integrer)})")
 
     produits = ac._parser_lignes_anticipation_jour(contenu_jour)
     par_lettre = {}

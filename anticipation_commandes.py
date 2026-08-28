@@ -139,6 +139,27 @@ def _telecharger_texte(drive_svc, file_id):
     return buf.getvalue().decode("utf-8", errors="replace")
 
 
+_RE_BON_ANTICIPATION_CDE = re.compile(r'^bon_anticipation_(\d+)\.txt$')
+
+
+def _lister_bons_commande(drive_svc, jour_id):
+    """Retourne [(file_id, numero), ...] des bon_anticipation_NUMERO.txt
+    (fichiers individuels par commande, jamais supprimes) presents dans ce
+    dossier jour — distincts de bon_anticipation_JJ_MM.txt (l'assemblage)."""
+    res = drive_svc.files().list(
+        q=(f"'{jour_id}' in parents and trashed=false "
+           f"and name contains 'bon_anticipation_'"),
+        fields="files(id,name)",
+        pageSize=1000,
+    ).execute()
+    resultat = []
+    for f in res.get("files", []):
+        m = _RE_BON_ANTICIPATION_CDE.match(f["name"])
+        if m:
+            resultat.append((f["id"], m.group(1)))
+    return resultat
+
+
 def _telecharger_photo(gencod, cache):
     """Recupere la photo produit (jpg ou png) depuis enbmobile.nl/mobUDrive/visuels/.
 

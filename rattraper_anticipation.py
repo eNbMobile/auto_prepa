@@ -31,7 +31,6 @@ _TZ = ZoneInfo("Europe/Paris")
 
 _RE_JOUR = re.compile(r'^(\d{2})_(\d{2})$')
 _RE_MOIS = re.compile(r'^(\d{2})_(\d{4})$')
-_RE_BON_ANTICIPATION_CDE = re.compile(r'^bon_anticipation_(\d+)\.txt$')
 
 
 def _sous_dossier(drive_svc, parent_id, nom):
@@ -55,24 +54,6 @@ def _lister_sous_dossiers(drive_svc, parent_id):
         pageSize=1000,
     ).execute()
     return [(f["id"], f["name"]) for f in res.get("files", [])]
-
-
-def _lister_bons_commande(drive_svc, jour_id):
-    """Retourne [(file_id, numero), ...] des bon_anticipation_NUMERO.txt
-    (fichiers individuels par commande, jamais supprimes) presents dans ce
-    dossier jour — distincts de bon_anticipation_JJ_MM.txt (l'assemblage)."""
-    res = drive_svc.files().list(
-        q=(f"'{jour_id}' in parents and trashed=false "
-           f"and name contains 'bon_anticipation_'"),
-        fields="files(id,name)",
-        pageSize=1000,
-    ).execute()
-    resultat = []
-    for f in res.get("files", []):
-        m = _RE_BON_ANTICIPATION_CDE.match(f["name"])
-        if m:
-            resultat.append((f["id"], m.group(1)))
-    return resultat
 
 
 def _reconstruire_jour(drive_svc, mois_name, jour_name, bons, ordre_chemin):
@@ -162,7 +143,7 @@ def main():
             if date_dossier < aujourdhui:
                 continue  # jour deja passe, hors perimetre du rattrapage
 
-            bons = _lister_bons_commande(drive_svc, jour_id)
+            bons = ac._lister_bons_commande(drive_svc, jour_id)
             if not bons:
                 continue
 
