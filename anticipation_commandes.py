@@ -144,8 +144,10 @@ _RE_BON_ANTICIPATION_CDE = re.compile(r'^bon_anticipation_(\d+)\.txt$')
 
 def _lister_bons_commande(drive_svc, jour_id):
     """Retourne [(file_id, numero), ...] des bon_anticipation_NUMERO.txt
-    (fichiers individuels par commande, jamais supprimes) presents dans ce
-    dossier jour — distincts de bon_anticipation_JJ_MM.txt (l'assemblage)."""
+    (fichiers individuels par commande, jamais supprimes tant que l'anticipation
+    du jour n'a pas ete envoyee par mail — cf. _reinitialiser_dossier_jour_anticipation)
+    presents dans ce dossier jour — distincts de bon_anticipation_JJ_MM.txt
+    (l'assemblage)."""
     res = drive_svc.files().list(
         q=(f"'{jour_id}' in parents and trashed=false "
            f"and name contains 'bon_anticipation_'"),
@@ -594,6 +596,30 @@ def _supprimer_pdf_jour_anticipation(drive_svc, file_id, nom_pdf):
         print(f"  Suppression {nom_pdf} du dossier du jour echouee : {e}")
 
 
+def _reinitialiser_dossier_jour_anticipation(drive_svc, folder_id, dossier_jj_mm):
+    """Une fois le PDF du jour archive + envoye par mail, vide GITHUB/Anticipation/MM_AAAA/JJ_MM/
+    de bon_anticipation_JJ_MM.txt (l'assemblage accumule au fil des commandes par
+    assembler_anticipation.py) et des bon_anticipation_NUMERO.txt individuels deja
+    integres — sinon une commande anticipable arrivant apres cet envoi ferait
+    regenerer par l'assembleur un nouveau PDF repartant de ce contenu deja
+    envoye (donc avec les memes produits en plus des nouveaux), et un lancement
+    suivant du WF Anticipation les renverrait en double."""
+    nom_jour = f"bon_anticipation_{dossier_jj_mm}.txt"
+    try:
+        res = drive_svc.files().list(
+            q=f"name='{nom_jour}' and '{folder_id}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        for f in res.get("files", []):
+            drive_svc.files().update(fileId=f["id"], body={"trashed": True}).execute()
+        for file_id, numero in _lister_bons_commande(drive_svc, folder_id):
+            drive_svc.files().update(fileId=file_id, body={"trashed": True}).execute()
+        print(f"  {nom_jour} et bon_anticipation_NUMERO.txt du jour reinitialises "
+              f"(evite un doublon au prochain assemblage)")
+    except Exception as e:
+        print(f"  Reinitialisation du dossier du jour echouee : {e}")
+
+
 def main():
     os.makedirs(ap.WORK_DIR, exist_ok=True)
 
@@ -651,6 +677,7 @@ def main():
             email_ok = _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf)
             if email_ok and pdf_file_id:
                 _supprimer_pdf_jour_anticipation(drive_svc, pdf_file_id, nom_pdf)
+                _reinitialiser_dossier_jour_anticipation(drive_svc, folder_id, dossier_jj_mm)
     finally:
         if os.path.exists(chemin_pdf):
             os.remove(chemin_pdf)
