@@ -34,7 +34,7 @@ SEUIL_STOCK_BAS = 2  # stock J <= ce seuil → alerte "stock insuffisant Drive"
 
 CLASSEUR_DELOTAGE   = "DRIVE DELOTAGE"          # comparé normalisé (majuscules, sans accents)
 CLASSEUR_LGV        = "DRIVE LGV"               # idem, pour l'alerte "LGV à commander"
-CLASSEUR_A_ENLEVER  = "** PRODUITS A ENLEVER **"  # idem, exclu des stocks insuffisants
+CLASSEUR_A_ENLEVER  = "** DRIVE PRODUIT A ENLEVER **"  # idem, exclu des stocks insuffisants
 
 
 def _normaliser_classeur(texte):
