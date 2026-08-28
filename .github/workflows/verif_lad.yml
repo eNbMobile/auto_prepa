@@ -1,8 +1,6 @@
 name: Vérif LAD
 
 on:
-  schedule:
-    - cron: '0 19 * * *'   # 21h00 Paris (heure d'été CEST = UTC+2)
   workflow_dispatch:
 
 concurrency:
