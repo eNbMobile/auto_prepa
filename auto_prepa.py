@@ -338,6 +338,7 @@ def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites):
                 print(f"  Modification : cde {num_ancien} => remplacee par {num_nouveau}")
                 now = datetime.now(_TZ)
                 seuil = 5 if now.weekday() == 5 else (None if now.weekday() == 6 else 6)
+                original_concerne = False
                 if seuil is not None and now.hour >= seuil:
                     dt_orig = _get_heure_email_original(gmail_svc, num_ancien)
                     if dt_orig:
@@ -350,7 +351,13 @@ def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites):
                             contenu_antici = _telecharger_anticipation_drive(drive_svc, num_ancien)
                             if contenu_antici:
                                 _envoyer_email_anticipation(gmail_svc, num_ancien, contenu_antici)
-                _alerter_si_commande_anticipee_annulee(drive_svc, gmail_svc, num_ancien, num_nouveau)
+                # Alerte "commande anticipée et annulée" : seulement si la commande
+                # initiale remplit elle-meme les criteres de l'anticipation (arrivee
+                # avant le seuil du jour, ou la veille) — sinon elle n'a jamais pu
+                # etre reellement anticipee, meme si son numero traine encore dans
+                # commandes_anticipées_JJ_MM.txt.
+                if original_concerne:
+                    _alerter_si_commande_anticipee_annulee(drive_svc, gmail_svc, num_ancien, num_nouveau)
                 _traiter_annulation_livraison(drive_svc, sheets_svc, num_ancien)
                 _supprimer_bons_drive(drive_svc, num_ancien)
                 _supprimer_anticipation_archive_drive(drive_svc, num_ancien)
