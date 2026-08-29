@@ -406,23 +406,31 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
                              else f"{_prix_ligne_poids(q, g['poids'], g['prix_kg'])} €"
                              for _, q, _ in g['lignes']]
                 prix_txt = "<br/>".join(prix_txts)
-                qte_cell = Paragraph("<br/>".join(q for _, q, _ in g['lignes']), small)
+                qte_txt = "<br/>".join(q for _, q, _ in g['lignes'])
                 if g['poids'] and g['prix_kg']:
-                    # Prix/kg affiche sur une ligne centree sous le Poids ET
-                    # le Prix (colonnes fusionnees), comme annote a la main
-                    # sur le bon d'origine.
+                    # Poids, Prix et Qte dans une meme table imbriquee (et non
+                    # Qte a part dans la colonne du tableau principal) : sinon
+                    # le VALIGN MIDDLE du tableau principal centre chaque bloc
+                    # independamment sur sa propre hauteur, et comme ce bloc
+                    # est plus haut que la colonne Qte (ligne supplementaire
+                    # pour le prix/kg), les lignes Qte se decalent des lignes
+                    # Poids/Prix des qu'elles ne sont plus toutes de la meme
+                    # hauteur (libelle sur plusieurs lignes notamment).
+                    # Prix/kg affiche sur une ligne centree sous Poids/Prix/Qte
+                    # (colonnes fusionnees), comme annote a la main sur le bon
+                    # d'origine.
                     poids_prix = Table(
-                        [[Paragraph(poids_txt, small_c), Paragraph(prix_txt, small_c)],
-                         [Paragraph(f"{g['prix_kg']} €/Kg", small_c)]],
-                        colWidths=[col_widths[5], col_widths[6]],
+                        [[Paragraph(poids_txt, small_c), Paragraph(prix_txt, small_c), Paragraph(qte_txt, small_c)],
+                         [Paragraph(f"{g['prix_kg']} €/Kg", small_c), '', '']],
+                        colWidths=[col_widths[5], col_widths[6], col_widths[7]],
                         style=TableStyle([
-                            ('SPAN',          (0, 1), (1, 1)),
+                            ('SPAN',          (0, 1), (2, 1)),
                             ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
                             ('TOPPADDING',    (0, 0), (-1, -1), 0),
                             ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
                             ('LEFTPADDING',   (0, 0), (-1, -1), 0),
                             ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
-                            # Ecarte legerement Poids/Prix (remontes) du
+                            # Ecarte legerement Poids/Prix/Qte (remontes) du
                             # prix/kg (descendu), sans agrandir la ligne : le
                             # leading de small_c a ete resserre d'autant.
                             ('BOTTOMPADDING', (0, 0), (-1, 0), 2),
@@ -431,10 +439,12 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
                     )
                     row.append(poids_prix)
                     row.append('')
+                    qte_cell = ''
                     span_rows.append(len(data))
                 else:
                     row.append(Paragraph(poids_txt, small))
                     row.append(Paragraph(prix_txt, small))
+                    qte_cell = Paragraph(qte_txt, small)
             else:
                 # Rayon sans colonne Poids : quantite totale a collecter,
                 # sans le detail par commande.
@@ -458,10 +468,10 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
             ('TOPPADDING',     (0, 0), (-1, -1), 6),
             ('BOTTOMPADDING',  (0, 0), (-1, -1), 6),
         ])
-        # Prix/kg (Boucherie) : cellule Poids+Prix fusionnee sur la ligne ou
-        # elle est affichee (cf. poids_prix ci-dessus).
+        # Prix/kg (Boucherie) : cellule Poids+Prix+Qte fusionnee sur la ligne
+        # ou elle est affichee (cf. poids_prix ci-dessus).
         for idx in span_rows:
-            style.add('SPAN', (5, idx), (6, idx))
+            style.add('SPAN', (5, idx), (7, idx))
 
         table = Table(data, colWidths=col_widths, repeatRows=1)
         table.setStyle(style)
