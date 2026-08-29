@@ -67,14 +67,6 @@ jobs:
           python3 bootstrap.py download_stocks.py --jours $JOURS $DATE_ARG
           python3 controle_stocks.py j1.xlsx j.xlsx --jours $JOURS $DATE_ARG --upload
 
-      - name: Publier le CSV résultat en artefact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: controle-stocks-${{ github.run_id }}
-          path: "controle_stocks_*.csv"
-          if-no-files-found: warn
-
       - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}

@@ -705,36 +705,6 @@ def upload_to_archive(local_path, subfolder, filename=None, root_id=None):
         return False
 
 
-def upload_drive(local_path):
-    if not DRIVE_CONTROLE_FOLDER_ID:
-        print("  DRIVE_CONTROLE_FOLDER_ID non configuré — upload ignoré.")
-        return False
-    try:
-        from googleapiclient.http import MediaFileUpload
-        svc = _get_drive_service()
-        if not svc:
-            return False
-        filename = os.path.basename(local_path)
-        res = svc.files().list(
-            q=f"name='{filename}' and '{DRIVE_CONTROLE_FOLDER_ID}' in parents and trashed=false",
-            fields="files(id)",
-        ).execute()
-        existing = res.get("files", [])
-        media = MediaFileUpload(local_path, mimetype="text/plain", resumable=False)
-        if existing:
-            svc.files().update(fileId=existing[0]["id"], media_body=media).execute()
-        else:
-            svc.files().create(
-                body={"name": filename, "parents": [DRIVE_CONTROLE_FOLDER_ID]},
-                media_body=media, fields="id",
-            ).execute()
-        print(f"  {filename} → Drive OK")
-        return True
-    except Exception as e:
-        print(f"  Upload Drive échoué : {e}")
-        return False
-
-
 # ─────────────────────────────────────────────────────────────────
 # PDF des écarts + envoi email
 # ─────────────────────────────────────────────────────────────────
@@ -1195,29 +1165,7 @@ def main():
     compares.sort(key=lambda r: abs(r[5]), reverse=True)
     orphelins.sort(key=lambda r: r[0])
 
-    # 4. Écriture CSV
-    nom_sortie = f"controle_stocks_{date_j1.strftime('%Y%m%d')}.csv"
-    ENTETE = ["gencod", "libelle", "stock_j1", "ventes", "stock_theo", "stock_j", "ecart", "statut"]
-
-    def fmt(v):
-        return f"{int(v)}" if v == int(v) else f"{v:.3f}"
-
-    def row_csv(r):
-        return [r[0], r[7], fmt(r[1]), fmt(r[2]), fmt(r[3]), fmt(r[4]), fmt(r[5]), r[6]]
-
-    with open(nom_sortie, 'w', newline='', encoding='utf-8-sig') as f:
-        w = csv.writer(f, delimiter=';')
-        w.writerow(ENTETE)
-        for r in compares:
-            w.writerow(row_csv(r))
-        if orphelins:
-            w.writerow([])
-            w.writerow(["# GENCODS ORPHELINS (absents de J-1 ou J)"])
-            w.writerow(ENTETE)
-            for r in orphelins:
-                w.writerow(row_csv(r))
-
-    # 5. Résumé
+    # 4. Résumé
     nb_ok     = sum(1 for r in compares if r[6] == "OK")
     nb_ecart  = sum(1 for r in compares if r[6] == "ECART")
     manquant  = sum(r[5] for r in compares if r[5] < 0)
@@ -1244,12 +1192,6 @@ def main():
                 break
             sens = "surplus" if r[5] > 0 else "manquant"
             print(f"    {r[0]}  théo={r[3]:.0f}  réel={r[4]:.0f}  écart={r[5]:+.0f}  ({sens})")
-
-    print(f"\n→ {nom_sortie} généré.")
-
-    print("\nUpload Drive …")
-    upload_drive(nom_sortie)
-    upload_to_archive(nom_sortie, "écarts", root_id=DRIVE_CONFIG_FOLDER_ID)
 
     nom_pdf_ecarts = None
     if nb_ecart > 0:
