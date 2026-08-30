@@ -2,10 +2,15 @@ name: Livraison Drive - En attente
 
 on:
   schedule:
-    - cron: '3 12 * * *'   # 14h03 Paris (CEST = UTC+2) - decale de l'heure ronde pour
-                            # limiter le risque de declenchement 'schedule' saute par
-                            # GitHub Actions en cas de forte charge (cf. garde-fou dans
-                            # auto_prepa.py : promotion_en_attente_necessaire)
+    - cron: '3 12 * * 1-6'  # 14h03 Paris (CEST = UTC+2) du lundi au samedi - decale de
+                            # l'heure ronde pour limiter le risque de declenchement
+                            # 'schedule' saute par GitHub Actions en cas de forte charge
+                            # (cf. garde-fou dans auto_prepa.py :
+                            # promotion_en_attente_necessaire). Pas de run le dimanche :
+                            # les commandes EN ATTENTE visant le lundi sont deja
+                            # remontees par le run du samedi 14h (_lendemain_ouvre(samedi)
+                            # = lundi), donc rien n'est jamais en attente pour le
+                            # dimanche.
   workflow_dispatch:
 
 concurrency:
@@ -37,6 +42,7 @@ jobs:
         run: python3 bootstrap.py livraison_drive.py
 
       - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
