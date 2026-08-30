@@ -204,13 +204,53 @@ jobs:
 
       - name: Exécuter auto_prepa
         if: steps.check_pdfs.outputs.has_new == 'true'
+        id: run_auto_prepa
         env:
           GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
           DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
           GH_PAT:                 ${{ secrets.GH_PAT }}
           GITHUB_TOKEN:           ${{ github.token }}
           WORK_DIR: "v 4.0.0"
-        run: python3 bootstrap.py auto_prepa.py
+        run: |
+          set +e
+          python3 bootstrap.py auto_prepa.py
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      # Un run planté isolément n'a rien d'alarmant (aléa réseau, API externe,
+      # etc.) : le job ci-dessus ne fait donc jamais échouer le step lui-même
+      # (sinon GitHub enverrait un mail "run failed" à chaque fois, plusieurs
+      # fois par heure). On ne fait échouer le job — et donc partir le mail
+      # natif GitHub — qu'à partir de 5 échecs consécutifs, en gardant le
+      # compteur dans une variable Actions du dépôt.
+      - name: Alerter après 5 échecs consécutifs
+        if: steps.check_pdfs.outputs.has_new == 'true'
+        env:
+          GH_TOKEN:  ${{ secrets.GH_PAT }}
+          EXIT_CODE: ${{ steps.run_auto_prepa.outputs.exit_code }}
+        run: |
+          SEUIL=5
+          VAR_NAME="AUT_PREP_FAIL_STREAK"
+          courant=$(gh variable get "$VAR_NAME" --repo "${{ github.repository }}" 2>/dev/null || echo 0)
+          [[ "$courant" =~ ^[0-9]+$ ]] || courant=0
+
+          if [ "$EXIT_CODE" = "0" ]; then
+            if [ "$courant" != "0" ]; then
+              gh variable set "$VAR_NAME" --repo "${{ github.repository }}" --body "0"
+            fi
+            exit 0
+          fi
+
+          streak=$((courant + 1))
+          echo "auto_prepa en échec (streak=$streak/$SEUIL)"
+
+          if [ "$streak" -ge "$SEUIL" ]; then
+            gh variable set "$VAR_NAME" --repo "${{ github.repository }}" --body "0"
+            echo "::error::$SEUIL échecs consécutifs de auto_prepa — alerte."
+            exit 1
+          fi
+
+          gh variable set "$VAR_NAME" --repo "${{ github.repository }}" --body "$streak"
+          exit 0
 
       - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
         if: steps.check_pdfs.outputs.has_new == 'true'
