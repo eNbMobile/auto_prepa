@@ -49,6 +49,7 @@ jobs:
           python3 bootstrap.py cumul_ventes_semaine.py $DATE_ARG
 
       - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
