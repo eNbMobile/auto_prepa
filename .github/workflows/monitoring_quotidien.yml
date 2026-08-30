@@ -124,14 +124,20 @@ jobs:
           # concurrency (un run bloqué qui fait s'annuler tous ceux déclenchés
           # derrière lui par le scheduler externe) — invisible si on ne regarde
           # que les "failure".
+          #
+          # Un échec isolé n'est pas alarmant en soi (retry externe, aléa
+          # ponctuel) : on ne remonte une alerte (issue + mail) que si le
+          # nombre d'échecs cumulés sur 24h atteint le seuil ci-dessous. Les
+          # anomalies structurelles (aucun run, gap scheduler, cascade
+          # d'annulations) restent, elles, immédiates.
+          SEUIL_ECHECS = 5
           aut_annules_alarme = len(aut_annules) > 5
+          total_echecs = len(aut_echecs) + len(ean_echecs) + len(fix_echecs)
           probleme = (
-              len(aut_echecs) > 0
+              total_echecs >= SEUIL_ECHECS
               or len(aut_runs) == 0
               or len(aut_gaps_alarme) > 0
               or aut_annules_alarme
-              or len(ean_echecs) > 0
-              or len(fix_echecs) > 0
           )
 
           # ─── Rapport ─────────────────────────────────────────────────────
@@ -188,9 +194,13 @@ jobs:
                   lines.append(f"- [Run #{r['run_number']}]({r['html_url']}) à {h}")
 
           if not probleme:
+              note_echecs = (
+                  f" ({total_echecs} échec(s) isolé(s), sous le seuil de {SEUIL_ECHECS})"
+                  if total_echecs > 0 else ""
+              )
               lines += [
                   "",
-                  f"> ✅ Tout fonctionne : {len(aut_succes)} runs aut_prep réussis, "
+                  f"> ✅ Tout fonctionne{note_echecs} : {len(aut_succes)} runs aut_prep réussis, "
                   f"collecte_ean {len(ean_succes)}/{len(ean_runs)}, fix_anomalies {len(fix_succes)}/{len(fix_runs)}.",
               ]
 
