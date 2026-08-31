@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 Enregistrement des commandes en LIVRAISON dans le classeur Google Sheets
-"LIVRAISON DRIVE 2026" : un onglet par mois (Préparateur, Date, Nom Prénom,
-...) plus un onglet "EN ATTENTE" pour les commandes trop en avance pour
-être renseignées tout de suite.
+"LIVRAISON DRIVE 2026" : un onglet par mois (N° cde, Date, Nom, Prénom,
+Distance, Frais — Frais est une formule du classeur, jamais écrite par ce
+script) plus un onglet "EN ATTENTE" (Nom, Prénom, Jour, N° commande, km)
+pour les commandes trop en avance pour être renseignées tout de suite.
 
 Règle (demande utilisateur) :
 - commande du jour même                    -> renseignée directement (onglet
@@ -51,7 +52,6 @@ MOIS_FR = ["JANVIER", "FEVRIER", "MARS", "AVRIL", "MAI", "JUIN", "JUILLET",
            "AOUT", "SEPTEMBRE", "OCTOBRE", "NOVEMBRE", "DECEMBRE"]
 
 ONGLET_EN_ATTENTE = "EN ATTENTE"
-PREPARATEUR = "ER"
 
 # Vert #00FF00 (meme couleur que le nom/prenom des livraisons deja
 # confirmees en debut de fichier) : applique par marquer_livree() quand le
@@ -168,9 +168,9 @@ def _creer_onglet_en_attente(sheets_svc, spreadsheet_id):
         body={"requests": [{"addSheet": {"properties": {"title": ONGLET_EN_ATTENTE}}}]},
     ).execute()
     sheets_svc.spreadsheets().values().update(
-        spreadsheetId=spreadsheet_id, range=f"'{ONGLET_EN_ATTENTE}'!A1:D1",
+        spreadsheetId=spreadsheet_id, range=f"'{ONGLET_EN_ATTENTE}'!A1:E1",
         valueInputOption="USER_ENTERED",
-        body={"values": [["Nom Prénom", "Jour", "N° commande", "km"]]},
+        body={"values": [["Nom", "Prénom", "Jour", "N° commande", "km"]]},
     ).execute()
     print(f"    Onglet '{ONGLET_EN_ATTENTE}' créé dans LIVRAISON DRIVE 2026.")
     return ONGLET_EN_ATTENTE
@@ -190,11 +190,13 @@ def _premiere_ligne_libre(sheets_svc, spreadsheet_id, titre_onglet, colonne):
     return 2 + _MAX_LIGNES
 
 
-def _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom_complet, km=None):
-    """Renseigne (Préparateur, Date, Nom Prénom, km) sur la premiere ligne
+def _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom, prenom, numero_commande=None, km=None):
+    """Renseigne (N° cde, Date, Nom, Prénom, Distance) sur la premiere ligne
     libre de l'onglet du mois de `cible` (colonne C = nom, sert de reference
     pour trouver la ligne libre). `km` (distance magasin -> client, recuperee
-    sur Shopopop) est laisse vide si absent/introuvable, a completer a la main."""
+    sur Shopopop) est laisse vide si absent/introuvable, a completer a la
+    main. La colonne Frais n'est jamais ecrite ici : c'est une formule du
+    classeur."""
     mois = MOIS_FR[cible.month - 1]
     onglet = _trouver_onglet(sheets_svc, spreadsheet_id, mois)
     if not onglet:
@@ -202,19 +204,19 @@ def _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom_complet, km=None):
         return False
     ligne = _premiere_ligne_libre(sheets_svc, spreadsheet_id, onglet, "C")
     sheets_svc.spreadsheets().values().update(
-        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A{ligne}:D{ligne}",
+        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A{ligne}:E{ligne}",
         valueInputOption="USER_ENTERED",
-        body={"values": [[PREPARATEUR, cible.strftime("%d/%m"), nom_complet,
+        body={"values": [[numero_commande or "", cible.strftime("%d/%m"), nom, prenom,
                            km if km is not None else ""]]},
     ).execute()
-    print(f"    LIVRAISON DRIVE 2026 / {onglet} L{ligne} : {PREPARATEUR} | "
-          f"{cible.strftime('%d/%m')} | {nom_complet}"
+    print(f"    LIVRAISON DRIVE 2026 / {onglet} L{ligne} : {numero_commande or ''} | "
+          f"{cible.strftime('%d/%m')} | {nom} {prenom}"
           + (f" | {km} km" if km is not None else " | km non trouve"))
     return True
 
 
-def _inscrire_en_attente(sheets_svc, spreadsheet_id, cible, nom_complet, numero_commande=None, km=None):
-    """Ajoute une ligne (Nom Prénom, Jour, N° commande, km) dans EN ATTENTE. Le
+def _inscrire_en_attente(sheets_svc, spreadsheet_id, cible, nom, prenom, numero_commande=None, km=None):
+    """Ajoute une ligne (Nom, Prénom, Jour, N° commande, km) dans EN ATTENTE. Le
     n° de commande sert d'identifiant fiable pour l'annulation, le nom seul
     ne suffisant pas quand deux commandes partagent le même nom et jour. `km`
     est recupere sur Shopopop des le traitement de la commande (meme si la
@@ -225,13 +227,13 @@ def _inscrire_en_attente(sheets_svc, spreadsheet_id, cible, nom_complet, numero_
         onglet = _creer_onglet_en_attente(sheets_svc, spreadsheet_id)
     ligne = _premiere_ligne_libre(sheets_svc, spreadsheet_id, onglet, "A")
     sheets_svc.spreadsheets().values().update(
-        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A{ligne}:D{ligne}",
+        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A{ligne}:E{ligne}",
         valueInputOption="USER_ENTERED",
-        body={"values": [[nom_complet, cible.strftime("%d/%m"), numero_commande or "",
+        body={"values": [[nom, prenom, cible.strftime("%d/%m"), numero_commande or "",
                            km if km is not None else ""]]},
     ).execute()
     print(f"    LIVRAISON DRIVE 2026 / {ONGLET_EN_ATTENTE} L{ligne} : "
-          f"{nom_complet} | {cible.strftime('%d/%m')} | {numero_commande or ''}"
+          f"{nom} {prenom} | {cible.strftime('%d/%m')} | {numero_commande or ''}"
           + (f" | {km} km" if km is not None else " | km non trouve"))
 
 
@@ -246,8 +248,8 @@ def _sheet_id(sheets_svc, spreadsheet_id, titre_onglet):
 
 def marquer_livree(sheets_svc, spreadsheet_id, aujourdhui, ligne):
     """Met en vert le FOND (backgroundColor _VERT_LIVREE, comme le nom/prenom
-    des livraisons deja confirmees en debut de fichier) de la seule cellule
-    Nom Prenom (colonne C) de la ligne `ligne` de l'onglet du mois de
+    des livraisons deja confirmees en debut de fichier) des cellules Nom et
+    Prenom (colonnes C:D) de la ligne `ligne` de l'onglet du mois de
     `aujourdhui`, pour signaler qu'une livraison a ete confirmee cote
     Shopopop (workflow "Verif LAD"). Retourne True si applique, False si
     l'onglet est introuvable."""
@@ -266,7 +268,7 @@ def marquer_livree(sheets_svc, spreadsheet_id, aujourdhui, ligne):
                 "range": {
                     "sheetId": sheet_id,
                     "startRowIndex": ligne - 1, "endRowIndex": ligne,
-                    "startColumnIndex": 2, "endColumnIndex": 3,
+                    "startColumnIndex": 2, "endColumnIndex": 4,
                 },
                 "cell": {"userEnteredFormat": {"backgroundColor": _VERT_LIVREE}},
                 "fields": "userEnteredFormat.backgroundColor",
@@ -294,10 +296,13 @@ def _supprimer_ligne(sheets_svc, spreadsheet_id, titre_onglet, ligne):
 
 
 def _chercher_et_supprimer(sheets_svc, spreadsheet_id, titre_onglet,
-                            idx_nom, idx_date, nb_colonnes, nom_complet_cible, jour_str):
+                            idx_nom, idx_date, nb_colonnes, nom_complet_cible, jour_str,
+                            idx_prenom=None):
     """Cherche, dans les nb_colonnes premieres colonnes de `titre_onglet`, une
-    ligne dont la colonne idx_nom = nom_complet_cible (compare via _normaliser)
-    et la colonne idx_date = jour_str (JJ/MM) ; si trouvee, supprime la ligne.
+    ligne dont le nom (colonne idx_nom, complete de idx_prenom si fourni, les
+    deux colonnes etant alors combinees avant comparaison) = nom_complet_cible
+    (compare via _normaliser) et la colonne idx_date = jour_str (JJ/MM) ; si
+    trouvee, supprime la ligne.
     Retourne True si une ligne a ete trouvee et supprimee."""
     derniere_colonne = chr(ord('A') + nb_colonnes - 1)
     res = sheets_svc.spreadsheets().values().get(
@@ -306,6 +311,9 @@ def _chercher_et_supprimer(sheets_svc, spreadsheet_id, titre_onglet,
     lignes = res.get("values", [])
     for i, row in enumerate(lignes):
         nom_val = row[idx_nom].strip() if idx_nom < len(row) and row[idx_nom] else ""
+        if idx_prenom is not None:
+            prenom_val = row[idx_prenom].strip() if idx_prenom < len(row) and row[idx_prenom] else ""
+            nom_val = f"{nom_val} {prenom_val}".strip()
         date_val = row[idx_date].strip() if idx_date < len(row) and row[idx_date] else ""
         if not nom_val or not date_val:
             continue
@@ -377,7 +385,7 @@ def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
         onglet_mois = _trouver_onglet(sheets_svc, spreadsheet_id, mois)
         if onglet_mois and _chercher_et_supprimer(
                 sheets_svc, spreadsheet_id, onglet_mois,
-                idx_nom=2, idx_date=1, nb_colonnes=4,
+                idx_nom=2, idx_prenom=3, idx_date=1, nb_colonnes=5,
                 nom_complet_cible=nom_complet_cible, jour_str=jour_str):
             return
 
@@ -386,11 +394,11 @@ def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
             numero_str = str(numero_commande).strip() if numero_commande else ""
             if numero_str and _chercher_et_supprimer_numero(
                     sheets_svc, spreadsheet_id, onglet_attente,
-                    idx_numero=2, nb_colonnes=4, numero_cible=numero_str):
+                    idx_numero=3, nb_colonnes=5, numero_cible=numero_str):
                 return
             if _chercher_et_supprimer(
                     sheets_svc, spreadsheet_id, onglet_attente,
-                    idx_nom=0, idx_date=1, nb_colonnes=4,
+                    idx_nom=0, idx_prenom=1, idx_date=2, nb_colonnes=5,
                     nom_complet_cible=nom_complet_cible, jour_str=jour_str):
                 return
 
@@ -406,8 +414,9 @@ def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
     """A appeler pour chaque commande en LIVRAISON (detectee via ',Livraison,'
     sur la 2e ligne de bon_prepa.txt). `date_cde_str` est au format
     JJ/MM/AAAA (extrait du PDF par extraire_client_creneau_pdf). `numero_commande`
-    est reporte dans EN ATTENTE (colonne N° commande) s'il y a lieu, pour
-    identifier la ligne sans ambiguite en cas d'annulation. `shopopop_token`/
+    est reporte dans la colonne N° cde/N° commande (onglet du mois ou EN
+    ATTENTE selon le cas), pour identifier la ligne sans ambiguite en cas
+    d'annulation. `shopopop_token`/
     `shopopop_drive_id` (obtenus via connecter_shopopop) servent a recuperer
     la distance (colonne km), y compris quand la commande part en EN ATTENTE
     (la livraison est deja visible sur Shopopop des la commande, meme si sa
@@ -445,11 +454,14 @@ def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
                           f"tentative (sera retente lors des prochaines executions).")
         else:
             print(f"    Pas de token Shopopop, km non recherche pour {nom_complet}.")
+        nom_maj, prenom_maj = nom.strip().upper(), prenom.strip().upper()
         if date_cde == aujourdhui or (
                 date_cde == _lendemain_ouvre(aujourdhui) and maintenant.hour >= 14):
-            _inscrire_commande(sheets_svc, spreadsheet_id, date_cde, nom_complet, km)
+            _inscrire_commande(sheets_svc, spreadsheet_id, date_cde, nom_maj, prenom_maj,
+                                numero_commande, km)
         else:
-            _inscrire_en_attente(sheets_svc, spreadsheet_id, date_cde, nom_complet, numero_commande, km)
+            _inscrire_en_attente(sheets_svc, spreadsheet_id, date_cde, nom_maj, prenom_maj,
+                                  numero_commande, km)
         return km is None
     except Exception as e:
         print(f"    Ecriture LIVRAISON DRIVE 2026 echouee ({nom_complet}) : {e}")
@@ -477,33 +489,35 @@ def _lister_km_manquants(sheets_svc, spreadsheet_id, maintenant=None):
             continue
         res = sheets_svc.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
-            range=f"'{onglet}'!A2:D{1 + _MAX_LIGNES}").execute()
+            range=f"'{onglet}'!A2:E{1 + _MAX_LIGNES}").execute()
         for i, row in enumerate(res.get("values", [])):
             date_val = row[1].strip() if len(row) > 1 and row[1] else ""
-            nom_complet = row[2].strip() if len(row) > 2 and row[2] else ""
-            km_val = row[3].strip() if len(row) > 3 and row[3] else ""
-            if not date_val or not nom_complet or km_val:
+            nom = row[2].strip() if len(row) > 2 and row[2] else ""
+            prenom = row[3].strip() if len(row) > 3 and row[3] else ""
+            km_val = row[4].strip() if len(row) > 4 and row[4] else ""
+            if not date_val or not nom or km_val:
                 continue
             cible = _parser_jour(date_val, aujourdhui)
             if cible is None or cible < limite:
                 continue
-            a_retenter.append((onglet, 2 + i, nom_complet, cible))
+            a_retenter.append((onglet, 2 + i, f"{nom} {prenom}".strip(), cible))
 
     onglet_attente = _trouver_onglet(sheets_svc, spreadsheet_id, ONGLET_EN_ATTENTE)
     if onglet_attente:
         res = sheets_svc.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
-            range=f"'{onglet_attente}'!A2:D{1 + _MAX_LIGNES}").execute()
+            range=f"'{onglet_attente}'!A2:E{1 + _MAX_LIGNES}").execute()
         for i, row in enumerate(res.get("values", [])):
-            nom_complet = row[0].strip() if len(row) > 0 and row[0] else ""
-            jour = row[1].strip() if len(row) > 1 and row[1] else ""
-            km_val = row[3].strip() if len(row) > 3 and row[3] else ""
-            if not nom_complet or not jour or km_val:
+            nom = row[0].strip() if len(row) > 0 and row[0] else ""
+            prenom = row[1].strip() if len(row) > 1 and row[1] else ""
+            jour = row[2].strip() if len(row) > 2 and row[2] else ""
+            km_val = row[4].strip() if len(row) > 4 and row[4] else ""
+            if not nom or not jour or km_val:
                 continue
             cible = _parser_jour(jour, aujourdhui)
             if cible is None or cible < limite:
                 continue
-            a_retenter.append((onglet_attente, 2 + i, nom_complet, cible))
+            a_retenter.append((onglet_attente, 2 + i, f"{nom} {prenom}".strip(), cible))
 
     return a_retenter
 
@@ -525,7 +539,7 @@ def retenter_km_manquants(sheets_svc, spreadsheet_id, shopopop_token, shopopop_d
     traiter_commande_livraison). Appelee a chaque execution du workflow
     (auto_prepa.py), elle complete ainsi progressivement les km manques d'une
     execution a l'autre, jusqu'a _FENETRE_RETENTATIVE_JOURS jours apres la
-    date de livraison. Met a jour la cellule km (colonne D) des que trouve.
+    date de livraison. Met a jour la cellule km (colonne E) des que trouve.
     Retourne le nombre de km recuperes."""
     if not shopopop_token:
         return 0
@@ -540,7 +554,7 @@ def retenter_km_manquants(sheets_svc, spreadsheet_id, shopopop_token, shopopop_d
         if km is None:
             continue
         sheets_svc.spreadsheets().values().update(
-            spreadsheetId=spreadsheet_id, range=f"'{onglet}'!D{ligne}",
+            spreadsheetId=spreadsheet_id, range=f"'{onglet}'!E{ligne}",
             valueInputOption="USER_ENTERED", body={"values": [[km]]}).execute()
         print(f"    LIVRAISON DRIVE 2026 / {onglet} L{ligne} : km recupere en retentative "
               f"pour {nom_complet} -> {km} km.")
@@ -551,8 +565,9 @@ def retenter_km_manquants(sheets_svc, spreadsheet_id, shopopop_token, shopopop_d
 def lire_commandes_jour(sheets_svc, spreadsheet_id, aujourdhui):
     """Retourne [(ligne, nom_complet, km), ...] des commandes en LIVRAISON
     inscrites pour `aujourdhui` dans l'onglet du mois de `aujourdhui` de
-    LIVRAISON DRIVE 2026 (colonne B = Date au format JJ/MM, colonne C = Nom
-    Prénom, colonne D = km). `ligne` (numero de ligne dans l'onglet) sert a
+    LIVRAISON DRIVE 2026 (colonne B = Date au format JJ/MM, colonne C = Nom,
+    colonne D = Prénom, colonne E = km ; nom_complet = "Nom Prénom", pour la
+    recherche cote Shopopop). `ligne` (numero de ligne dans l'onglet) sert a
     cibler la cellule a colorer via marquer_livree(). Utilisé par le
     workflow "Vérif LAD" pour vérifier chaque soir que ces commandes ont
     bien été livrées côté Shopopop."""
@@ -564,14 +579,15 @@ def lire_commandes_jour(sheets_svc, spreadsheet_id, aujourdhui):
     jour_str = aujourdhui.strftime("%d/%m")
     res = sheets_svc.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id,
-        range=f"'{onglet}'!A2:D{1 + _MAX_LIGNES}").execute()
+        range=f"'{onglet}'!A2:E{1 + _MAX_LIGNES}").execute()
     commandes = []
     for i, row in enumerate(res.get("values", [])):
         date_val = row[1].strip() if len(row) > 1 and row[1] else ""
-        nom_complet = row[2].strip() if len(row) > 2 and row[2] else ""
-        km = row[3].strip() if len(row) > 3 and row[3] else ""
-        if date_val == jour_str and nom_complet:
-            commandes.append((2 + i, nom_complet, km))
+        nom = row[2].strip() if len(row) > 2 and row[2] else ""
+        prenom = row[3].strip() if len(row) > 3 and row[3] else ""
+        km = row[4].strip() if len(row) > 4 and row[4] else ""
+        if date_val == jour_str and nom:
+            commandes.append((2 + i, f"{nom} {prenom}".strip(), km))
     return commandes
 
 
@@ -627,7 +643,7 @@ def traiter_en_attente(sheets_svc, spreadsheet_id, maintenant=None):
     EN ATTENTE. Appelee par le workflow declenche a 14h, et en garde-fou par
     auto_prepa.py (cf. promotion_en_attente_necessaire) si ce declenchement a
     ete manque. Le km, deja recupere sur Shopopop au moment ou la commande a
-    ete mise en EN ATTENTE (colonne D), est simplement reporte tel quel — pas
+    ete mise en EN ATTENTE (colonne E), est simplement reporte tel quel — pas
     de nouvel appel Shopopop ici."""
     onglet = _trouver_onglet(sheets_svc, spreadsheet_id, ONGLET_EN_ATTENTE)
     if not onglet:
@@ -639,31 +655,33 @@ def traiter_en_attente(sheets_svc, spreadsheet_id, maintenant=None):
     lendemain = _lendemain_ouvre(aujourdhui)
 
     res = sheets_svc.spreadsheets().values().get(
-        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A2:D{1 + _MAX_LIGNES}").execute()
+        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A2:E{1 + _MAX_LIGNES}").execute()
     lignes = res.get("values", [])
 
     a_traiter, a_garder = [], []
     for row in lignes:
-        nom_complet = row[0].strip() if len(row) > 0 and row[0] else ""
-        jour = row[1].strip() if len(row) > 1 and row[1] else ""
-        numero_commande = row[2].strip() if len(row) > 2 and row[2] else ""
-        km = row[3].strip() if len(row) > 3 and row[3] else ""
-        if not nom_complet and not jour:
+        nom = row[0].strip() if len(row) > 0 and row[0] else ""
+        prenom = row[1].strip() if len(row) > 1 and row[1] else ""
+        jour = row[2].strip() if len(row) > 2 and row[2] else ""
+        numero_commande = row[3].strip() if len(row) > 3 and row[3] else ""
+        km = row[4].strip() if len(row) > 4 and row[4] else ""
+        if not nom and not jour:
             continue
         cible = _parser_jour(jour, aujourdhui) if jour else None
         if cible == lendemain:
-            a_traiter.append((cible, nom_complet, km))
+            a_traiter.append((cible, nom, prenom, numero_commande, km))
         else:
-            a_garder.append((nom_complet, jour, numero_commande, km))
+            a_garder.append((nom, prenom, jour, numero_commande, km))
 
     print(f"  EN ATTENTE : {len(a_traiter)} commande(s) pour le {lendemain.strftime('%d/%m')}, "
           f"{len(a_garder)} conservee(s).")
 
-    for cible, nom_complet, km in a_traiter:
-        _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom_complet, km or None)
+    for cible, nom, prenom, numero_commande, km in a_traiter:
+        _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom, prenom,
+                            numero_commande or None, km or None)
 
     sheets_svc.spreadsheets().values().clear(
-        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A2:D{1 + _MAX_LIGNES}", body={}).execute()
+        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A2:E{1 + _MAX_LIGNES}", body={}).execute()
     if a_garder:
         sheets_svc.spreadsheets().values().update(
             spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A2",
