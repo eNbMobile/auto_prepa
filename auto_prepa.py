@@ -285,26 +285,36 @@ def _traiter_annulation_livraison(drive_svc, sheets_svc, numero):
     """Si la commande annulee ou remplacee etait une LIVRAISON, supprime sa
     ligne dans LIVRAISON DRIVE 2026. Nom/prenom/date sont extraits de
     l'archive BDC Drive, seule source encore disponible a ce stade (le mail
-    d'annulation/remplacement ne contient que le numero de commande)."""
+    d'annulation/remplacement ne contient que le numero de commande).
+    Retourne (nom, prenom, date_cde) si une ligne a effectivement ete
+    supprimee (la commande etait bien une LIVRAISON) — utile a l'appelant
+    pour la reinscrire sous le nouveau numero en cas de remplacement — None
+    sinon (commande non-LIVRAISON, ou archive introuvable/illisible)."""
     pdf_path = _telecharger_bdc_archive_drive(drive_svc, numero)
     if not pdf_path:
-        return
+        return None
     try:
         pt = subprocess.run(["pdftotext", "-layout", pdf_path, "-"],
                             capture_output=True, text=True)
         if not pt.stdout.strip():
             print(f"    ECHEC pdftotext sur l'archive BDC {numero}, annulation livraison ignoree.")
-            return
+            return None
         civilite, nom, prenom, date_cde, creneau = extraire_client_creneau_pdf(pt.stdout)
-        livraison_drive.annuler_commande_livraison(
-            sheets_svc, LIVRAISON_SPREADSHEET_ID, nom, prenom, date_cde, numero_commande=numero)
+        if livraison_drive.annuler_commande_livraison(
+                sheets_svc, LIVRAISON_SPREADSHEET_ID, nom, prenom, date_cde, numero_commande=numero):
+            return nom, prenom, date_cde
+        return None
     finally:
         if os.path.exists(pdf_path):
             os.remove(pdf_path)
 
 
-def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites):
-    """Lit les mails de modification de commande, supprime les anciens bons, archive les mails."""
+def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites,
+                                   shopopop_token=None, shopopop_drive_id=None, shopopop_connecte=False):
+    """Lit les mails de modification de commande, supprime les anciens bons, archive les mails.
+    Retourne (shopopop_token, shopopop_drive_id, shopopop_connecte), a jour si une
+    connexion Shopopop a ete etablie ici (reinscription d'un remplacement en
+    LIVRAISON), pour que l'appelant la reutilise sans se reconnecter."""
     try:
         label_id = _get_or_create_gmail_label(gmail_svc, GMAIL_LABEL_NOM)
         messages = []
@@ -315,10 +325,10 @@ def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites):
             messages += res.get('messages', [])
     except Exception as e:
         print(f"  Gmail inaccessible ({e}) - modifications/annulations ignorees.")
-        return
+        return shopopop_token, shopopop_drive_id, shopopop_connecte
 
     if not messages:
-        return
+        return shopopop_token, shopopop_drive_id, shopopop_connecte
 
     print(f"  {len(messages)} mail(s) de modification/annulation a traiter.")
     for m in messages:
@@ -358,7 +368,18 @@ def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites):
                 # commandes_anticipées_JJ_MM.txt.
                 if original_concerne:
                     _alerter_si_commande_anticipee_annulee(drive_svc, gmail_svc, num_ancien, num_nouveau)
-                _traiter_annulation_livraison(drive_svc, sheets_svc, num_ancien)
+                resultat_livraison = _traiter_annulation_livraison(drive_svc, sheets_svc, num_ancien)
+                if resultat_livraison:
+                    nom_l, prenom_l, date_l = resultat_livraison
+                    if not shopopop_connecte:
+                        shopopop_token, shopopop_drive_id = livraison_drive.connecter_shopopop(drive_svc)
+                        shopopop_connecte = True
+                    km_manquant = livraison_drive.traiter_commande_livraison(
+                        sheets_svc, LIVRAISON_SPREADSHEET_ID, nom_l, prenom_l, date_l,
+                        numero_commande=num_nouveau,
+                        shopopop_token=shopopop_token, shopopop_drive_id=shopopop_drive_id)
+                    if km_manquant:
+                        _envoyer_email_km_manquant(gmail_svc, num_nouveau, nom_l, prenom_l, date_l)
                 _supprimer_bons_drive(drive_svc, num_ancien)
                 _supprimer_anticipation_archive_drive(drive_svc, num_ancien)
                 _supprimer_bdc_drive(drive_svc, num_ancien)
@@ -386,6 +407,8 @@ def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites):
                 userId='me', id=m['id'], body=modify_body).execute()
         except Exception as e:
             print(f"    Erreur traitement mail : {e}")
+
+    return shopopop_token, shopopop_drive_id, shopopop_connecte
 
 def download_pdf(drive_svc, file_id, dest_path):
     req = drive_svc.files().get_media(
@@ -1329,7 +1352,9 @@ def _main():
         livraison_drive.traiter_en_attente(sheets_svc, LIVRAISON_SPREADSHEET_ID)
 
     traites = charger_traites(drive_svc)
-    traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites)
+    shopopop_token, shopopop_drive_id, shopopop_connecte = traiter_modifications_clients(
+        drive_svc, gmail_svc, sheets_svc, traites,
+        shopopop_token, shopopop_drive_id, shopopop_connecte)
     nouveaux = telecharger_bons_email(gmail_svc, CACHE_DIR, traites)
 
     if not nouveaux:

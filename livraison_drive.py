@@ -364,18 +364,22 @@ def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
     Dans EN ATTENTE, le matching se fait en priorite sur `numero_commande`
     (identifiant fiable, contrairement au nom+jour qui peut correspondre a
     plusieurs commandes du meme client le meme jour), avec repli sur
-    nom+jour si le numero est absent ou introuvable."""
+    nom+jour si le numero est absent ou introuvable.
+    Retourne True si une ligne a ete trouvee et supprimee, False sinon (rien
+    a supprimer, ou Sheets/donnees indisponibles) — permet a l'appelant de
+    savoir si la commande etait bien une LIVRAISON, notamment pour la
+    reinscrire sous un nouveau numero en cas de remplacement."""
     if not sheets_svc or not spreadsheet_id:
         print("    Sheets/LIVRAISON DRIVE 2026 indisponible, annulation livraison ignoree.")
-        return
+        return False
     if not (nom or prenom) or not date_cde_str:
         print("    Nom/prenom/date introuvables, annulation livraison Drive ignoree.")
-        return
+        return False
     try:
         date_cde = datetime.strptime(date_cde_str, "%d/%m/%Y").date()
     except ValueError:
         print(f"    Date de commande illisible ({date_cde_str}), annulation livraison Drive ignoree.")
-        return
+        return False
 
     nom_complet_cible = _normaliser(f"{nom} {prenom}".strip())
     jour_str = date_cde.strftime("%d/%m")
@@ -387,7 +391,7 @@ def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
                 sheets_svc, spreadsheet_id, onglet_mois,
                 idx_nom=2, idx_prenom=3, idx_date=1, nb_colonnes=5,
                 nom_complet_cible=nom_complet_cible, jour_str=jour_str):
-            return
+            return True
 
         onglet_attente = _trouver_onglet(sheets_svc, spreadsheet_id, ONGLET_EN_ATTENTE)
         if onglet_attente:
@@ -395,17 +399,19 @@ def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
             if numero_str and _chercher_et_supprimer_numero(
                     sheets_svc, spreadsheet_id, onglet_attente,
                     idx_numero=3, nb_colonnes=5, numero_cible=numero_str):
-                return
+                return True
             if _chercher_et_supprimer(
                     sheets_svc, spreadsheet_id, onglet_attente,
                     idx_nom=0, idx_prenom=1, idx_date=2, nb_colonnes=5,
                     nom_complet_cible=nom_complet_cible, jour_str=jour_str):
-                return
+                return True
 
         print(f"    Aucune ligne LIVRAISON DRIVE 2026 trouvee pour {nom} {prenom} "
               f"({date_cde_str}), rien a supprimer.")
+        return False
     except Exception as e:
         print(f"    Annulation LIVRAISON DRIVE 2026 echouee ({nom} {prenom}) : {e}")
+        return False
 
 
 def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde_str,
