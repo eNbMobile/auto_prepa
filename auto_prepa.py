@@ -309,6 +309,45 @@ def _traiter_annulation_livraison(drive_svc, sheets_svc, numero):
             os.remove(pdf_path)
 
 
+def _traiter_commande_potentiellement_anticipee(drive_svc, gmail_svc, numero, numero_remplacement=None):
+    """Si la commande annulee (numero, remplacee par numero_remplacement le cas
+    echeant) remplit les criteres de l'anticipation (arrivee avant le seuil
+    horaire du jour, ou la veille) — sinon elle n'a jamais pu etre reellement
+    anticipee, meme si son numero traine encore dans commandes_anticipées_JJ_MM.txt :
+    renvoie par email son bon d'anticipation individuel s'il existe encore sur
+    Drive, alerte si elle etait deja marquee comme anticipee ce jour-la, et
+    retire retroactivement son anticipation du brouillon du jour si elle y a
+    deja ete integree (marqueur Drive + dispatch async, cf.
+    declencher_retrait_anticipation) — pour qu'une commande annulee ne soit
+    plus jamais preparee ni visible dans l'anticipation, meme quand
+    l'assemblage a eu lieu avant l'annulation."""
+    now = datetime.now(_TZ)
+    seuil = 5 if now.weekday() == 5 else (None if now.weekday() == 6 else 6)
+    if seuil is None or now.hour < seuil:
+        return
+    dt_orig = _get_heure_email_original(gmail_svc, numero)
+    if not dt_orig:
+        return
+    hier = (now - timedelta(days=1)).date()
+    original_concerne = (
+        dt_orig.date() == hier
+        or (dt_orig.date() == now.date() and dt_orig.hour < seuil)
+    )
+    if not original_concerne:
+        return
+
+    contenu_antici = _telecharger_anticipation_drive(drive_svc, numero)
+    if contenu_antici:
+        _envoyer_email_anticipation(gmail_svc, numero, contenu_antici)
+
+    _alerter_si_commande_anticipee_annulee(drive_svc, gmail_svc, numero, numero_remplacement)
+
+    dossier_mm_aaaa = now.strftime("%m_%Y")
+    dossier_jj_mm = now.strftime("%d_%m")
+    _marquer_retrait_anticipation_drive(drive_svc, numero, dossier_mm_aaaa, dossier_jj_mm)
+    declencher_retrait_anticipation(numero, dossier_jj_mm, dossier_mm_aaaa)
+
+
 def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites,
                                    shopopop_token=None, shopopop_drive_id=None, shopopop_connecte=False):
     """Lit les mails de modification de commande, supprime les anciens bons, archive les mails.
@@ -346,28 +385,7 @@ def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites,
             if match_modif:
                 num_ancien, num_nouveau = match_modif.group(1), match_modif.group(2)
                 print(f"  Modification : cde {num_ancien} => remplacee par {num_nouveau}")
-                now = datetime.now(_TZ)
-                seuil = 5 if now.weekday() == 5 else (None if now.weekday() == 6 else 6)
-                original_concerne = False
-                if seuil is not None and now.hour >= seuil:
-                    dt_orig = _get_heure_email_original(gmail_svc, num_ancien)
-                    if dt_orig:
-                        hier = (now - timedelta(days=1)).date()
-                        original_concerne = (
-                            dt_orig.date() == hier
-                            or (dt_orig.date() == now.date() and dt_orig.hour < seuil)
-                        )
-                        if original_concerne:
-                            contenu_antici = _telecharger_anticipation_drive(drive_svc, num_ancien)
-                            if contenu_antici:
-                                _envoyer_email_anticipation(gmail_svc, num_ancien, contenu_antici)
-                # Alerte "commande anticipée et annulée" : seulement si la commande
-                # initiale remplit elle-meme les criteres de l'anticipation (arrivee
-                # avant le seuil du jour, ou la veille) — sinon elle n'a jamais pu
-                # etre reellement anticipee, meme si son numero traine encore dans
-                # commandes_anticipées_JJ_MM.txt.
-                if original_concerne:
-                    _alerter_si_commande_anticipee_annulee(drive_svc, gmail_svc, num_ancien, num_nouveau)
+                _traiter_commande_potentiellement_anticipee(drive_svc, gmail_svc, num_ancien, num_nouveau)
                 resultat_livraison = _traiter_annulation_livraison(drive_svc, sheets_svc, num_ancien)
                 if resultat_livraison:
                     nom_l, prenom_l, date_l = resultat_livraison
@@ -389,6 +407,7 @@ def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites,
             elif match_annul:
                 num_annule = match_annul.group(1)
                 print(f"  Annulation : cde {num_annule} supprimee")
+                _traiter_commande_potentiellement_anticipee(drive_svc, gmail_svc, num_annule)
                 _traiter_annulation_livraison(drive_svc, sheets_svc, num_annule)
                 _supprimer_bons_drive(drive_svc, num_annule)
                 _supprimer_anticipation_archive_drive(drive_svc, num_annule)
@@ -693,6 +712,78 @@ def declencher_assemblage_anticipation(numero, dossier_jj_mm, dossier_mm_aaaa):
     except Exception as e:
         print(f"    Declenchement assemblage anticipation {numero} echoue : {e}")
 
+def _marquer_retrait_anticipation_drive(drive_svc, numero, dossier_mm_aaaa, dossier_jj_mm):
+    """Depose un marqueur annuler_anticipation_NUMERO.txt dans Drive
+    GITHUB/Anticipation/MM_AAAA/JJ_MM/ (cree si besoin), pour que
+    retirer_anticipation.py retire retroactivement cette commande du
+    brouillon d'anticipation du jour (bon_anticipation_JJ_MM.txt) si elle y a
+    deja ete integree. Marqueur persistant plutot qu'un simple appel direct :
+    resiste a un dispatch perdu (meme concurrency group que anticipation_assemble,
+    cf. son commentaire sur les runs qui peuvent sauter) puisque le prochain
+    retrait declenche, meme pour une autre commande, le retrouvera et le
+    traitera."""
+    folder_id = _dossier_anticipation_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm)
+    if not folder_id:
+        return
+    nom_fichier = f"annuler_anticipation_{numero}.txt"
+    try:
+        res = drive_svc.files().list(
+            q=f"name='{nom_fichier}' and '{folder_id}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        if res.get("files"):
+            return
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
+                                         delete=False, encoding="utf-8") as f:
+            f.write(numero)
+            tmp = f.name
+        try:
+            media = MediaFileUpload(tmp, mimetype="text/plain", resumable=False)
+            drive_svc.files().create(
+                body={"name": nom_fichier, "parents": [folder_id]},
+                media_body=media, fields="id",
+            ).execute()
+            print(f"    Retrait anticipation marque sur Drive : {nom_fichier}")
+        finally:
+            os.remove(tmp)
+    except Exception as e:
+        print(f"    Marquage retrait anticipation {numero} echoue : {e}")
+
+def declencher_retrait_anticipation(numero, dossier_jj_mm, dossier_mm_aaaa):
+    """Declenche en fire-and-forget (repository_dispatch) le workflow GitHub
+    anticipation_retirer.yml, qui retire du brouillon d'anticipation du jour
+    (bon_anticipation_JJ_MM.txt + PDF) toute commande marquee par
+    _marquer_retrait_anticipation_drive (celle-ci comprise) : meme
+    architecture (et meme concurrency group, pour ne jamais tourner en
+    parallele d'un assemblage sur le meme fichier) que
+    declencher_assemblage_anticipation, cf. son docstring."""
+    if not dossier_jj_mm or not dossier_mm_aaaa:
+        return
+    token = os.environ.get("GITHUB_TOKEN", "").strip() or os.environ.get("GH_PAT", "").strip()
+    repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if not token or not repo:
+        print("    Retrait anticipation non declenche (GITHUB_TOKEN/GH_PAT/GITHUB_REPOSITORY manquant).")
+        return
+    url = f"https://api.github.com/repos/{repo}/dispatches"
+    body = json.dumps({
+        "event_type": "anticipation_retirer",
+        "client_payload": {
+            "numero": numero,
+            "dossier_jj_mm": dossier_jj_mm,
+            "dossier_mm_aaaa": dossier_mm_aaaa,
+        },
+    }).encode()
+    req = urllib.request.Request(url, data=body, method="POST", headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "Content-Type": "application/json",
+    })
+    try:
+        urllib.request.urlopen(req, timeout=15)
+        print(f"    Retrait anticipation declenche (cde {numero})")
+    except Exception as e:
+        print(f"    Declenchement retrait anticipation {numero} echoue : {e}")
+
 def _supprimer_anticipation_archive_drive(drive_svc, numero):
     """Met a la corbeille la copie de bon_anticipation_NUMERO.txt archivee sous
     GITHUB/Anticipation/ (trashed=True plutot que suppression definitive, pour
@@ -856,18 +947,22 @@ def _telecharger_commandes_anticipees_archivees(drive_svc, dossier_mm_aaaa, doss
         return set()
 
 
-def _envoyer_email_anticipation_annulee(gmail_svc, civilite, nom, prenom, num_ancien, num_nouveau):
-    """Alerte : la commande annulee/remplacee faisait deja partie d'une anticipation archivee."""
+def _envoyer_email_anticipation_annulee(gmail_svc, civilite, nom, prenom, num_ancien, num_nouveau=None):
+    """Alerte : la commande annulee (remplacee ou non) faisait deja partie
+    d'une anticipation archivee."""
     from email.mime.text import MIMEText
     destinataire = EMAIL_ANTICIPATION
     if not destinataire:
         return
     civilite_txt = _CIVILITES_LONGUES.get(civilite, "Monsieur/Madame")
     client = " ".join(p for p in (civilite_txt, nom, prenom) if p)
+    motif = (f"a été annulée et remplacée par la commande n°{num_nouveau}"
+             if num_nouveau else "a été annulée")
     corps = (
         f"Bonjour,\n\n"
-        f"La commande de {client}, n°{num_ancien} a été annulée et remplacée "
-        f"par la commande n°{num_nouveau} et faisait partie de l'anticipation.\n\n"
+        f"La commande de {client}, n°{num_ancien} {motif} et faisait partie "
+        f"de l'anticipation. Son retrait du bon d'anticipation a été déclenché "
+        f"automatiquement.\n\n"
         f"Merci d'être vigilant sur les produits de cette commande.\n\n"
         f"Cordialement,\nErwan"
     )
@@ -882,9 +977,9 @@ def _envoyer_email_anticipation_annulee(gmail_svc, civilite, nom, prenom, num_an
         print(f"    Envoi email alerte anticipation annulee {num_ancien} echoue : {e}")
 
 
-def _alerter_si_commande_anticipee_annulee(drive_svc, gmail_svc, num_ancien, num_nouveau):
-    """Si la commande annulee/remplacee (num_ancien) faisait deja partie d'une
-    anticipation archivee aujourd'hui (commandes_anticipées_JJ_MM.txt), alerte
+def _alerter_si_commande_anticipee_annulee(drive_svc, gmail_svc, num_ancien, num_nouveau=None):
+    """Si la commande annulee (remplacee ou non, num_ancien) faisait deja partie
+    d'une anticipation archivee aujourd'hui (commandes_anticipées_JJ_MM.txt), alerte
     par email avec le nom du client (extrait de l'archive BDC, encore presente
     sur Drive a ce stade, avant sa suppression par _supprimer_bdc_drive)."""
     now = datetime.now(_TZ)
