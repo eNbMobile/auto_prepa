@@ -594,6 +594,51 @@ def _maj_fichier_commandes_anticipees(drive_svc, commandes, dossier_mm_aaaa, dos
         print(f"    Mise a jour {nom_fichier} echouee : {e}")
 
 
+def _retirer_commandes_fichier_anticipees(drive_svc, numeros_a_retirer, dossier_mm_aaaa, dossier_jj_mm):
+    """Retire numeros_a_retirer de GITHUB/Anticipation/archives/MM_AAAA/JJ_MM/
+    commandes_anticipées_JJ_MM.txt (symetrique de _maj_fichier_commandes_anticipees) :
+    ces commandes, annulees, ne font plus partie de l'anticipation du jour."""
+    if not numeros_a_retirer:
+        return
+
+    nom_fichier = f"commandes_anticipées_{dossier_jj_mm}.txt"
+    path = f"GITHUB/Anticipation/archives/{dossier_mm_aaaa}/{dossier_jj_mm}"
+    try:
+        github_id = ap._get_or_create_subfolder(drive_svc, "root", "GITHUB")
+        anticipation_id = ap._get_or_create_subfolder(drive_svc, github_id, "Anticipation")
+        archives_id = ap._get_or_create_subfolder(drive_svc, anticipation_id, "archives")
+        mois_id = ap._get_or_create_subfolder(drive_svc, archives_id, dossier_mm_aaaa)
+        subfolder_id = ap._get_or_create_subfolder(drive_svc, mois_id, dossier_jj_mm)
+
+        res = drive_svc.files().list(
+            q=f"name='{nom_fichier}' and '{subfolder_id}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        existing = res.get("files", [])
+        if not existing:
+            return
+
+        contenu = _telecharger_texte(drive_svc, existing[0]["id"])
+        actuelles = {c.strip() for c in contenu.strip().split(',') if c.strip()}
+        restantes = actuelles - set(numeros_a_retirer)
+        if restantes == actuelles:
+            return
+
+        nouveau_contenu = ",".join(sorted(restantes, key=_cle_tri_commande))
+        chemin_local = os.path.join(ap.WORK_DIR, nom_fichier)
+        os.makedirs(ap.WORK_DIR, exist_ok=True)
+        with open(chemin_local, "w", encoding="utf-8") as f:
+            f.write(nouveau_contenu)
+        try:
+            media = MediaFileUpload(chemin_local, mimetype="text/plain", resumable=False)
+            drive_svc.files().update(fileId=existing[0]["id"], media_body=media).execute()
+        finally:
+            os.remove(chemin_local)
+        print(f"    {nom_fichier} => Drive {path}/ OK ({len(restantes)} commande(s) restante(s))")
+    except Exception as e:
+        print(f"    Retrait dans {nom_fichier} echoue : {e}")
+
+
 def _supprimer_pdf_jour_anticipation(drive_svc, file_id, nom_pdf):
     """Met a la corbeille anticipation_JJ_MM.pdf dans GITHUB/Anticipation/MM_AAAA/JJ_MM/
     une fois archive + envoye par mail (trashed=True plutot que suppression

@@ -1,0 +1,52 @@
+name: Anticipation - Retrait d'une commande annulée
+
+on:
+  repository_dispatch:
+    types: [anticipation_retirer]
+
+concurrency:
+  group: anticipation_assemble
+  cancel-in-progress: false
+
+jobs:
+  retirer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python et dépendances
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer les dépendances pip
+        run: pip install -r requirements.txt
+
+      - name: Retirer la commande annulée du brouillon d'anticipation du jour
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          WORK_DIR: "v 4.0.0"
+          CDE_NUMERO:  ${{ github.event.client_payload.numero }}
+          CDE_JOUR:    ${{ github.event.client_payload.dossier_jj_mm }}
+          CDE_MOIS:    ${{ github.event.client_payload.dossier_mm_aaaa }}
+        run: |
+          python3 retirer_anticipation.py \
+            --numero "$CDE_NUMERO" --jour "$CDE_JOUR" --mois "$CDE_MOIS"
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+            echo "Secret GOOGLE_TOKEN_JSON mis à jour."
+          fi
