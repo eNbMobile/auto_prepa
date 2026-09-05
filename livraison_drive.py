@@ -86,6 +86,18 @@ def _normaliser(texte):
     return ''.join(c for c in d if unicodedata.category(c) != 'Mn')
 
 
+def _tokens_personne(nom, prenom):
+    """Ensemble des mots (normalises, trait d'union traite comme un espace)
+    de nom+prenom, pour comparer deux personnes sans dependre de la
+    frontiere nom/prenom ni d'un trait d'union absent d'un cote — ex. un
+    prenom compose ('JEAN-PIERRE') que le client a saisi sans tiret ('JEAN
+    PIERRE'), auquel cas extraire_client_creneau_pdf (qui prend toujours le
+    dernier mot comme prenom) le repartit en nom='... JEAN', prenom='PIERRE'
+    au lieu de nom='...', prenom='JEAN PIERRE'."""
+    texte = f"{nom} {prenom}".replace('-', ' ')
+    return frozenset(_normaliser(texte).split())
+
+
 def _get_sheets_service():
     try:
         from google.oauth2.credentials import Credentials
@@ -296,13 +308,14 @@ def _supprimer_ligne(sheets_svc, spreadsheet_id, titre_onglet, ligne):
 
 
 def _chercher_et_supprimer(sheets_svc, spreadsheet_id, titre_onglet,
-                            idx_nom, idx_date, nb_colonnes, nom_complet_cible, jour_str,
+                            idx_nom, idx_date, nb_colonnes, tokens_cible, jour_str,
                             idx_prenom=None):
     """Cherche, dans les nb_colonnes premieres colonnes de `titre_onglet`, une
-    ligne dont le nom (colonne idx_nom, complete de idx_prenom si fourni, les
-    deux colonnes etant alors combinees avant comparaison) = nom_complet_cible
-    (compare via _normaliser) et la colonne idx_date = jour_str (JJ/MM) ; si
-    trouvee, supprime la ligne.
+    ligne dont le nom (colonne idx_nom, complete de idx_prenom si fourni)
+    correspond a `tokens_cible` (ensemble de mots, cf. _tokens_personne —
+    insensible a la frontiere nom/prenom et a un trait d'union absent d'un
+    cote) et la colonne idx_date = jour_str (JJ/MM) ; si trouvee, supprime la
+    ligne.
     Retourne True si une ligne a ete trouvee et supprimee."""
     derniere_colonne = chr(ord('A') + nb_colonnes - 1)
     res = sheets_svc.spreadsheets().values().get(
@@ -311,19 +324,18 @@ def _chercher_et_supprimer(sheets_svc, spreadsheet_id, titre_onglet,
     lignes = res.get("values", [])
     for i, row in enumerate(lignes):
         nom_val = row[idx_nom].strip() if idx_nom < len(row) and row[idx_nom] else ""
-        if idx_prenom is not None:
-            prenom_val = row[idx_prenom].strip() if idx_prenom < len(row) and row[idx_prenom] else ""
-            nom_val = f"{nom_val} {prenom_val}".strip()
+        prenom_val = (row[idx_prenom].strip()
+                      if idx_prenom is not None and idx_prenom < len(row) and row[idx_prenom] else "")
         date_val = row[idx_date].strip() if idx_date < len(row) and row[idx_date] else ""
         if not nom_val or not date_val:
             continue
-        if _normaliser(nom_val) != nom_complet_cible or date_val != jour_str:
+        if _tokens_personne(nom_val, prenom_val) != tokens_cible or date_val != jour_str:
             continue
         ligne = 2 + i
         if not _supprimer_ligne(sheets_svc, spreadsheet_id, titre_onglet, ligne):
             return False
         print(f"    LIVRAISON DRIVE 2026 / {titre_onglet} L{ligne} : "
-              f"{nom_val} annulee -> ligne supprimee.")
+              f"{nom_val} {prenom_val} annulee -> ligne supprimee.")
         return True
     return False
 
@@ -381,7 +393,7 @@ def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
         print(f"    Date de commande illisible ({date_cde_str}), annulation livraison Drive ignoree.")
         return False
 
-    nom_complet_cible = _normaliser(f"{nom} {prenom}".strip())
+    tokens_cible = _tokens_personne(nom, prenom)
     jour_str = date_cde.strftime("%d/%m")
 
     try:
@@ -390,7 +402,7 @@ def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
         if onglet_mois and _chercher_et_supprimer(
                 sheets_svc, spreadsheet_id, onglet_mois,
                 idx_nom=2, idx_prenom=3, idx_date=1, nb_colonnes=5,
-                nom_complet_cible=nom_complet_cible, jour_str=jour_str):
+                tokens_cible=tokens_cible, jour_str=jour_str):
             return True
 
         onglet_attente = _trouver_onglet(sheets_svc, spreadsheet_id, ONGLET_EN_ATTENTE)
@@ -403,7 +415,7 @@ def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
             if _chercher_et_supprimer(
                     sheets_svc, spreadsheet_id, onglet_attente,
                     idx_nom=0, idx_prenom=1, idx_date=2, nb_colonnes=5,
-                    nom_complet_cible=nom_complet_cible, jour_str=jour_str):
+                    tokens_cible=tokens_cible, jour_str=jour_str):
                 return True
 
         print(f"    Aucune ligne LIVRAISON DRIVE 2026 trouvee pour {nom} {prenom} "
