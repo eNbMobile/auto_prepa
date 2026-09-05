@@ -58,7 +58,12 @@ def _normaliser(texte):
 
 
 def _tokens(nom_complet):
-    return frozenset(_normaliser(nom_complet).split())
+    """Ensemble des mots normalises de `nom_complet`, trait d'union traite
+    comme un espace : un prenom compose ('JEAN-PIERRE') doit matcher sa
+    version sans tiret ('JEAN PIERRE'), le client ne saisissant pas toujours
+    le trait d'union de la meme facon d'un systeme a l'autre (PDF de
+    commande vs Shopopop)."""
+    return frozenset(_normaliser(nom_complet).replace('-', ' ').split())
 
 
 def _pkce_pair():

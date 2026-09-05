@@ -65,6 +65,29 @@ def _champs_correspondent(a, b):
     return False
 
 
+def _mots_personne(nom, prenom):
+    """Ensemble des mots (normalises, trait d'union traite comme un espace)
+    de nom+prenom, pour comparer deux personnes sans dependre de la
+    frontiere nom/prenom ni d'un trait d'union absent d'un cote."""
+    texte = f"{nom} {prenom}".replace('-', ' ')
+    return frozenset(_normaliser(texte).split())
+
+
+def _personne_correspond(nom_a, prenom_a, nom_b, prenom_b):
+    """Compare une personne (nom, prenom) entre 'Commandes en cours' et
+    l'Avoir. Essaie d'abord nom/prenom champ a champ (_champs_correspondent,
+    avec tolerance sur une initiale) ; a defaut, compare l'ensemble des mots
+    de nom+prenom des deux cotes, pour absorber une frontiere nom/prenom
+    differente selon la source — ex. 'MEICHE JEAN'/'PIERRE' cote 'Commandes
+    en cours' (extraire_client_creneau_pdf prend toujours le dernier mot
+    comme prenom) contre 'MEICHE'/'JEAN PIERRE' cote Avoir (saisi a la main),
+    quand le client n'a pas mis de trait d'union a un prenom compose."""
+    if _champs_correspondent(nom_a, nom_b) and _champs_correspondent(prenom_a, prenom_b):
+        return True
+    mots_a, mots_b = _mots_personne(nom_a, prenom_a), _mots_personne(nom_b, prenom_b)
+    return bool(mots_a) and mots_a == mots_b
+
+
 # Couleurs de fond reelles du classeur Avoir/Demarque (verifiees sur le
 # classeur de production) : jaune plein #FFFF00 = avoir du, vert #00B050 =
 # avoir deja deduit. Comparaison a tolerance fine pour absorber les
@@ -388,8 +411,7 @@ def main():
         print(f"\nVerification : {civilite} {nom} {prenom} (commande du {date_cde}, {creneau})")
         trouve = False
         for avoir in avoirs_jaunes:
-            if not (_champs_correspondent(nom, avoir["nom"])
-                    and _champs_correspondent(prenom, avoir["prenom"])):
+            if not _personne_correspond(nom, prenom, avoir["nom"], avoir["prenom"]):
                 continue
             trouve = True
             if not _date_fin_valide(avoir["date_fin"], aujourdhui):
