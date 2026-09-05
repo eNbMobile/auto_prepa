@@ -131,11 +131,13 @@ def _rows_depuis_csv(chemin):
     with open(chemin, newline='', encoding='utf-8-sig') as f:
         yield from csv.reader(f, delimiter=sep)
 
-def lire_stock(chemin):
+def lire_stock(chemin, classeur_requis=True):
     """
     Lit un export stock multi-colonnes (.xlsx ou .csv).
     Cherche les colonnes "Gencod", "Stock UC", "Classeur" (classement du
     produit, ex. "DRIVE DÉLOTAGE") et optionnellement "Libellé".
+    Si classeur_requis est False, l'absence de la colonne "Classeur" est
+    tolérée (le dict des classeurs retourné sera alors vide).
     Retourne ({gencod: stock_uc}, {gencod: libelle}, {gencod: classeur}).
     """
     ext = os.path.splitext(chemin)[1].lower()
@@ -162,7 +164,7 @@ def lire_stock(chemin):
                     raise ValueError(
                         f"Colonne 'Stock UC' introuvable dans {chemin}.\n"
                         f"En-têtes trouvées : {[c.strip() for c in row]}")
-                if idx_classeur is None:
+                if idx_classeur is None and classeur_requis:
                     raise ValueError(
                         f"Colonne 'Classeur' introuvable dans {chemin}.\n"
                         f"En-têtes trouvées : {[c.strip() for c in row]}")
@@ -1069,7 +1071,7 @@ def main():
     # 1. Lire les stocks
     if fichier_j1 and os.path.exists(fichier_j1):
         print(f"Lecture stock J-{nb_jours} : {fichier_j1}")
-        stock_j1, libelles_stock, classeurs_stock = lire_stock(fichier_j1)
+        stock_j1, libelles_stock, classeurs_stock = lire_stock(fichier_j1, classeur_requis=False)
         print(f"  → {len(stock_j1)} gencods, {len(libelles_stock)} libellés xlsx")
     else:
         if fichier_j1:
