@@ -20,9 +20,19 @@ plus de la reconversion de mimeType.
 Ce script, pour chaque fichier de CONFIG_FILES :
 - s'il est encore un Google Sheet natif, l'exporte en CSV puis met l'ancien
   Sheet a la corbeille (jamais de suppression definitive) ;
-- normalise le contenu en LF (CRLF/CR -> LF) et retire un eventuel BOM UTF-8,
-  et ne reecrit sur Drive que si le contenu a effectivement change.
-Idempotent : ignore les fichiers deja au format CSV plat en LF.
+- normalise le contenu (retire un eventuel BOM UTF-8) et ne reecrit sur
+  Drive que si le contenu a effectivement change.
+Idempotent : ignore les fichiers deja au bon format.
+
+Cas particulier gencod_adresses.csv : contrairement aux autres CONFIG_FILES,
+ce fichier doit rester en CRLF, pas LF. match_adresses(), dans
+prepa_drive_degrade, lit chaque ligne d'adresse puis tronque aveuglement le
+dernier caractere avant le '\n' (adresse[l-1] = '\0'), en supposant que ce
+caractere est le '\r' d'une fin de ligne CRLF. Si le fichier est en LF pur,
+ce code retire a tort le dernier chiffre de l'adresse (le numero d'element),
+qui retombe alors a 0 - d'ou les adresses en "-0" et les dizaines
+d'anomalies d'adressage constatees le 06/09/2026 apres une normalisation en
+LF de ce fichier suite a l'incident gencod CSV du 05/09.
 """
 import io
 
@@ -33,12 +43,16 @@ import auto_prepa as ap
 
 MIME_GOOGLE_SHEET = "application/vnd.google-apps.spreadsheet"
 BOM_UTF8 = b"\xef\xbb\xbf"
+FICHIER_CRLF_REQUIS = "gencod_adresses.csv"
 
 
-def _normaliser(contenu: bytes) -> bytes:
+def _normaliser(contenu: bytes, *, filename: str) -> bytes:
     if contenu.startswith(BOM_UTF8):
         contenu = contenu[len(BOM_UTF8):]
-    return contenu.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    contenu = contenu.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    if filename == FICHIER_CRLF_REQUIS:
+        contenu = contenu.replace(b"\n", b"\r\n")
+    return contenu
 
 
 def _televerser(drive_svc, contenu: bytes, *, file_id=None, filename=None, parent_id=None):
@@ -73,10 +87,11 @@ def _reparer_fichier(drive_svc, filename):
         done = False
         while not done:
             _, done = dl.next_chunk()
-        contenu = _normaliser(buf.getvalue())
+        contenu = _normaliser(buf.getvalue(), filename=filename)
         _televerser(drive_svc, contenu, filename=filename, parent_id=ap.DRIVE_CONFIG_FOLDER_ID)
         drive_svc.files().update(fileId=file_id, body={"trashed": True}).execute()
-        print(f"  {filename} : reconverti en CSV plat LF ({len(contenu)} octets), ancien Sheet mis a la corbeille.")
+        eol = "CRLF" if filename == FICHIER_CRLF_REQUIS else "LF"
+        print(f"  {filename} : reconverti en CSV plat {eol} ({len(contenu)} octets), ancien Sheet mis a la corbeille.")
         return
 
     buf = io.BytesIO()
@@ -85,13 +100,15 @@ def _reparer_fichier(drive_svc, filename):
     while not done:
         _, done = dl.next_chunk()
     contenu_orig = buf.getvalue()
-    contenu = _normaliser(contenu_orig)
+    contenu = _normaliser(contenu_orig, filename=filename)
     if contenu == contenu_orig:
-        print(f"  {filename} : deja au format CSV plat LF, rien a faire.")
+        eol = "CRLF" if filename == FICHIER_CRLF_REQUIS else "LF"
+        print(f"  {filename} : deja au format CSV plat {eol}, rien a faire.")
         return
 
     _televerser(drive_svc, contenu, file_id=file_id)
-    print(f"  {filename} : fins de ligne CRLF/BOM normalisees en LF "
+    eol = "CRLF" if filename == FICHIER_CRLF_REQUIS else "LF"
+    print(f"  {filename} : fins de ligne normalisees en {eol} "
           f"({len(contenu_orig)} -> {len(contenu)} octets).")
 
 
