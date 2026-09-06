@@ -17,10 +17,9 @@ Toutes les commandes recues entre le dernier bon_prepa correctement genere
 (N° cde 54604128, 05/09 11h30) et maintenant ont donc pu etre traitees avec
 des donnees d'adressage corrompues (echec pur et simple, ou bon_prepa genere
 mais avec des adresses fausses). Ce script les identifie dynamiquement
-(recherche Gmail, pas de liste figee) et regenere leur bon_prepa avec les
-CSV desormais corrects - y compris celles deja presentes dans l'historique
-auto_prepa_state.json, puisque leur premier passage a pu produire un bon
-errone.
+(recherche Gmail, pas de liste figee) et regenere systematiquement leur
+bon_prepa avec les CSV desormais corrects, meme si un premier passage a deja
+eu lieu aujourd'hui (il a pu produire un bon errone).
 
 Pour eviter de dupliquer les lignes de suivi (LIVRAISON DRIVE 2026, Avoir/
 Commandes en cours) sur les commandes deja traitees une premiere fois
@@ -148,8 +147,7 @@ def main():
           f"{len(exclus & confirmations.keys())} exclue(s) (annulee/remplacee), "
           f"{len(a_traiter)} a regenerer.")
 
-    traites = ap.charger_traites(drive_svc)
-    processed = set()
+    regenerees = 0
     shopopop_token, shopopop_drive_id, shopopop_connecte = None, None, False
 
     for numero in a_traiter:
@@ -173,15 +171,13 @@ def main():
         if statut == "stop":
             print("ARRET : gencod_adresses.csv / gencod_nomenclatures.csv toujours indisponibles"
                   " ou invalides.")
-            ap.sauvegarder_traites(drive_svc, traites | processed)
             sys.exit(1)
         if statut == "processed":
-            processed.add(pdf)
+            regenerees += 1
         else:
             print(f"  [{numero}] echec de generation, a retenter manuellement.")
 
-    ap.sauvegarder_traites(drive_svc, traites | processed)
-    print(f"\n{len(processed)}/{len(a_traiter)} commande(s) regeneree(s).")
+    print(f"\n{regenerees}/{len(a_traiter)} commande(s) regeneree(s).")
 
 
 if __name__ == "__main__":
