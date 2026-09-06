@@ -30,7 +30,6 @@ CACHE_DIR = os.environ.get("CACHE_DIR", os.path.join(_BASE, "pdf_cache"))
 BDC_DIR   = os.environ.get("BDC_DIR",   os.path.join(_BASE, "BDC"))
 TOKEN_FILE = os.path.expanduser("~/.auto_prepa_token.json")
 CREDS_FILE = os.path.expanduser("~/.auto_prepa_credentials.json")
-STATE_DRIVE_FILENAME = "auto_prepa_state.json"
 LOG_CONTROLE_FILENAME = "controle_articles.log"
 
 
@@ -89,62 +88,6 @@ def get_credentials():
             f.write(creds.to_json())
     return creds
 
-def charger_traites(drive_svc):
-    """Retourne l'ensemble des BonDeCommande_*.pdf deja traites."""
-    try:
-        res = drive_svc.files().list(
-            q=f"name='{STATE_DRIVE_FILENAME}' and '{DRIVE_BONS_FOLDER_ID}' in parents and trashed=false",
-            fields="files(id)",
-        ).execute()
-        files = res.get("files", [])
-        if not files:
-            return set()
-        req = drive_svc.files().get_media(fileId=files[0]["id"])
-        buf = io.BytesIO()
-        dl = MediaIoBaseDownload(buf, req)
-        done = False
-        while not done:
-            _, done = dl.next_chunk()
-        data = json.loads(buf.getvalue().decode())
-        if isinstance(data, dict):
-            flat = set()
-            for v in data.values():
-                if isinstance(v, list):
-                    flat.update(v)
-            return flat
-        if isinstance(data, list):
-            return set(data)
-        return set()
-    except Exception as e:
-        print(f"  Historique Drive non disponible ({e}), demarrage a zero.")
-        return set()
-
-
-def sauvegarder_traites(drive_svc, traites):
-    """Sauvegarde la liste des bons traites dans Drive."""
-    try:
-        res = drive_svc.files().list(
-            q=f"name='{STATE_DRIVE_FILENAME}' and '{DRIVE_BONS_FOLDER_ID}' in parents and trashed=false",
-            fields="files(id)",
-        ).execute()
-        existing = res.get("files", [])
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json",
-                                         delete=False, encoding="utf-8") as f:
-            json.dump(sorted(traites), f, indent=2, ensure_ascii=False)
-            tmp = f.name
-        try:
-            media = MediaFileUpload(tmp, mimetype="application/json", resumable=False)
-            if existing:
-                drive_svc.files().update(
-                    fileId=existing[0]["id"], media_body=media).execute()
-            else:
-                drive_svc.files().create(
-                    body={"name": STATE_DRIVE_FILENAME, "parents": [DRIVE_BONS_FOLDER_ID]},
-                    media_body=media, fields="id").execute()
-        finally:
-            os.remove(tmp)
-    except Exception as e:
-        print(f"  Sauvegarde historique Drive echouee : {e}")
 
 def _get_or_create_gmail_label(gmail_svc, nom):
     try:
@@ -182,7 +125,7 @@ def _marquer_email(gmail_svc, msg_id, label_id):
     except Exception as e:
         print(f"    Marquage email echoue : {e}")
 
-def telecharger_bons_email(gmail_svc, cache_dir, traites):
+def telecharger_bons_email(gmail_svc, cache_dir):
     """
     Lit les emails de confirmation (no-reply@systeme-u.fr),
     telecharge bon_encaissement.pdf => BonDeCommande_XXX.pdf dans cache_dir.
@@ -227,10 +170,6 @@ def telecharger_bons_email(gmail_svc, cache_dir, traites):
             if match_date:
                 dossier_jj_mm   = match_date.group(1)[:5].replace('/', '_')   # DD_MM
                 dossier_mm_aaaa = match_date.group(1)[3:].replace('/', '_')   # MM_AAAA
-
-            if filename in traites:
-                _marquer_email(gmail_svc, m['id'], label_id)
-                continue
 
             attachment_id = None
             for part in _iter_parts(msg['payload']):
@@ -341,7 +280,7 @@ def _traiter_commande_potentiellement_anticipee(drive_svc, gmail_svc, numero, nu
     declencher_retrait_anticipation(numero, dossier_jj_mm, dossier_mm_aaaa)
 
 
-def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites,
+def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc,
                                    shopopop_token=None, shopopop_drive_id=None, shopopop_connecte=False):
     """Lit les mails de modification de commande, supprime les anciens bons, archive les mails.
     Retourne (shopopop_token, shopopop_drive_id, shopopop_connecte), a jour si une
@@ -396,7 +335,6 @@ def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites,
                 _supprimer_bdc_drive(drive_svc, num_ancien)
                 _uploader_annulation_drive(drive_svc, num_ancien)
                 supprimer_commande_avoir_drive(drive_svc, num_ancien)
-                traites.add(f"BonDeCommande_{num_ancien}.pdf")
             elif match_annul:
                 num_annule = match_annul.group(1)
                 print(f"  Annulation : cde {num_annule} supprimee")
@@ -407,7 +345,6 @@ def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc, traites,
                 _supprimer_bdc_drive(drive_svc, num_annule)
                 _uploader_annulation_drive(drive_svc, num_annule)
                 supprimer_commande_avoir_drive(drive_svc, num_annule)
-                traites.add(f"BonDeCommande_{num_annule}.pdf")
             else:
                 print(f"    Sujet non reconnu : {subject[:80]}")
                 continue
@@ -1644,14 +1581,13 @@ def _main():
         print("  Rattrapage EN ATTENTE (workflow 14h non detecte pour aujourd'hui).")
         livraison_drive.traiter_en_attente(sheets_svc, LIVRAISON_SPREADSHEET_ID)
 
-    traites = charger_traites(drive_svc)
     shopopop_token, shopopop_drive_id, shopopop_connecte = traiter_modifications_clients(
-        drive_svc, gmail_svc, sheets_svc, traites,
+        drive_svc, gmail_svc, sheets_svc,
         shopopop_token, shopopop_drive_id, shopopop_connecte)
-    nouveaux = telecharger_bons_email(gmail_svc, CACHE_DIR, traites)
+    nouveaux = telecharger_bons_email(gmail_svc, CACHE_DIR)
 
     if not nouveaux:
-        print(f"Pas de nouvelle commande ({len(traites)} deja traitee(s)).")
+        print("Pas de nouvelle commande.")
         return
 
     print(f"{len(nouveaux)} nouvelle(s) commande(s) detectee(s) :")
@@ -1659,7 +1595,6 @@ def _main():
         print(f"  - {pdf}")
 
     os.makedirs(BDC_DIR, exist_ok=True)
-    processed = set()
 
     for pdf, (dossier_jj_mm, dossier_mm_aaaa) in sorted(nouveaux.items()):
         statut, shopopop_token, shopopop_drive_id, shopopop_connecte = traiter_commande_pdf(
@@ -1667,10 +1602,6 @@ def _main():
             heure_cron, shopopop_token, shopopop_drive_id, shopopop_connecte)
         if statut == "stop":
             break
-        if statut == "processed":
-            processed.add(pdf)
-
-    sauvegarder_traites(drive_svc, traites | processed)
 
 if __name__ == "__main__":
     main()
