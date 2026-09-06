@@ -12,7 +12,7 @@ import csv
 import tempfile
 import fcntl
 import urllib.request
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 _TZ = ZoneInfo("Europe/Paris")
 
@@ -311,39 +311,32 @@ def _traiter_annulation_livraison(drive_svc, sheets_svc, numero):
 
 def _traiter_commande_potentiellement_anticipee(drive_svc, gmail_svc, numero, numero_remplacement=None):
     """Si la commande annulee (numero, remplacee par numero_remplacement le cas
-    echeant) remplit les criteres de l'anticipation (arrivee avant le seuil
-    horaire du jour, ou la veille) — sinon elle n'a jamais pu etre reellement
-    anticipee, meme si son numero traine encore dans commandes_anticipées_JJ_MM.txt :
-    renvoie par email son bon d'anticipation individuel s'il existe encore sur
-    Drive, alerte si elle etait deja marquee comme anticipee ce jour-la, et
-    retire retroactivement son anticipation du brouillon du jour si elle y a
-    deja ete integree (marqueur Drive + dispatch async, cf.
-    declencher_retrait_anticipation) — pour qu'une commande annulee ne soit
-    plus jamais preparee ni visible dans l'anticipation, meme quand
-    l'assemblage a eu lieu avant l'annulation."""
-    now = datetime.now(_TZ)
-    seuil = 5 if now.weekday() == 5 else (None if now.weekday() == 6 else 6)
-    if seuil is None or now.hour < seuil:
-        return
-    dt_orig = _get_heure_email_original(gmail_svc, numero)
-    if not dt_orig:
-        return
-    hier = (now - timedelta(days=1)).date()
-    original_concerne = (
-        dt_orig.date() == hier
-        or (dt_orig.date() == now.date() and dt_orig.hour < seuil)
-    )
-    if not original_concerne:
+    echeant) a pu etre anticipee, la retire de l'anticipation de sa VRAIE date
+    de livraison (extraite du sujet de son email de confirmation original via
+    _infos_email_original — et non de la date du jour ou l'annulation est
+    traitee, qui peut differer de plusieurs jours quand la commande a ete
+    passee a l'avance ; c'etait le bug de la version precedente, laissant des
+    commandes annulees/remplacees en double dans l'anticipation d'un jour
+    different de celui ou l'annulation etait traitee) : renvoie par email son
+    bon d'anticipation individuel s'il existe encore sur Drive, alerte si elle
+    etait deja marquee comme anticipee ce jour-la, et retire retroactivement
+    son anticipation du brouillon du jour si elle y a deja ete integree
+    (marqueur Drive + dispatch async, cf. declencher_retrait_anticipation) —
+    pour qu'une commande annulee ne soit plus jamais preparee ni visible dans
+    l'anticipation, meme quand l'assemblage a eu lieu avant l'annulation.
+    Sans date de livraison exploitable (email introuvable ou sujet sans
+    date), ne fait rien : impossible de savoir quel dossier nettoyer."""
+    _, dossier_jj_mm, dossier_mm_aaaa = _infos_email_original(gmail_svc, numero)
+    if not dossier_jj_mm or not dossier_mm_aaaa:
         return
 
     contenu_antici = _telecharger_anticipation_drive(drive_svc, numero)
     if contenu_antici:
         _envoyer_email_anticipation(gmail_svc, numero, contenu_antici)
 
-    _alerter_si_commande_anticipee_annulee(drive_svc, gmail_svc, numero, numero_remplacement)
+    _alerter_si_commande_anticipee_annulee(
+        drive_svc, gmail_svc, numero, dossier_jj_mm, dossier_mm_aaaa, numero_remplacement)
 
-    dossier_mm_aaaa = now.strftime("%m_%Y")
-    dossier_jj_mm = now.strftime("%d_%m")
     _marquer_retrait_anticipation_drive(drive_svc, numero, dossier_mm_aaaa, dossier_jj_mm)
     declencher_retrait_anticipation(numero, dossier_jj_mm, dossier_mm_aaaa)
 
@@ -861,20 +854,36 @@ def _uploader_annulation_drive(drive_svc, numero):
         raise
 
 
-def _get_heure_email_original(gmail_svc, numero):
-    """Retourne le datetime (Paris) de reception de l'email de confirmation original."""
+def _infos_email_original(gmail_svc, numero):
+    """Retourne (dt_reception, dossier_jj_mm, dossier_mm_aaaa) de l'email de
+    confirmation original de cette commande : dt_reception est le datetime
+    (Paris) de reception de cet email, dossier_jj_mm/dossier_mm_aaaa la date
+    de livraison/anticipation extraite de son sujet (meme regex que dans
+    chercher_nouvelles_commandes) — a ne pas confondre avec dt_reception, qui
+    peut preceder cette date de plusieurs jours si la commande a ete passee
+    a l'avance. Retourne (None, "", "") si l'email ou une date exploitable
+    dans son sujet sont introuvables."""
     q = f'label:{GMAIL_LABEL_CONF} "{numero}"'
     try:
         res = gmail_svc.users().messages().list(userId='me', q=q, maxResults=1).execute()
         messages = res.get('messages', [])
         if not messages:
-            return None
+            return None, "", ""
         msg = gmail_svc.users().messages().get(
-            userId='me', id=messages[0]['id'], format='minimal').execute()
-        return datetime.fromtimestamp(int(msg['internalDate']) / 1000, tz=_TZ)
+            userId='me', id=messages[0]['id'],
+            format='metadata', metadataHeaders=['Subject']).execute()
+        dt_reception = datetime.fromtimestamp(int(msg['internalDate']) / 1000, tz=_TZ)
+        subject = next(
+            (h['value'] for h in msg['payload'].get('headers', []) if h['name'] == 'Subject'), '')
+        match_date = re.search(r'(\d{2}/\d{2}/\d{4})', subject)
+        if not match_date:
+            return dt_reception, "", ""
+        dossier_jj_mm   = match_date.group(1)[:5].replace('/', '_')
+        dossier_mm_aaaa = match_date.group(1)[3:].replace('/', '_')
+        return dt_reception, dossier_jj_mm, dossier_mm_aaaa
     except Exception as e:
-        print(f"    Horodatage email original {numero} introuvable : {e}")
-        return None
+        print(f"    Horodatage/date email original {numero} introuvable : {e}")
+        return None, "", ""
 
 def _telecharger_anticipation_drive(drive_svc, numero):
     """Telecharge et retourne le contenu de bon_anticipation_NUMERO.txt depuis Drive."""
@@ -977,14 +986,14 @@ def _envoyer_email_anticipation_annulee(gmail_svc, civilite, nom, prenom, num_an
         print(f"    Envoi email alerte anticipation annulee {num_ancien} echoue : {e}")
 
 
-def _alerter_si_commande_anticipee_annulee(drive_svc, gmail_svc, num_ancien, num_nouveau=None):
+def _alerter_si_commande_anticipee_annulee(drive_svc, gmail_svc, num_ancien, dossier_jj_mm,
+                                            dossier_mm_aaaa, num_nouveau=None):
     """Si la commande annulee (remplacee ou non, num_ancien) faisait deja partie
-    d'une anticipation archivee aujourd'hui (commandes_anticipées_JJ_MM.txt), alerte
-    par email avec le nom du client (extrait de l'archive BDC, encore presente
-    sur Drive a ce stade, avant sa suppression par _supprimer_bdc_drive)."""
-    now = datetime.now(_TZ)
-    dossier_mm_aaaa = now.strftime("%m_%Y")
-    dossier_jj_mm = now.strftime("%d_%m")
+    de l'anticipation archivee du jour dossier_jj_mm/dossier_mm_aaaa (sa date de
+    livraison reelle, cf. _infos_email_original — pas necessairement aujourd'hui)
+    (commandes_anticipées_JJ_MM.txt), alerte par email avec le nom du client
+    (extrait de l'archive BDC, encore presente sur Drive a ce stade, avant sa
+    suppression par _supprimer_bdc_drive)."""
     commandes_anticipees = _telecharger_commandes_anticipees_archivees(
         drive_svc, dossier_mm_aaaa, dossier_jj_mm)
     if num_ancien not in commandes_anticipees:
