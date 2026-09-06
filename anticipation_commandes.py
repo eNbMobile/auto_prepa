@@ -104,6 +104,16 @@ def _parser_lignes_anticipation(contenu, numero_commande):
 _RE_MARQUEUR_CDE = re.compile(r'^#CDE:(\S+)\s*$')
 
 
+def _commandes_deja_assemblees(contenu_jour):
+    """Numeros de commande deja marques '#CDE:NUMERO' dans bon_anticipation_JJ_MM.txt."""
+    marqueurs = set()
+    for ligne in contenu_jour.splitlines():
+        m = _RE_MARQUEUR_CDE.match(ligne.strip())
+        if m:
+            marqueurs.add(m.group(1))
+    return marqueurs
+
+
 def _parser_lignes_anticipation_jour(contenu):
     """Parse bon_anticipation_JJ_MM.txt, assemble au fil de l'eau par
     assembler_anticipation.py : succession de blocs '#CDE:NUMERO' suivis des
@@ -536,6 +546,40 @@ def _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf):
         return False
 
 
+def _envoyer_email_commandes_orphelines(gmail_svc, dossier_jj_mm, numeros):
+    """Alerte le destinataire configure qu'une ou plusieurs commandes
+    anticipables n'ont jamais ete integrees au PDF d'anticipation du jour
+    envoye (bon_anticipation_NUMERO.txt jamais assemble, probablement suite a
+    un dispatch d'assemblage perdu, cf. _reinitialiser_dossier_jour_anticipation) —
+    pour qu'elles soient traitees manuellement plutot que silencieusement
+    perdues."""
+    destinataire = ap.EMAIL_ANTICIPATION
+    if not destinataire or not numeros:
+        return
+    from email.mime.text import MIMEText
+
+    corps = (
+        f"Bonjour,\n\n"
+        f"La ou les commande(s) suivante(s) n'ont jamais ete integrees a "
+        f"l'anticipation du {dossier_jj_mm} envoyee par email, malgre un bon "
+        f"d'anticipation genere pour elles (bon_anticipation_NUMERO.txt) : "
+        f"{', '.join(numeros)}.\n\n"
+        f"Ces articles n'ont donc pas ete prepares a l'avance. Merci de "
+        f"verifier manuellement ces commandes.\n"
+    )
+    try:
+        msg = MIMEText(corps, "plain", "utf-8")
+        msg["To"] = destinataire
+        if ap.EMAIL_ANTICIPATION_2:
+            msg["Cc"] = ap.EMAIL_ANTICIPATION_2
+        msg["Subject"] = f"Anticipation {dossier_jj_mm} — commande(s) non integree(s)"
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
+        print(f"  Email alerte commande(s) orpheline(s) envoye => {destinataire} : {', '.join(numeros)}")
+    except Exception as e:
+        print(f"  Envoi email alerte commande(s) orpheline(s) echoue : {e}")
+
+
 def _cle_tri_commande(numero):
     """Tri numerique quand possible (numeros de commande), alphabetique sinon."""
     return (0, int(numero)) if numero.isdigit() else (1, numero)
@@ -655,24 +699,46 @@ def _reinitialiser_dossier_jour_anticipation(drive_svc, folder_id, dossier_jj_mm
     """Une fois le PDF du jour archive + envoye par mail, vide GITHUB/Anticipation/MM_AAAA/JJ_MM/
     de bon_anticipation_JJ_MM.txt (l'assemblage accumule au fil des commandes par
     assembler_anticipation.py) et des bon_anticipation_NUMERO.txt individuels deja
-    integres — sinon une commande anticipable arrivant apres cet envoi ferait
-    regenerer par l'assembleur un nouveau PDF repartant de ce contenu deja
-    envoye (donc avec les memes produits en plus des nouveaux), et un lancement
-    suivant du WF Anticipation les renverrait en double."""
+    integres dans ce fichier — sinon une commande anticipable arrivant apres cet
+    envoi ferait regenerer par l'assembleur un nouveau PDF repartant de ce
+    contenu deja envoye (donc avec les memes produits en plus des nouveaux), et
+    un lancement suivant du WF Anticipation les renverrait en double.
+
+    Un bon_anticipation_NUMERO.txt dont le numero n'apparait PAS dans les
+    marqueurs '#CDE:' de bon_anticipation_JJ_MM.txt n'a jamais ete integre au
+    PDF envoye (dispatch d'assemblage perdu par le concurrency group, cf.
+    assembler_anticipation.py) : il est laisse intact sur Drive plutot que
+    jete avec les autres, et son numero est retourne pour que l'appelant
+    alerte par email au lieu de le perdre silencieusement (cf. incident
+    commande 54522243 du 04/09/2026, disparue de l'anticipation sans aucune
+    alerte)."""
     nom_jour = f"bon_anticipation_{dossier_jj_mm}.txt"
+    orphelins = []
     try:
         res = drive_svc.files().list(
             q=f"name='{nom_jour}' and '{folder_id}' in parents and trashed=false",
             fields="files(id)",
         ).execute()
-        for f in res.get("files", []):
+        fichiers_jour = res.get("files", [])
+        integrees = set()
+        for f in fichiers_jour:
+            integrees |= _commandes_deja_assemblees(_telecharger_texte(drive_svc, f["id"]))
+        for f in fichiers_jour:
             drive_svc.files().update(fileId=f["id"], body={"trashed": True}).execute()
+
         for file_id, numero in _lister_bons_commande(drive_svc, folder_id):
-            drive_svc.files().update(fileId=file_id, body={"trashed": True}).execute()
-        print(f"  {nom_jour} et bon_anticipation_NUMERO.txt du jour reinitialises "
+            if numero in integrees:
+                drive_svc.files().update(fileId=file_id, body={"trashed": True}).execute()
+            else:
+                orphelins.append(numero)
+        print(f"  {nom_jour} et bon_anticipation_NUMERO.txt integres du jour reinitialises "
               f"(evite un doublon au prochain assemblage)")
+        if orphelins:
+            print(f"  ATTENTION : bon_anticipation_NUMERO.txt jamais integre(s), "
+                  f"conserve(s) sur Drive : {', '.join(orphelins)}")
     except Exception as e:
         print(f"  Reinitialisation du dossier du jour echouee : {e}")
+    return orphelins
 
 
 def main():
@@ -732,7 +798,8 @@ def main():
             email_ok = _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf)
             if email_ok and pdf_file_id:
                 _supprimer_pdf_jour_anticipation(drive_svc, pdf_file_id, nom_pdf)
-                _reinitialiser_dossier_jour_anticipation(drive_svc, folder_id, dossier_jj_mm)
+                orphelins = _reinitialiser_dossier_jour_anticipation(drive_svc, folder_id, dossier_jj_mm)
+                _envoyer_email_commandes_orphelines(gmail_svc, dossier_jj_mm, orphelins)
     finally:
         if os.path.exists(chemin_pdf):
             os.remove(chemin_pdf)

@@ -36,16 +36,6 @@ def _telecharger_texte_dossier(drive_svc, folder_id, filename):
     return ac._telecharger_texte(drive_svc, files[0]["id"])
 
 
-def _commandes_deja_assemblees(contenu_jour):
-    """Numeros de commande deja marques '#CDE:NUMERO' dans bon_anticipation_JJ_MM.txt."""
-    marqueurs = set()
-    for ligne in contenu_jour.splitlines():
-        m = ac._RE_MARQUEUR_CDE.match(ligne.strip())
-        if m:
-            marqueurs.add(m.group(1))
-    return marqueurs
-
-
 def _parser_args(argv):
     valeurs = {}
     for nom in ("--numero", "--jour", "--mois"):
@@ -76,7 +66,7 @@ def main():
     nom_jour = f"bon_anticipation_{dossier_jj_mm}.txt"
 
     contenu_jour = _telecharger_texte_dossier(drive_svc, folder_id, nom_jour) or ""
-    deja_assemblees = _commandes_deja_assemblees(contenu_jour)
+    deja_assemblees = ac._commandes_deja_assemblees(contenu_jour)
 
     # Ne se fie pas uniquement a --numero : le concurrency group GitHub
     # Actions de ce workflow (anticipation_assemble, cancel-in-progress:
