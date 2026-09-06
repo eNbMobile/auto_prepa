@@ -1,24 +1,34 @@
 #!/usr/bin/env python3
 """
-Script de rattrapage a usage unique : le 05/09/2026 vers 13h46, les fichiers
-de config gencod_adresses.csv et gencod_nomenclatures.csv ont ete convertis
-en Google Sheets natifs sur Drive (cf. reparer_config_csv.py), rendant leur
-telechargement impossible (HTTP 403 "Only files with binary content can be
-downloaded"). Consequence : entre 2026-09-05T11:55 et 2026-09-06T09:19
-(bug corrige), toutes les commandes recues ont bien ete confirmees par email
-(et leur email marque comme "traite" cote Gmail), mais leur bon_prepa n'a
-jamais ete genere, faute de ces deux CSV.
+Script de rattrapage a usage unique, incident du 05-06/09/2026 :
 
-Ce script retelecharge le PDF joint a l'email de confirmation de chacune des
-commandes touchees (liste ci-dessous, etablie a partir de
-auto_prepa_state.json et des emails Gmail label BDC_Conf_Traites recus
-depuis le 05/09) et relance leur generation via auto_prepa.traiter_commande_pdf,
-exactement comme le ferait un run normal.
+1) Le 05/09 vers 13h46, gencod_adresses.csv et gencod_nomenclatures.csv ont
+   ete convertis en Google Sheets natifs sur Drive, rendant leur
+   telechargement impossible (403). Consequence : de 11h55 (05/09) a 09h19
+   (06/09), plus aucun bon_prepa n'etait genere.
+2) Une fois le mimetype/separateur corriges (a la main), un second probleme
+   est apparu : gencod_nomenclatures.csv ne permettait plus de retrouver la
+   bonne adresse de rayon (le %d scanne dans prepa_drive_degrade retombait a
+   0), produisant des dizaines d'anomalies d'adressage par commande au lieu
+   de 1-3 normalement. Corrige en reuploadant les anciennes versions valides
+   de tous les CSV de config.
 
-A executer une seule fois, apres avoir remis gencod_adresses.csv et
-gencod_nomenclatures.csv en CSV plat sur Drive (reparer_config_csv.py).
-Idempotent : toute commande deja presente dans l'historique
-(auto_prepa_state.json) est ignoree.
+Toutes les commandes recues entre le dernier bon_prepa correctement genere
+(N° cde 54604128, 05/09 11h30) et maintenant ont donc pu etre traitees avec
+des donnees d'adressage corrompues (echec pur et simple, ou bon_prepa genere
+mais avec des adresses fausses). Ce script les identifie dynamiquement
+(recherche Gmail, pas de liste figee) et regenere leur bon_prepa avec les
+CSV desormais corrects - y compris celles deja presentes dans l'historique
+auto_prepa_state.json, puisque leur premier passage a pu produire un bon
+errone.
+
+Pour eviter de dupliquer les lignes de suivi (LIVRAISON DRIVE 2026, Avoir/
+Commandes en cours) sur les commandes deja traitees une premiere fois
+aujourd'hui, chaque commande voit sa ligne existante nettoyee (si presente)
+juste avant d'etre regeneree.
+
+A executer une seule fois, apres verification que gencod_adresses.csv et
+gencod_nomenclatures.csv sont a nouveau corrects sur Drive.
 """
 import base64
 import os
@@ -29,32 +39,66 @@ from googleapiclient.discovery import build
 
 import auto_prepa as ap
 
-# Commandes confirmees par email pendant la panne (05/09 11h55 -> 06/09
-# 09h19) mais jamais preparees. 54607056 est volontairement exclue : elle a
-# ete annulee et remplacee par la commande 54608063 (email de modification
-# client recu le 05/09 a 13h31), elle ne doit donc pas etre preparee.
-COMMANDES_A_RATTRAPER = [
-    "54604892", "54605523", "54605525", "54605547", "54605800", "54605807",
-    "54605876", "54606498", "54606594", "54606725", "54606840", "54607632",
-    "54607773", "54607918", "54608063", "54608210", "54608287", "54608611",
-    "54608662", "54608905", "54608973", "54609954", "54610040", "54611850",
-    "54612961", "54612981", "54613264", "54613615", "54614254", "54614392",
-]
+SEUIL_NUMERO = 54604128  # dernier BonDeCommande genere correctement avant l'incident
+DATE_RECHERCHE = "2026/09/05"
 
 
-def _telecharger_confirmation(gmail_svc, numero):
-    """Retrouve l'email de confirmation deja recu pour ce numero de commande
-    et telecharge son bon_encaissement.pdf dans CACHE_DIR. Retourne
-    (dossier_jj_mm, dossier_mm_aaaa) ou None si introuvable."""
-    q = f'from:{ap.GMAIL_CONF_FROM} subject:"{ap.GMAIL_CONF_SUBJECT}" "N° cde:{numero}"'
-    res = gmail_svc.users().messages().list(userId='me', q=q, maxResults=5).execute()
-    messages = res.get('messages', [])
-    if not messages:
-        print(f"  [{numero}] email de confirmation introuvable, ignore.")
-        return None
+def _lister_messages(gmail_svc, query):
+    """Pagine sur l'API Gmail et retourne tous les message id correspondant a `query`."""
+    ids = []
+    page_token = None
+    while True:
+        res = gmail_svc.users().messages().list(
+            userId='me', q=query, maxResults=100, pageToken=page_token).execute()
+        ids += [m['id'] for m in res.get('messages', [])]
+        page_token = res.get('nextPageToken')
+        if not page_token:
+            break
+    return ids
 
+
+def _sujet(gmail_svc, message_id):
     msg = gmail_svc.users().messages().get(
-        userId='me', id=messages[0]['id'], format='full').execute()
+        userId='me', id=message_id, format='metadata', metadataHeaders=['Subject']).execute()
+    return next((h['value'] for h in msg['payload']['headers'] if h['name'] == 'Subject'), '')
+
+
+def _lister_confirmations_a_rattraper(gmail_svc):
+    """Retourne {numero: message_id} pour toutes les confirmations recues
+    depuis DATE_RECHERCHE avec numero > SEUIL_NUMERO."""
+    q = f'from:{ap.GMAIL_CONF_FROM} subject:"{ap.GMAIL_CONF_SUBJECT}" after:{DATE_RECHERCHE}'
+    resultats = {}
+    for message_id in _lister_messages(gmail_svc, q):
+        match = re.search(r'N°\s*cde:(\d+)', _sujet(gmail_svc, message_id))
+        if not match:
+            continue
+        numero = int(match.group(1))
+        if numero > SEUIL_NUMERO:
+            resultats[numero] = message_id
+    return resultats
+
+
+def _lister_commandes_exclues(gmail_svc):
+    """Numeros de commande annules/remplaces depuis DATE_RECHERCHE : a ne pas
+    (re)generer, la version valable est celle qui les remplace."""
+    exclus = set()
+    for sujet_filtre in ap.GMAIL_MODIF_SUBJECTS:
+        q = f'subject:"{sujet_filtre}" after:{DATE_RECHERCHE}'
+        for message_id in _lister_messages(gmail_svc, q):
+            subject = _sujet(gmail_svc, message_id)
+            match_modif = re.search(r'N°\s*cde:(\d+).*?N°\s*cde:(\d+)', subject)
+            match_annul = re.search(r'N°\s*:\s*(\d+)', subject)
+            if match_modif:
+                exclus.add(int(match_modif.group(1)))
+            elif match_annul:
+                exclus.add(int(match_annul.group(1)))
+    return exclus
+
+
+def _telecharger_pdf(gmail_svc, numero, message_id):
+    """Telecharge le bon_encaissement.pdf de `message_id` dans CACHE_DIR.
+    Retourne (dossier_jj_mm, dossier_mm_aaaa) ou None si introuvable."""
+    msg = gmail_svc.users().messages().get(userId='me', id=message_id, format='full').execute()
     headers = {h['name']: h['value'] for h in msg['payload'].get('headers', [])}
     subject = headers.get('Subject', '')
 
@@ -75,7 +119,7 @@ def _telecharger_confirmation(gmail_svc, numero):
     cache_path = os.path.join(ap.CACHE_DIR, filename)
     if not os.path.exists(cache_path):
         att = gmail_svc.users().messages().attachments().get(
-            userId='me', messageId=messages[0]['id'], id=attachment_id).execute()
+            userId='me', messageId=message_id, id=attachment_id).execute()
         pdf_bytes = base64.urlsafe_b64decode(att['data'] + '==')
         with open(cache_path, 'wb') as f:
             f.write(pdf_bytes)
@@ -96,20 +140,31 @@ def main():
     ap._charger_gmail_filters(drive_svc)
     ap.telecharger_config_drive(drive_svc)
 
+    confirmations = _lister_confirmations_a_rattraper(gmail_svc)
+    exclus = _lister_commandes_exclues(gmail_svc)
+    a_traiter = sorted(n for n in confirmations if n not in exclus)
+
+    print(f"{len(confirmations)} confirmation(s) > {SEUIL_NUMERO} trouvee(s), "
+          f"{len(exclus & confirmations.keys())} exclue(s) (annulee/remplacee), "
+          f"{len(a_traiter)} a regenerer.")
+
     traites = ap.charger_traites(drive_svc)
     processed = set()
     shopopop_token, shopopop_drive_id, shopopop_connecte = None, None, False
 
-    for numero in COMMANDES_A_RATTRAPER:
+    for numero in a_traiter:
         pdf = f"BonDeCommande_{numero}.pdf"
-        if pdf in traites:
-            print(f"  [{numero}] deja dans l'historique, ignore.")
-            continue
-
-        dossiers = _telecharger_confirmation(gmail_svc, numero)
+        dossiers = _telecharger_pdf(gmail_svc, numero, confirmations[numero])
         if dossiers is None:
             continue
         dossier_jj_mm, dossier_mm_aaaa = dossiers
+
+        # Deja traitee une premiere fois aujourd'hui (avec des donnees
+        # corrompues) : nettoie ses lignes de suivi avant de regenerer, pour
+        # ne pas les dupliquer. No-op si la commande n'avait pas encore ete
+        # traitee (pas de ligne existante).
+        ap._traiter_annulation_livraison(drive_svc, sheets_svc, str(numero))
+        ap.supprimer_commande_avoir_drive(drive_svc, str(numero))
 
         statut, shopopop_token, shopopop_drive_id, shopopop_connecte = ap.traiter_commande_pdf(
             drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, dossier_mm_aaaa,
@@ -117,7 +172,7 @@ def main():
 
         if statut == "stop":
             print("ARRET : gencod_adresses.csv / gencod_nomenclatures.csv toujours indisponibles"
-                  " (executer reparer_config_csv.py avant ce script).")
+                  " ou invalides.")
             ap.sauvegarder_traites(drive_svc, traites | processed)
             sys.exit(1)
         if statut == "processed":
@@ -126,7 +181,7 @@ def main():
             print(f"  [{numero}] echec de generation, a retenter manuellement.")
 
     ap.sauvegarder_traites(drive_svc, traites | processed)
-    print(f"\n{len(processed)}/{len(COMMANDES_A_RATTRAPER)} commande(s) rattrapee(s).")
+    print(f"\n{len(processed)}/{len(a_traiter)} commande(s) regeneree(s).")
 
 
 if __name__ == "__main__":
