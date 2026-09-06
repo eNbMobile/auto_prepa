@@ -28,6 +28,7 @@ _BASE = os.path.dirname(os.path.abspath(__file__))
 WORK_DIR  = os.environ.get("WORK_DIR",  os.path.join(_BASE, "v 4.0.0"))
 CACHE_DIR = os.environ.get("CACHE_DIR", os.path.join(_BASE, "pdf_cache"))
 BDC_DIR   = os.environ.get("BDC_DIR",   os.path.join(_BASE, "BDC"))
+DEBUG_RAW_DIR = os.environ.get("DEBUG_RAW_DIR")  # si defini, dump diagnostic de la sortie brute de prepa_drive_degrade
 TOKEN_FILE = os.path.expanduser("~/.auto_prepa_token.json")
 CREDS_FILE = os.path.expanduser("~/.auto_prepa_credentials.json")
 LOG_CONTROLE_FILENAME = "controle_articles.log"
@@ -1396,6 +1397,16 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
     print(f"  [{order_num}] Generation...", end="", flush=True)
     r = subprocess.run(["./prepa_drive_degrade"], cwd=WORK_DIR,
                        capture_output=True, text=True, timeout=120)
+
+    if DEBUG_RAW_DIR:
+        os.makedirs(DEBUG_RAW_DIR, exist_ok=True)
+        for src_name in ["bon_prepa.txt", "log_gencod.txt", "bon_encaissement.csv"]:
+            src_f = os.path.join(WORK_DIR, src_name)
+            if os.path.exists(src_f):
+                shutil.copy2(src_f, os.path.join(DEBUG_RAW_DIR, f"{order_num}_{src_name}"))
+        with open(os.path.join(DEBUG_RAW_DIR, f"{order_num}_stdout_stderr.txt"), "w", encoding="utf-8") as _f:
+            _f.write(f"returncode={r.returncode}\n\n--- stdout ---\n{r.stdout}\n\n--- stderr ---\n{r.stderr}\n")
+
     if r.returncode != 0:
         print(f" ERREUR (code {r.returncode})")
         if r.stdout: print(f"    stdout : {r.stdout[:300]}")
