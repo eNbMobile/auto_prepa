@@ -1370,6 +1370,195 @@ def _charger_config(drive_svc):
         print(f"ERREUR chargement config Drive : {e}")
         sys.exit(1)
 
+def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, dossier_mm_aaaa,
+                          heure_cron, shopopop_token, shopopop_drive_id, shopopop_connecte):
+    """Genere le bon_prepa/bon_anticipation d'un BonDeCommande_NUMERO.pdf deja
+    present dans CACHE_DIR, l'archive/upload sur Drive, gere livraison/Shopopop
+    et les anomalies.
+
+    Retourne (statut, shopopop_token, shopopop_drive_id, shopopop_connecte) ou
+    statut vaut :
+      "stop"      : gencod_adresses/nomenclatures indisponibles, l'appelant
+                    doit arreter le traitement des commandes suivantes.
+      "processed" : le pdf est considere traite (succes ou echec definitif).
+      "retry"     : echec du binaire de generation, a retenter plus tard.
+    """
+    order_num = pdf.removeprefix("BonDeCommande_").removesuffix(".pdf")
+
+    bdc_subdir = os.path.join(BDC_DIR, dossier_jj_mm) if dossier_jj_mm else BDC_DIR
+    os.makedirs(bdc_subdir, exist_ok=True)
+    bdc_dst = os.path.join(bdc_subdir, pdf)
+    cache_path = os.path.join(CACHE_DIR, pdf)
+    if not os.path.exists(bdc_dst):
+        shutil.copy2(cache_path, bdc_dst)
+    if dossier_jj_mm:
+        archiver_pdf_drive(drive_svc, cache_path, dossier_jj_mm, dossier_mm_aaaa)
+
+    for fname in [
+        "bon_prepa.txt", "bon_anticipation.txt",
+        "bon_prepa_NEW.txt", "bon_prepa_dlc.txt",
+        "bon_encaissement.pdf", "bon_encaissement.csv", "bon_encaissement_NEW.csv",
+        "base_client.txt", "tri_cde.txt", "tri_heures.txt",
+        "tmp", "tmp2", "tmp_NEW", "temp", "gentemp.txt", "temp_lib.txt",
+    ]:
+        fpath = os.path.join(WORK_DIR, fname)
+        if os.path.exists(fpath):
+            os.remove(fpath)
+
+    shutil.copy2(cache_path, os.path.join(WORK_DIR, pdf))
+
+    for csv_requis in ["gencod_adresses.csv", "gencod_nomenclatures.csv"]:
+        fpath = os.path.join(WORK_DIR, csv_requis)
+        if not os.path.exists(fpath) or os.path.getsize(fpath) == 0:
+            print(f"  ERREUR CRITIQUE : {csv_requis} absent ou vide dans {WORK_DIR}")
+            return "stop", shopopop_token, shopopop_drive_id, shopopop_connecte
+
+    pdf_path = os.path.join(WORK_DIR, pdf)
+    pt = subprocess.run(["pdftotext", "-layout", pdf_path, "-"],
+                        capture_output=True, text=True)
+    if not pt.stdout.strip():
+        print(f"  ECHEC pdftotext - PDF vide ou non lisible : {pdf}")
+        os.remove(pdf_path)
+        return "processed", shopopop_token, shopopop_drive_id, shopopop_connecte
+
+    articles_pdf, produits_pdf = extraire_articles_produits_pdf(pt.stdout)
+
+    montant_pdf = ""
+    for _ligne in pt.stdout.splitlines():
+        if "Montant initial" in _ligne:
+            _m = re.search(r'(\d+[.,]\d+)', _ligne)
+            if _m:
+                montant_pdf = _m.group(1).replace(',', '.')
+            break
+
+    heure_pdf = heure_cron
+    for _ligne in pt.stdout.splitlines():
+        _m = re.search(r'[Gg]énéré le \d{2}/\d{2}/\d{4} à (\d{1,2}):(\d{2})', _ligne)
+        if _m:
+            heure_pdf = f"{int(_m.group(1)):02d}h{_m.group(2)}"
+            break
+
+    print(f"  [{order_num}] Generation...", end="", flush=True)
+    r = subprocess.run(["./prepa_drive_degrade"], cwd=WORK_DIR,
+                       capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        print(f" ERREUR (code {r.returncode})")
+        if r.stdout: print(f"    stdout : {r.stdout[:300]}")
+        if r.stderr: print(f"    stderr : {r.stderr[:300]}")
+        p = os.path.join(WORK_DIR, pdf)
+        if os.path.exists(p):
+            os.remove(p)
+        return "retry", shopopop_token, shopopop_drive_id, shopopop_connecte
+
+    bon_prepa_path = os.path.join(WORK_DIR, "bon_prepa.txt")
+    if not os.path.exists(bon_prepa_path) or os.path.getsize(bon_prepa_path) == 0:
+        print(f" VIDE - bon_prepa.txt absent ou vide")
+        if r.stdout: print(f"    sortie C++ : {r.stdout[:300]}")
+        return "processed", shopopop_token, shopopop_drive_id, shopopop_connecte
+    print(" OK")
+
+    civilite, nom, prenom, date_cde, creneau = extraire_client_creneau_pdf(pt.stdout)
+    inscrire_commande_avoir_drive(drive_svc, civilite, order_num, nom, prenom, date_cde, creneau)
+
+    avertissements_nomenclature = [
+        ligne.rstrip('\n')
+        for ligne in r.stdout.splitlines()
+        if "ne fait pas partie du chemin de" in ligne
+    ]
+    avertissements_inconnues = [
+        ligne.rstrip('\n')
+        for ligne in r.stdout.splitlines()
+        if "Aucune adresse ni aucune nomenclature" in ligne
+    ]
+    if avertissements_nomenclature or avertissements_inconnues:
+        total = len(avertissements_nomenclature) + len(avertissements_inconnues)
+        print(f"    {total} anomalie(s) d'adressage detectee(s) dans chemin_prepa_mono "
+              f"({len(avertissements_nomenclature)} replacee(s) via nomenclature, "
+              f"{len(avertissements_inconnues)} adresse inconnue)")
+        _envoyer_email_adresses_manquantes(
+            gmail_svc, order_num, avertissements_nomenclature, avertissements_inconnues)
+
+    with open(bon_prepa_path, 'r', encoding='utf-8') as f:
+        lignes = f.readlines()
+
+    if len(lignes) > 1 and ',Livraison,' in lignes[1]:
+        if not shopopop_connecte:
+            shopopop_token, shopopop_drive_id = livraison_drive.connecter_shopopop(drive_svc)
+            shopopop_connecte = True
+        km_manquant = livraison_drive.traiter_commande_livraison(
+            sheets_svc, LIVRAISON_SPREADSHEET_ID, nom, prenom, date_cde, numero_commande=order_num,
+            shopopop_token=shopopop_token, shopopop_drive_id=shopopop_drive_id)
+        if km_manquant:
+            _envoyer_email_km_manquant(gmail_svc, order_num, nom, prenom, date_cde)
+
+    if lignes:
+        if montant_pdf:
+            lignes[0] = lignes[0].rstrip('\n') + ',' + montant_pdf
+        lignes[0] = lignes[0].rstrip('\n') + ',' + heure_pdf + '\n'
+        lignes[1:] = [re.sub(r'^(?:-\d+)?;(\d{13};)', r'\1', l) for l in lignes[1:]]
+    with open(bon_prepa_path, 'w', encoding='utf-8') as f:
+        f.writelines(lignes)
+
+    if articles_pdf is not None and produits_pdf is not None:
+        with open(bon_prepa_path, 'r', encoding='utf-8') as _f:
+            _entete = _f.readline().rstrip('\n')
+        _parts = _entete.split(',')
+        try:
+            articles_gen = int(_parts[2].strip())
+            produits_gen = int(_parts[3].strip())
+            if articles_gen != articles_pdf or produits_gen != produits_pdf:
+                log_ecart_drive(drive_svc, order_num,
+                                articles_pdf, produits_pdf,
+                                articles_gen, produits_gen)
+        except (IndexError, ValueError):
+            pass
+
+    lignes_invalides = []
+    with open(bon_prepa_path, 'r', encoding='utf-8') as _f:
+        for i, ligne in enumerate(_f, start=1):
+            if i == 1:
+                continue
+            if ligne.strip() and ligne.count(';') != 14:
+                lignes_invalides.append((i, ligne.count(';'), ligne.strip()))
+    if lignes_invalides:
+        details = '\n'.join(
+            f"  ligne {i} ({nb} separateurs) : {l[:120]}"
+            for i, nb, l in lignes_invalides
+        )
+        print(f" AVERTISSEMENT bon_prepa invalide ({len(lignes_invalides)} ligne(s)) :\n{details}")
+        log_ecart_drive(drive_svc, order_num,
+                        articles_pdf or 0, produits_pdf or 0,
+                        -1, -1)
+        _envoyer_email_anomalie_bon(gmail_svc, order_num, lignes_invalides)
+
+    for src_name, dst_name in [
+        ("bon_prepa.txt",        f"bon_prepa_{order_num}.txt"),
+        ("bon_anticipation.txt", f"bon_anticipation_{order_num}.txt"),
+    ]:
+        src_f = os.path.join(WORK_DIR, src_name)
+        dst_f = os.path.join(WORK_DIR, dst_name)
+        if os.path.exists(src_f):
+            os.rename(src_f, dst_f)
+
+    anticipation_dst = os.path.join(WORK_DIR, f"bon_anticipation_{order_num}.txt")
+    if os.path.exists(anticipation_dst) and os.path.getsize(anticipation_dst) > 0:
+        archiver_anticipation_drive(drive_svc, anticipation_dst, dossier_jj_mm, dossier_mm_aaaa)
+        declencher_assemblage_anticipation(order_num, dossier_jj_mm, dossier_mm_aaaa)
+
+    for fname in [f"bon_prepa_{order_num}.txt",
+                  f"bon_anticipation_{order_num}.txt"]:
+        fpath = os.path.join(WORK_DIR, fname)
+        if os.path.exists(fpath):
+            if upload_bon(drive_svc, fpath):
+                os.remove(fpath)
+
+    pdf_work = os.path.join(WORK_DIR, pdf)
+    if os.path.exists(pdf_work):
+        os.remove(pdf_work)
+
+    return "processed", shopopop_token, shopopop_drive_id, shopopop_connecte
+
+
 def _charger_gmail_filters(drive_svc):
     """Charge gmail_filters.json depuis Drive et initialise les globals Gmail."""
     global GMAIL_CONF_FROM, GMAIL_CONF_SUBJECT, GMAIL_LABEL_CONF
@@ -1464,186 +1653,13 @@ def _main():
     processed = set()
 
     for pdf, (dossier_jj_mm, dossier_mm_aaaa) in sorted(nouveaux.items()):
-        order_num = pdf.removeprefix("BonDeCommande_").removesuffix(".pdf")
-
-        bdc_subdir = os.path.join(BDC_DIR, dossier_jj_mm) if dossier_jj_mm else BDC_DIR
-        os.makedirs(bdc_subdir, exist_ok=True)
-        bdc_dst = os.path.join(bdc_subdir, pdf)
-        cache_path = os.path.join(CACHE_DIR, pdf)
-        if not os.path.exists(bdc_dst):
-            shutil.copy2(cache_path, bdc_dst)
-        if dossier_jj_mm:
-            archiver_pdf_drive(drive_svc, cache_path, dossier_jj_mm, dossier_mm_aaaa)
-
-        for fname in [
-            "bon_prepa.txt", "bon_anticipation.txt",
-            "bon_prepa_NEW.txt", "bon_prepa_dlc.txt",
-            "bon_encaissement.pdf", "bon_encaissement.csv", "bon_encaissement_NEW.csv",
-            "base_client.txt", "tri_cde.txt", "tri_heures.txt",
-            "tmp", "tmp2", "tmp_NEW", "temp", "gentemp.txt", "temp_lib.txt",
-        ]:
-            fpath = os.path.join(WORK_DIR, fname)
-            if os.path.exists(fpath):
-                os.remove(fpath)
-
-        shutil.copy2(cache_path, os.path.join(WORK_DIR, pdf))
-
-        _bases_ok = True
-        for csv_requis in ["gencod_adresses.csv", "gencod_nomenclatures.csv"]:
-            fpath = os.path.join(WORK_DIR, csv_requis)
-            if not os.path.exists(fpath) or os.path.getsize(fpath) == 0:
-                print(f"  ERREUR CRITIQUE : {csv_requis} absent ou vide dans {WORK_DIR}")
-                _bases_ok = False
-                break
-        if not _bases_ok:
+        statut, shopopop_token, shopopop_drive_id, shopopop_connecte = traiter_commande_pdf(
+            drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, dossier_mm_aaaa,
+            heure_cron, shopopop_token, shopopop_drive_id, shopopop_connecte)
+        if statut == "stop":
             break
-
-        pdf_path = os.path.join(WORK_DIR, pdf)
-        pt = subprocess.run(["pdftotext", "-layout", pdf_path, "-"],
-                            capture_output=True, text=True)
-        if not pt.stdout.strip():
-            print(f"  ECHEC pdftotext - PDF vide ou non lisible : {pdf}")
-            os.remove(pdf_path)
+        if statut == "processed":
             processed.add(pdf)
-            continue
-
-        articles_pdf, produits_pdf = extraire_articles_produits_pdf(pt.stdout)
-
-        montant_pdf = ""
-        for _ligne in pt.stdout.splitlines():
-            if "Montant initial" in _ligne:
-                _m = re.search(r'(\d+[.,]\d+)', _ligne)
-                if _m:
-                    montant_pdf = _m.group(1).replace(',', '.')
-                break
-
-        heure_pdf = heure_cron
-        for _ligne in pt.stdout.splitlines():
-            _m = re.search(r'[Gg]énéré le \d{2}/\d{2}/\d{4} à (\d{1,2}):(\d{2})', _ligne)
-            if _m:
-                heure_pdf = f"{int(_m.group(1)):02d}h{_m.group(2)}"
-                break
-
-        print(f"  [{order_num}] Generation...", end="", flush=True)
-        r = subprocess.run(["./prepa_drive_degrade"], cwd=WORK_DIR,
-                           capture_output=True, text=True, timeout=120)
-        if r.returncode != 0:
-            print(f" ERREUR (code {r.returncode})")
-            if r.stdout: print(f"    stdout : {r.stdout[:300]}")
-            if r.stderr: print(f"    stderr : {r.stderr[:300]}")
-            p = os.path.join(WORK_DIR, pdf)
-            if os.path.exists(p):
-                os.remove(p)
-            continue
-
-        bon_prepa_path = os.path.join(WORK_DIR, "bon_prepa.txt")
-        if not os.path.exists(bon_prepa_path) or os.path.getsize(bon_prepa_path) == 0:
-            print(f" VIDE - bon_prepa.txt absent ou vide")
-            if r.stdout: print(f"    sortie C++ : {r.stdout[:300]}")
-            processed.add(pdf)
-            continue
-        print(" OK")
-
-        civilite, nom, prenom, date_cde, creneau = extraire_client_creneau_pdf(pt.stdout)
-        inscrire_commande_avoir_drive(drive_svc, civilite, order_num, nom, prenom, date_cde, creneau)
-
-        avertissements_nomenclature = [
-            ligne.rstrip('\n')
-            for ligne in r.stdout.splitlines()
-            if "ne fait pas partie du chemin de" in ligne
-        ]
-        avertissements_inconnues = [
-            ligne.rstrip('\n')
-            for ligne in r.stdout.splitlines()
-            if "Aucune adresse ni aucune nomenclature" in ligne
-        ]
-        if avertissements_nomenclature or avertissements_inconnues:
-            total = len(avertissements_nomenclature) + len(avertissements_inconnues)
-            print(f"    {total} anomalie(s) d'adressage detectee(s) dans chemin_prepa_mono "
-                  f"({len(avertissements_nomenclature)} replacee(s) via nomenclature, "
-                  f"{len(avertissements_inconnues)} adresse inconnue)")
-            _envoyer_email_adresses_manquantes(
-                gmail_svc, order_num, avertissements_nomenclature, avertissements_inconnues)
-
-        with open(bon_prepa_path, 'r', encoding='utf-8') as f:
-            lignes = f.readlines()
-
-        if len(lignes) > 1 and ',Livraison,' in lignes[1]:
-            if not shopopop_connecte:
-                shopopop_token, shopopop_drive_id = livraison_drive.connecter_shopopop(drive_svc)
-                shopopop_connecte = True
-            km_manquant = livraison_drive.traiter_commande_livraison(
-                sheets_svc, LIVRAISON_SPREADSHEET_ID, nom, prenom, date_cde, numero_commande=order_num,
-                shopopop_token=shopopop_token, shopopop_drive_id=shopopop_drive_id)
-            if km_manquant:
-                _envoyer_email_km_manquant(gmail_svc, order_num, nom, prenom, date_cde)
-
-        if lignes:
-            if montant_pdf:
-                lignes[0] = lignes[0].rstrip('\n') + ',' + montant_pdf
-            lignes[0] = lignes[0].rstrip('\n') + ',' + heure_pdf + '\n'
-            lignes[1:] = [re.sub(r'^(?:-\d+)?;(\d{13};)', r'\1', l) for l in lignes[1:]]
-        with open(bon_prepa_path, 'w', encoding='utf-8') as f:
-            f.writelines(lignes)
-
-        if articles_pdf is not None and produits_pdf is not None:
-            with open(bon_prepa_path, 'r', encoding='utf-8') as _f:
-                _entete = _f.readline().rstrip('\n')
-            _parts = _entete.split(',')
-            try:
-                articles_gen = int(_parts[2].strip())
-                produits_gen = int(_parts[3].strip())
-                if articles_gen != articles_pdf or produits_gen != produits_pdf:
-                    log_ecart_drive(drive_svc, order_num,
-                                    articles_pdf, produits_pdf,
-                                    articles_gen, produits_gen)
-            except (IndexError, ValueError):
-                pass
-
-        lignes_invalides = []
-        with open(bon_prepa_path, 'r', encoding='utf-8') as _f:
-            for i, ligne in enumerate(_f, start=1):
-                if i == 1:
-                    continue
-                if ligne.strip() and ligne.count(';') != 14:
-                    lignes_invalides.append((i, ligne.count(';'), ligne.strip()))
-        if lignes_invalides:
-            details = '\n'.join(
-                f"  ligne {i} ({nb} separateurs) : {l[:120]}"
-                for i, nb, l in lignes_invalides
-            )
-            print(f" AVERTISSEMENT bon_prepa invalide ({len(lignes_invalides)} ligne(s)) :\n{details}")
-            log_ecart_drive(drive_svc, order_num,
-                            articles_pdf or 0, produits_pdf or 0,
-                            -1, -1)
-            _envoyer_email_anomalie_bon(gmail_svc, order_num, lignes_invalides)
-
-        for src_name, dst_name in [
-            ("bon_prepa.txt",        f"bon_prepa_{order_num}.txt"),
-            ("bon_anticipation.txt", f"bon_anticipation_{order_num}.txt"),
-        ]:
-            src_f = os.path.join(WORK_DIR, src_name)
-            dst_f = os.path.join(WORK_DIR, dst_name)
-            if os.path.exists(src_f):
-                os.rename(src_f, dst_f)
-
-        anticipation_dst = os.path.join(WORK_DIR, f"bon_anticipation_{order_num}.txt")
-        if os.path.exists(anticipation_dst) and os.path.getsize(anticipation_dst) > 0:
-            archiver_anticipation_drive(drive_svc, anticipation_dst, dossier_jj_mm, dossier_mm_aaaa)
-            declencher_assemblage_anticipation(order_num, dossier_jj_mm, dossier_mm_aaaa)
-
-        for fname in [f"bon_prepa_{order_num}.txt",
-                      f"bon_anticipation_{order_num}.txt"]:
-            fpath = os.path.join(WORK_DIR, fname)
-            if os.path.exists(fpath):
-                if upload_bon(drive_svc, fpath):
-                    os.remove(fpath)
-
-        pdf_work = os.path.join(WORK_DIR, pdf)
-        if os.path.exists(pdf_work):
-            os.remove(pdf_work)
-
-        processed.add(pdf)
 
     sauvegarder_traites(drive_svc, traites | processed)
 
