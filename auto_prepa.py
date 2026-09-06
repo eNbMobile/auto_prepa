@@ -1351,6 +1351,15 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
         if os.path.exists(fpath):
             os.remove(fpath)
 
+    # prepa_drive_degrade compte les .pdf presents dans WORK_DIR (nb_files_def)
+    # pour decider s'il tourne en mode MONO (1 fichier) ou RAMASSE (plusieurs) :
+    # un .pdf residuel d'une commande precedente (ex. bon_prepa.txt vide/absent
+    # n'entraine pas toujours son nettoyage) le ferait basculer a tort en
+    # RAMASSE et fausserait le matching d'adresse de la commande courante.
+    for fname in os.listdir(WORK_DIR):
+        if fname.lower().endswith(".pdf"):
+            os.remove(os.path.join(WORK_DIR, fname))
+
     shutil.copy2(cache_path, os.path.join(WORK_DIR, pdf))
 
     for csv_requis in ["gencod_adresses.csv", "gencod_nomenclatures.csv"]:
