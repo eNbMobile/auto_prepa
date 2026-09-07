@@ -172,14 +172,19 @@ def _lister_bons_commande(drive_svc, jour_id):
     return resultat
 
 
-def _telecharger_photo(gencod, cache):
+def _telecharger_photo(gencod, cache, erreurs=None):
     """Recupere la photo produit (jpg ou png) depuis enbmobile.nl/mobUDrive/visuels/.
 
     Retourne les octets de l'image, ou None si introuvable. Resultat mis en
     cache par gencod pour eviter de re-telecharger le meme visuel plusieurs
-    fois dans un meme PDF."""
+    fois dans un meme PDF. Si erreurs est fourni, la derniere exception
+    rencontree pour ce gencod y est ajoutee (diagnostic : sans ca, une photo
+    manquante est indistinguable en sortie qu'il s'agisse d'un visuel
+    inexistant ou d'une panne reseau/serveur - les deux sont avales ici en
+    silence pour ne jamais faire echouer la generation du PDF)."""
     if gencod in cache:
         return cache[gencod]
+    derniere_erreur = None
     for ext in _PHOTO_EXTENSIONS:
         url = f"{_VISUELS_BASE_URL}{gencod}{ext}"
         try:
@@ -188,9 +193,12 @@ def _telecharger_photo(gencod, cache):
                 data = resp.read()
             cache[gencod] = data
             return data
-        except Exception:
+        except Exception as e:
+            derniere_erreur = e
             continue
     cache[gencod] = None
+    if erreurs is not None and derniere_erreur is not None:
+        erreurs.append(f"{gencod} : {derniere_erreur}")
     return None
 
 
@@ -363,13 +371,16 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
         data = [hdr]
 
         cache_photos = {}
+        erreurs_photos = []
+        photos_trouvees = 0
         span_rows = []
         for g in groupes:
             gencod = g['gencod']
 
             photo_cell = ''
-            photo_bytes = _telecharger_photo(gencod, cache_photos) if gencod else None
+            photo_bytes = _telecharger_photo(gencod, cache_photos, erreurs_photos) if gencod else None
             if photo_bytes:
+                photos_trouvees += 1
                 try:
                     photo_cell = RLImage(io.BytesIO(photo_bytes), width=18 * mm, height=18 * mm, kind='bound')
                 except Exception:
@@ -487,7 +498,11 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
         table.setStyle(style)
         elements.append(table)
         print(f"  {nom_rayon} (lettre {lettre}) : {len(groupes)} produit(s), "
-              f"{len(produits)} ligne(s) commande")
+              f"{len(produits)} ligne(s) commande, "
+              f"{photos_trouvees}/{len(groupes)} photo(s) trouvee(s)")
+        if erreurs_photos:
+            print(f"    Photo(s) manquante(s) sur {_VISUELS_BASE_URL} "
+                  f"- exemple d'erreur : {erreurs_photos[0]}")
         return elements
 
     nom_pdf = f"anticipation_{dossier_jj_mm}.pdf"
