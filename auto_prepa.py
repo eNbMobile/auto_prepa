@@ -12,7 +12,7 @@ import csv
 import tempfile
 import fcntl
 import urllib.request
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 _TZ = ZoneInfo("Europe/Paris")
 
@@ -264,10 +264,23 @@ def _traiter_commande_potentiellement_anticipee(drive_svc, gmail_svc, numero, nu
     (marqueur Drive + dispatch async, cf. declencher_retrait_anticipation) —
     pour qu'une commande annulee ne soit plus jamais preparee ni visible dans
     l'anticipation, meme quand l'assemblage a eu lieu avant l'annulation.
-    Sans date de livraison exploitable (email introuvable ou sujet sans
-    date), ne fait rien : impossible de savoir quel dossier nettoyer."""
+    L'inscription au registre des annulations (enregistrer_commande_annulee)
+    est faite en premier et sans condition : c'est la seule protection qui ne
+    depend pas de la date de livraison, et donc la seule qui couvre le cas ou
+    l'annulation arrive avant meme que la commande n'ait ete traitee.
+    Sans date de livraison exploitable (email de confirmation introuvable —
+    typiquement pas encore traite — et aucun bon d'anticipation deja archive),
+    le nettoyage du brouillon du jour est impossible faute de savoir quel
+    dossier viser : le registre prend alors le relais, cote assemblage."""
+    enregistrer_commande_annulee(drive_svc, numero)
+
     _, dossier_jj_mm, dossier_mm_aaaa = _infos_email_original(gmail_svc, numero)
     if not dossier_jj_mm or not dossier_mm_aaaa:
+        dossier_jj_mm, dossier_mm_aaaa = _dossier_jour_anticipation_du_numero(drive_svc, numero)
+    if not dossier_jj_mm or not dossier_mm_aaaa:
+        print(f"    Date de livraison de {numero} inconnue : nettoyage du brouillon "
+              f"d'anticipation reporte (registre des annulations pris en compte "
+              f"a l'assemblage).")
         return
 
     contenu_antici = _telecharger_anticipation_drive(drive_svc, numero)
@@ -790,6 +803,202 @@ def _uploader_annulation_drive(drive_svc, numero):
     except Exception as e:
         print(f"    Upload annulation {nom_fichier} echoue : {e}")
         raise
+
+
+# ---------------------------------------------------------------------------
+# Registre persistant des commandes annulees / remplacees
+# ---------------------------------------------------------------------------
+# Fichier Drive GITHUB/Annulations/commandes_annulees.txt : une ligne
+# "NUMERO;AAAA-MM-JJ" par commande annulee ou remplacee, purgee au-dela de
+# _RETENTION_ANNULATIONS_JOURS.
+#
+# Pourquoi ce registre, en plus des marqueurs annuler_anticipation_NUMERO.txt
+# deposes dans le dossier du jour : ces marqueurs supposent qu'on connaisse la
+# DATE DE LIVRAISON de la commande annulee, lue dans le sujet de son email de
+# confirmation d'origine (_infos_email_original). Or cet email n'est pas
+# toujours deja traite quand l'annulation arrive : un client qui modifie sa
+# commande dans la foulee genere le mail de modification AVANT que
+# telecharger_bons_email n'ait traite la confirmation initiale — et
+# traiter_modifications_clients tourne avant telecharger_bons_email dans
+# main(). Dans ce cas l'ancienne version n'a aucun marqueur possible, puis
+# elle est traitee normalement quelques lignes plus bas : son bon
+# d'anticipation est genere et assemble APRES son annulation, ce qui la fait
+# apparaitre en double (ancien + nouveau numero) dans l'anticipation du jour.
+# Le registre, lui, ne depend d'aucune date : il est consulte avant tout
+# traitement de commande (main) et a chaque etape de l'anticipation
+# (assemblage, retrait, envoi), quel que soit l'ordre d'arrivee des emails.
+_RETENTION_ANNULATIONS_JOURS = 60
+_FICHIER_ANNULATIONS = "commandes_annulees.txt"
+
+
+def _dossier_annulations(drive_svc, creer=True):
+    """Retourne l'ID du dossier Drive GITHUB/Annulations (cree si besoin)."""
+    try:
+        if creer:
+            github_id = _get_or_create_subfolder(drive_svc, "root", "GITHUB")
+            if not github_id:
+                return None
+            return _get_or_create_subfolder(drive_svc, github_id, "Annulations")
+        parent = "root"
+        for nom in ("GITHUB", "Annulations"):
+            res = drive_svc.files().list(
+                q=(f"name='{nom}' and '{parent}' in parents "
+                   f"and mimeType='application/vnd.google-apps.folder' and trashed=false"),
+                fields="files(id)",
+            ).execute()
+            files = res.get("files", [])
+            if not files:
+                return None
+            parent = files[0]["id"]
+        return parent
+    except Exception as e:
+        print(f"    Dossier Drive GITHUB/Annulations introuvable : {e}")
+        return None
+
+
+def _lire_registre_annulations(drive_svc, creer=False):
+    """Retourne ({numero: 'AAAA-MM-JJ'}, file_id ou None) du registre Drive."""
+    folder_id = _dossier_annulations(drive_svc, creer=creer)
+    if not folder_id:
+        return {}, None
+    try:
+        res = drive_svc.files().list(
+            q=(f"name='{_FICHIER_ANNULATIONS}' and '{folder_id}' in parents "
+               f"and trashed=false"),
+            fields="files(id)",
+        ).execute()
+        files = res.get("files", [])
+        if not files:
+            return {}, None
+        buf = io.BytesIO()
+        dl = MediaIoBaseDownload(buf, drive_svc.files().get_media(fileId=files[0]["id"]))
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        contenu = buf.getvalue().decode("utf-8", errors="replace")
+        registre = {}
+        for ligne in contenu.splitlines():
+            ligne = ligne.strip()
+            if not ligne:
+                continue
+            numero, _, jour = ligne.partition(";")
+            numero = numero.strip()
+            if numero:
+                registre[numero] = jour.strip()
+        return registre, files[0]["id"]
+    except Exception as e:
+        print(f"    Lecture {_FICHIER_ANNULATIONS} echouee : {e}")
+        return {}, None
+
+
+def _ecrire_registre_annulations(drive_svc, registre, file_id):
+    """(Re)ecrit le registre Drive, purge des entrees trop anciennes."""
+    limite = (datetime.now(_TZ).date() - timedelta(days=_RETENTION_ANNULATIONS_JOURS)).isoformat()
+    lignes = [f"{num};{jour}" for num, jour in sorted(registre.items())
+              if not jour or jour >= limite]
+    contenu = "\n".join(lignes) + "\n"
+
+    folder_id = _dossier_annulations(drive_svc, creer=True)
+    if not folder_id:
+        return False
+    os.makedirs(WORK_DIR, exist_ok=True)
+    chemin = os.path.join(WORK_DIR, _FICHIER_ANNULATIONS)
+    with open(chemin, "w", encoding="utf-8") as f:
+        f.write(contenu)
+    try:
+        media = MediaFileUpload(chemin, mimetype="text/plain", resumable=False)
+        if file_id:
+            drive_svc.files().update(fileId=file_id, media_body=media).execute()
+        else:
+            drive_svc.files().create(
+                body={"name": _FICHIER_ANNULATIONS, "parents": [folder_id]},
+                media_body=media, fields="id",
+            ).execute()
+        return True
+    except Exception as e:
+        print(f"    Ecriture {_FICHIER_ANNULATIONS} echouee : {e}")
+        return False
+    finally:
+        if os.path.exists(chemin):
+            os.remove(chemin)
+
+
+def enregistrer_commande_annulee(drive_svc, numero):
+    """Inscrit definitivement (fenetre de retention) la commande annulee ou
+    remplacee dans le registre Drive, pour qu'elle ne soit plus jamais
+    traitee ni anticipee, meme si son email de confirmation n'a pas encore
+    ete traite au moment de l'annulation."""
+    try:
+        registre, file_id = _lire_registre_annulations(drive_svc, creer=True)
+        if numero in registre:
+            return
+        registre[numero] = datetime.now(_TZ).date().isoformat()
+        if _ecrire_registre_annulations(drive_svc, registre, file_id):
+            print(f"    Commande {numero} inscrite au registre des annulations.")
+    except Exception as e:
+        print(f"    Inscription de {numero} au registre des annulations echouee : {e}")
+
+
+def commandes_annulees(drive_svc):
+    """Numeros des commandes annulees/remplacees encore dans la fenetre de
+    retention. Set vide si le registre est illisible (on retombe alors sur le
+    comportement d'avant : aucun filtrage)."""
+    registre, _ = _lire_registre_annulations(drive_svc)
+    limite = (datetime.now(_TZ).date() - timedelta(days=_RETENTION_ANNULATIONS_JOURS)).isoformat()
+    return {num for num, jour in registre.items() if not jour or jour >= limite}
+
+
+def _ecarter_commandes_annulees(drive_svc, nouveaux):
+    """Retire des commandes a traiter celles deja annulees/remplacees (leur
+    email de confirmation etait encore non traite quand l'annulation est
+    arrivee). Sans ce filtre, la commande annulee serait preparee et anticipee
+    apres coup — c'est ce qui laissait ancien et nouveau numero en double dans
+    l'anticipation apres une modification de commande."""
+    if not nouveaux:
+        return nouveaux
+    annulees = commandes_annulees(drive_svc)
+    if not annulees:
+        return nouveaux
+    retenus = {}
+    for pdf, infos in nouveaux.items():
+        numero = pdf.removeprefix("BonDeCommande_").removesuffix(".pdf")
+        if numero in annulees:
+            print(f"  Commande {numero} annulee/remplacee : traitement ignore "
+                  f"(registre des annulations).")
+            cache_path = os.path.join(CACHE_DIR, pdf)
+            if os.path.exists(cache_path):
+                os.remove(cache_path)
+            continue
+        retenus[pdf] = infos
+    return retenus
+
+
+def _dossier_jour_anticipation_du_numero(drive_svc, numero):
+    """Retrouve (dossier_jj_mm, dossier_mm_aaaa) a partir de l'emplacement du
+    bon_anticipation_NUMERO.txt archive sous GITHUB/Anticipation/MM_AAAA/JJ_MM/.
+    Filet quand l'email de confirmation d'origine est introuvable (donc sa
+    date de livraison inconnue) : sans lui, une commande annulee restait dans
+    le brouillon d'anticipation, faute de savoir quel dossier nettoyer."""
+    nom = f"bon_anticipation_{numero}.txt"
+    try:
+        res = drive_svc.files().list(
+            q=f"name='{nom}' and trashed=false",
+            fields="files(id,parents)",
+        ).execute()
+        for f in res.get("files", []):
+            for parent_id in (f.get("parents") or []):
+                if DRIVE_BONS_FOLDER_ID and parent_id == DRIVE_BONS_FOLDER_ID:
+                    continue
+                jour = drive_svc.files().get(fileId=parent_id, fields="name,parents").execute()
+                if not re.fullmatch(r"\d{2}_\d{2}", jour.get("name", "")):
+                    continue
+                for grand_parent_id in (jour.get("parents") or []):
+                    mois = drive_svc.files().get(fileId=grand_parent_id, fields="name").execute()
+                    if re.fullmatch(r"\d{2}_\d{4}", mois.get("name", "")):
+                        return jour["name"], mois["name"]
+    except Exception as e:
+        print(f"    Recherche du dossier d'anticipation de {numero} echouee : {e}")
+    return "", ""
 
 
 def _infos_email_original(gmail_svc, numero):
@@ -1605,6 +1814,7 @@ def _main():
         drive_svc, gmail_svc, sheets_svc,
         shopopop_token, shopopop_drive_id, shopopop_connecte)
     nouveaux = telecharger_bons_email(gmail_svc, CACHE_DIR)
+    nouveaux = _ecarter_commandes_annulees(drive_svc, nouveaux)
 
     if not nouveaux:
         print("Pas de nouvelle commande.")

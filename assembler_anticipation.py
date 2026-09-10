@@ -8,6 +8,14 @@ si une commande annulee faisait partie de l'anticipation), puis regenere le
 PDF brouillon anticipation_JJ_MM.pdf correspondant (memes dossier/fichier,
 ecrases a chaque appel).
 
+Avant tout assemblage, applique les annulations en attente sur le dossier du
+jour (ac.appliquer_annulations_jour) et n'integre jamais une commande annulee
+ou remplacee : c'est l'assemblage, declenche a chaque commande, qui rattrape
+un retrait perdu (run annule par le concurrency group partage) ou impossible
+au moment de l'annulation (date de livraison encore inconnue). Sans cette
+verification, l'ancien et le nouveau numero d'une commande modifiee se
+retrouvaient tous les deux dans l'anticipation du jour.
+
 Declenche en fire-and-forget par auto_prepa.py (repository_dispatch) : cet
 assemblage (telechargement/reupload Drive, generation PDF avec photos et
 codes-barres) tourne dans ce workflow separe pour ne jamais retarder le cron
@@ -23,17 +31,6 @@ from googleapiclient.discovery import build
 
 import auto_prepa as ap
 import anticipation_commandes as ac
-
-
-def _telecharger_texte_dossier(drive_svc, folder_id, filename):
-    res = drive_svc.files().list(
-        q=f"name='{filename}' and '{folder_id}' in parents and trashed=false",
-        fields="files(id)",
-    ).execute()
-    files = res.get("files", [])
-    if not files:
-        return None
-    return ac._telecharger_texte(drive_svc, files[0]["id"])
 
 
 def _parser_args(argv):
@@ -64,8 +61,17 @@ def main():
         sys.exit(1)
 
     nom_jour = f"bon_anticipation_{dossier_jj_mm}.txt"
+    contenu_jour, _ = ac.telecharger_texte_dossier(drive_svc, folder_id, nom_jour)
 
-    contenu_jour = _telecharger_texte_dossier(drive_svc, folder_id, nom_jour) or ""
+    # Purge d'abord le dossier du jour de toute commande annulee/remplacee :
+    # bons individuels mis a la corbeille (sinon reintegres juste apres par le
+    # rattrapage ci-dessous) et blocs '#CDE:' correspondants retires du
+    # brouillon. Le PDF n'est pas regenere ici : il l'est une seule fois, en
+    # fin de run, sur le contenu final.
+    annules, contenu_jour, nettoye = ac.appliquer_annulations_jour(
+        drive_svc, folder_id, dossier_mm_aaaa, dossier_jj_mm,
+        contenu_jour=contenu_jour or "", regenerer_pdf=False)
+
     deja_assemblees = ac._commandes_deja_assemblees(contenu_jour)
 
     # Ne se fie pas uniquement a --numero : le concurrency group GitHub
@@ -82,16 +88,26 @@ def main():
     # declenche ce run — pour que le run suivant (n'importe quelle commande)
     # rattrape automatiquement celles perdues en route.
     bons_dossier = {num: file_id for file_id, num in ac._lister_bons_commande(drive_svc, folder_id)}
-    if numero not in bons_dossier and numero not in deja_assemblees:
+
+    if numero in annules:
+        print(f"Commande {numero} annulee/remplacee : jamais integree a "
+              f"l'anticipation du {dossier_jj_mm}.")
+    elif numero not in bons_dossier and numero not in deja_assemblees:
         print(f"ERREUR : bon_anticipation_{numero}.txt introuvable dans Drive "
               f"GITHUB/Anticipation/{dossier_mm_aaaa}/{dossier_jj_mm}/.")
         sys.exit(1)
 
     a_integrer = sorted(
-        (num for num in bons_dossier if num not in deja_assemblees),
+        (num for num in bons_dossier
+         if num not in deja_assemblees and num not in annules),
         key=ac._cle_tri_commande)
     if not a_integrer:
-        print(f"Commande {numero} deja assemblee dans {nom_jour}, rien a faire.")
+        if nettoye:
+            ac.publier_pdf_jour(drive_svc, folder_id, contenu_jour,
+                                dossier_jj_mm, dossier_mm_aaaa)
+            print(f"  {nom_jour} regenere apres retrait de commande(s) annulee(s).")
+        else:
+            print(f"Commande {numero} deja assemblee dans {nom_jour}, rien a faire.")
         return
 
     if contenu_jour and not contenu_jour.endswith("\n"):
@@ -123,20 +139,12 @@ def main():
     ac._maj_fichier_commandes_anticipees(drive_svc, commandes_anticipees, dossier_mm_aaaa, dossier_jj_mm)
 
     if not produits_pdf:
-        print("  Aucun produit avec rayon defini, pas de PDF brouillon a generer.")
-        return
+        # Pas de return ici : publier_pdf_jour doit tout de meme etre appele
+        # pour mettre a la corbeille un anticipation_JJ_MM.pdf devenu obsolete
+        # (ex. toutes les commandes a rayon connu du jour ont ete annulees).
+        print("  Aucun produit avec rayon defini pour ce jour.")
 
-    jj, mm = dossier_jj_mm.split("_")
-    aaaa = dossier_mm_aaaa.split("_")[1]
-    date_complete = f"{jj}/{mm}/{aaaa}"
-    ordre_chemin = ac._charger_ordre_chemin_prepa(drive_svc)
-    chemin_pdf = ac._generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin)
-    if chemin_pdf:
-        try:
-            ap.deposer_fichier_jour_anticipation(drive_svc, chemin_pdf, dossier_mm_aaaa, dossier_jj_mm)
-        finally:
-            if os.path.exists(chemin_pdf):
-                os.remove(chemin_pdf)
+    ac.publier_pdf_jour(drive_svc, folder_id, contenu_jour, dossier_jj_mm, dossier_mm_aaaa)
 
 
 if __name__ == "__main__":
