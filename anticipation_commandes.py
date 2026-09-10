@@ -4,10 +4,17 @@ Recupere anticipation_JJ_MM.pdf, deja genere au fil de l'eau par
 assembler_anticipation.py sur Drive (GITHUB/Anticipation/MM_AAAA/JJ_MM), et
 l'archive + l'envoie par mail — sans aucun recalcul.
 
+Avant de recuperer ce PDF, applique une derniere fois les annulations en
+attente sur le dossier du jour (appliquer_annulations_jour) : c'est la seule
+etape de la chaine qui ne depende d'aucun repository_dispatch, donc le filet
+qui garantit qu'une commande annulee ou remplacee ne parte jamais dans le PDF
+envoye (l'ancien et le nouveau numero d'une commande modifiee s'y retrouvaient
+en double quand le retrait n'avait pas abouti).
+
 Ce module fournit aussi (utilisees par assembler_anticipation.py, qui fait le
-calcul reel a chaque commande) le parsing de bon_anticipation_JJ_MM.txt, le
-regroupement par lettre d'anticipation et la generation du PDF (un rayon par
-page).
+calcul reel a chaque commande, et par retirer_anticipation.py) le parsing de
+bon_anticipation_JJ_MM.txt, le regroupement par lettre d'anticipation, la
+generation du PDF (un rayon par page) et le retrait des commandes annulees.
 """
 
 import base64
@@ -595,6 +602,41 @@ def _envoyer_email_commandes_orphelines(gmail_svc, dossier_jj_mm, numeros):
         print(f"  Envoi email alerte commande(s) orpheline(s) echoue : {e}")
 
 
+def _envoyer_email_annulees_rattrapees(gmail_svc, dossier_jj_mm, numeros):
+    """Alerte : une ou plusieurs commandes annulees etaient encore presentes
+    dans le brouillon d'anticipation au moment de l'envoi, et n'ont ete
+    retirees que par le filet de securite de ce workflow (le retrait normal,
+    declenche des l'annulation, n'a donc pas fait son office). Le PDF envoye
+    est correct, mais l'alerte permet de voir que la chaine a du etre
+    rattrapee."""
+    destinataire = ap.EMAIL_ANTICIPATION
+    if not destinataire or not numeros:
+        return
+    from email.mime.text import MIMEText
+
+    corps = (
+        f"Bonjour,\n\n"
+        f"La ou les commande(s) suivante(s), annulee(s) ou remplacee(s), "
+        f"etaient encore presentes dans le brouillon d'anticipation du "
+        f"{dossier_jj_mm} : {', '.join(numeros)}.\n\n"
+        f"Elles ont ete retirees avant l'envoi : le PDF ci-joint ne les "
+        f"contient pas. Aucune action necessaire, ce message signale "
+        f"seulement que le retrait automatique n'avait pas abouti en amont.\n"
+    )
+    try:
+        msg = MIMEText(corps, "plain", "utf-8")
+        msg["To"] = destinataire
+        if ap.EMAIL_ANTICIPATION_2:
+            msg["Cc"] = ap.EMAIL_ANTICIPATION_2
+        msg["Subject"] = f"Anticipation {dossier_jj_mm} — commande(s) annulee(s) retiree(s) in extremis"
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
+        print(f"  Email alerte commande(s) annulee(s) rattrapee(s) envoye => {destinataire} : "
+              f"{', '.join(numeros)}")
+    except Exception as e:
+        print(f"  Envoi email alerte commande(s) annulee(s) rattrapee(s) echoue : {e}")
+
+
 def _cle_tri_commande(numero):
     """Tri numerique quand possible (numeros de commande), alphabetique sinon."""
     return (0, int(numero)) if numero.isdigit() else (1, numero)
@@ -698,6 +740,190 @@ def _retirer_commandes_fichier_anticipees(drive_svc, numeros_a_retirer, dossier_
         print(f"    Retrait dans {nom_fichier} echoue : {e}")
 
 
+_RE_MARQUEUR_RETRAIT = re.compile(r'^annuler_anticipation_(\d+)\.txt$')
+
+
+def lister_marqueurs_retrait(drive_svc, folder_id):
+    """[(file_id, numero), ...] des marqueurs annuler_anticipation_NUMERO.txt
+    presents dans le dossier du jour (deposes par auto_prepa.py via
+    _marquer_retrait_anticipation_drive)."""
+    res = drive_svc.files().list(
+        q=(f"'{folder_id}' in parents and trashed=false "
+           f"and name contains 'annuler_anticipation_'"),
+        fields="files(id,name)",
+        pageSize=1000,
+    ).execute()
+    resultat = []
+    for f in res.get("files", []):
+        m = _RE_MARQUEUR_RETRAIT.match(f["name"])
+        if m:
+            resultat.append((f["id"], m.group(1)))
+    return resultat
+
+
+def numeros_annules(drive_svc, folder_id, numeros_sup=()):
+    """Tous les numeros de commande a exclure de l'anticipation de ce jour :
+    marqueurs annuler_anticipation_NUMERO.txt du dossier + registre global des
+    annulations (ap.commandes_annulees, independant de toute date) + numeros
+    supplementaires fournis par l'appelant.
+
+    Les deux sources sont necessaires : le marqueur date ne peut etre depose
+    que si la date de livraison de la commande annulee est connue, et le
+    registre global ne dit rien du jour concerne — leur union couvre les deux
+    cas (cf. auto_prepa._traiter_commande_potentiellement_anticipee)."""
+    annules = set(numeros_sup)
+    try:
+        annules |= {num for _, num in lister_marqueurs_retrait(drive_svc, folder_id)}
+    except Exception as e:
+        print(f"    Lecture des marqueurs de retrait echouee : {e}")
+    try:
+        annules |= ap.commandes_annulees(drive_svc)
+    except Exception as e:
+        print(f"    Lecture du registre des annulations echouee : {e}")
+    return annules
+
+
+def retirer_blocs_commandes(contenu_jour, numeros_a_retirer):
+    """Retire de bon_anticipation_JJ_MM.txt tous les blocs '#CDE:NUMERO' ...
+    dont le numero est dans numeros_a_retirer. Retourne le contenu restant."""
+    lignes_resultat = []
+    ignorer = False
+    for ligne in contenu_jour.splitlines():
+        m = _RE_MARQUEUR_CDE.match(ligne.strip())
+        if m:
+            ignorer = m.group(1) in numeros_a_retirer
+            if ignorer:
+                continue
+        if not ignorer:
+            lignes_resultat.append(ligne)
+    return "\n".join(lignes_resultat) + ("\n" if lignes_resultat else "")
+
+
+def telecharger_texte_dossier(drive_svc, folder_id, filename):
+    """(contenu, file_id) d'un fichier texte du dossier, (None, None) s'il
+    n'existe pas."""
+    res = drive_svc.files().list(
+        q=f"name='{filename}' and '{folder_id}' in parents and trashed=false",
+        fields="files(id)",
+    ).execute()
+    files = res.get("files", [])
+    if not files:
+        return None, None
+    return _telecharger_texte(drive_svc, files[0]["id"]), files[0]["id"]
+
+
+def publier_pdf_jour(drive_svc, folder_id, contenu_jour, dossier_jj_mm, dossier_mm_aaaa):
+    """Regenere anticipation_JJ_MM.pdf a partir du brouillon du jour, ou le met
+    a la corbeille s'il ne reste plus rien a anticiper. Retourne True si un PDF
+    a ete depose."""
+    nom_pdf = f"anticipation_{dossier_jj_mm}.pdf"
+    produits = _parser_lignes_anticipation_jour(contenu_jour or "")
+    par_lettre = {}
+    for p in produits:
+        par_lettre.setdefault(p["lettre"], []).append(p)
+    produits_pdf = {lettre: v for lettre, v in par_lettre.items() if lettre in RAYONS_LETTRE}
+
+    if not produits_pdf:
+        res = drive_svc.files().list(
+            q=f"name='{nom_pdf}' and '{folder_id}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        for f in res.get("files", []):
+            drive_svc.files().update(fileId=f["id"], body={"trashed": True}).execute()
+            print(f"  {nom_pdf} mis a la corbeille (plus aucun produit anticipe ce jour).")
+        return False
+
+    jj, mm = dossier_jj_mm.split("_")
+    aaaa = dossier_mm_aaaa.split("_")[1]
+    date_complete = f"{jj}/{mm}/{aaaa}"
+    ordre_chemin = _charger_ordre_chemin_prepa(drive_svc)
+    chemin_pdf = _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin)
+    if not chemin_pdf:
+        return False
+    try:
+        ap.deposer_fichier_jour_anticipation(drive_svc, chemin_pdf, dossier_mm_aaaa, dossier_jj_mm)
+    finally:
+        if os.path.exists(chemin_pdf):
+            os.remove(chemin_pdf)
+    return True
+
+
+def appliquer_annulations_jour(drive_svc, folder_id, dossier_mm_aaaa, dossier_jj_mm,
+                               contenu_jour=None, numeros_sup=(), regenerer_pdf=True,
+                               retires_out=None):
+    """Purge le dossier d'anticipation du jour de TOUTE commande annulee ou
+    remplacee : met a la corbeille son bon_anticipation_NUMERO.txt individuel
+    (pour qu'aucun assemblage ulterieur ne puisse la reintegrer), retire son
+    bloc '#CDE:NUMERO' de bon_anticipation_JJ_MM.txt, met a jour
+    commandes_anticipées_JJ_MM.txt et, si regenerer_pdf, regenere (ou met a la
+    corbeille) anticipation_JJ_MM.pdf.
+
+    Idempotent et appele par les trois etapes de la chaine (assemblage,
+    retrait, envoi du PDF) : chacune rattrape ainsi ce qu'une autre aurait
+    manque — un run de retrait annule par le concurrency group partage, un
+    dispatch perdu, ou une annulation arrivee avant que la commande n'existe.
+
+    retires_out, si fourni, recoit la liste triee des numeros effectivement
+    retires du brouillon par cet appel (a distinguer de numeros_annules, qui
+    est l'ensemble des commandes annulees connues, presentes ou non).
+
+    Retourne (numeros_annules, contenu_restant, modifie)."""
+    annules = numeros_annules(drive_svc, folder_id, numeros_sup)
+
+    # Les bons individuels des commandes annulees d'abord : tant qu'ils sont
+    # la, le rattrapage de assembler_anticipation.py les reintegrerait.
+    retires_du_dossier = []
+    try:
+        for file_id, numero in _lister_bons_commande(drive_svc, folder_id):
+            if numero in annules:
+                drive_svc.files().update(fileId=file_id, body={"trashed": True}).execute()
+                retires_du_dossier.append(numero)
+    except Exception as e:
+        print(f"    Retrait des bons de commandes annulees echoue : {e}")
+    if retires_du_dossier:
+        print(f"  bon_anticipation_NUMERO.txt de commande(s) annulee(s) retire(s) du "
+              f"dossier du jour : {', '.join(sorted(retires_du_dossier, key=_cle_tri_commande))}")
+
+    nom_jour = f"bon_anticipation_{dossier_jj_mm}.txt"
+    file_id_jour = None
+    if contenu_jour is None:
+        contenu_jour, file_id_jour = telecharger_texte_dossier(drive_svc, folder_id, nom_jour)
+    contenu_jour = contenu_jour or ""
+
+    presentes = _commandes_deja_assemblees(contenu_jour) & annules
+    if not presentes:
+        return annules, contenu_jour, False
+
+    contenu_restant = retirer_blocs_commandes(contenu_jour, presentes)
+    if retires_out is not None:
+        retires_out.extend(sorted(presentes, key=_cle_tri_commande))
+    liste = ', '.join(sorted(presentes, key=_cle_tri_commande))
+    print(f"  Commande(s) annulee(s) retiree(s) de {nom_jour} : {liste}")
+
+    if contenu_restant.strip():
+        os.makedirs(ap.WORK_DIR, exist_ok=True)
+        chemin_local = os.path.join(ap.WORK_DIR, nom_jour)
+        with open(chemin_local, "w", encoding="utf-8") as f:
+            f.write(contenu_restant)
+        try:
+            ap.deposer_fichier_jour_anticipation(drive_svc, chemin_local, dossier_mm_aaaa, dossier_jj_mm)
+        finally:
+            os.remove(chemin_local)
+    else:
+        if file_id_jour is None:
+            _, file_id_jour = telecharger_texte_dossier(drive_svc, folder_id, nom_jour)
+        if file_id_jour:
+            drive_svc.files().update(fileId=file_id_jour, body={"trashed": True}).execute()
+            print(f"  {nom_jour} vide apres retrait — mis a la corbeille.")
+
+    _retirer_commandes_fichier_anticipees(drive_svc, presentes, dossier_mm_aaaa, dossier_jj_mm)
+
+    if regenerer_pdf:
+        publier_pdf_jour(drive_svc, folder_id, contenu_restant, dossier_jj_mm, dossier_mm_aaaa)
+
+    return annules, contenu_restant, True
+
+
 def _supprimer_pdf_jour_anticipation(drive_svc, file_id, nom_pdf):
     """Met a la corbeille anticipation_JJ_MM.pdf dans GITHUB/Anticipation/MM_AAAA/JJ_MM/
     une fois archive + envoye par mail (trashed=True plutot que suppression
@@ -726,7 +952,13 @@ def _reinitialiser_dossier_jour_anticipation(drive_svc, folder_id, dossier_jj_mm
     jete avec les autres, et son numero est retourne pour que l'appelant
     alerte par email au lieu de le perdre silencieusement (cf. incident
     commande 54522243 du 04/09/2026, disparue de l'anticipation sans aucune
-    alerte)."""
+    alerte). Une commande annulee n'est evidemment pas orpheline : elle est
+    exclue de cette alerte.
+
+    Les marqueurs annuler_anticipation_NUMERO.txt sont purges ici, et
+    nulle part ailleurs : ils doivent survivre a tous les assemblages du jour
+    (c'est par eux que l'assembleur sait ne pas reintegrer une commande
+    annulee) et ne deviennent inutiles qu'avec le dossier lui-meme."""
     nom_jour = f"bon_anticipation_{dossier_jj_mm}.txt"
     orphelins = []
     try:
@@ -741,13 +973,18 @@ def _reinitialiser_dossier_jour_anticipation(drive_svc, folder_id, dossier_jj_mm
         for f in fichiers_jour:
             drive_svc.files().update(fileId=f["id"], body={"trashed": True}).execute()
 
+        annules = numeros_annules(drive_svc, folder_id)
         for file_id, numero in _lister_bons_commande(drive_svc, folder_id):
-            if numero in integrees:
+            if numero in integrees or numero in annules:
                 drive_svc.files().update(fileId=file_id, body={"trashed": True}).execute()
             else:
                 orphelins.append(numero)
-        print(f"  {nom_jour} et bon_anticipation_NUMERO.txt integres du jour reinitialises "
-              f"(evite un doublon au prochain assemblage)")
+
+        for file_id, _numero in lister_marqueurs_retrait(drive_svc, folder_id):
+            drive_svc.files().update(fileId=file_id, body={"trashed": True}).execute()
+
+        print(f"  {nom_jour}, bon_anticipation_NUMERO.txt integres et marqueurs "
+              f"d'annulation du jour reinitialises (evite un doublon au prochain assemblage)")
         if orphelins:
             print(f"  ATTENTION : bon_anticipation_NUMERO.txt jamais integre(s), "
                   f"conserve(s) sur Drive : {', '.join(orphelins)}")
@@ -787,6 +1024,22 @@ def main():
           f"sur Drive GITHUB/Anticipation...")
     folder_id = ap._dossier_anticipation_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm, creer=False)
 
+    # Dernier filet avant l'envoi : si une commande annulee/remplacee est
+    # encore dans le brouillon (retrait jamais execute, run annule par le
+    # concurrency group partage, annulation arrivee avant la commande...),
+    # elle est retiree ici et le PDF regenere. C'est la seule etape de la
+    # chaine qui ne depende d'aucun repository_dispatch — donc la seule qui
+    # garantisse que le PDF envoye ne contienne jamais une commande annulee
+    # (ancien + nouveau numero en double apres une modification de commande).
+    annulees_rattrapees = []
+    if folder_id:
+        _, _, rattrape = appliquer_annulations_jour(
+            drive_svc, folder_id, dossier_mm_aaaa, dossier_jj_mm,
+            retires_out=annulees_rattrapees)
+        if rattrape:
+            print(f"  ATTENTION : commande(s) annulee(s) encore presente(s) dans le "
+                  f"brouillon, retiree(s) avant envoi : {', '.join(annulees_rattrapees)}")
+
     nom_pdf = f"anticipation_{dossier_jj_mm}.pdf"
     chemin_pdf = None
     pdf_file_id = None
@@ -815,6 +1068,8 @@ def main():
                 _supprimer_pdf_jour_anticipation(drive_svc, pdf_file_id, nom_pdf)
                 orphelins = _reinitialiser_dossier_jour_anticipation(drive_svc, folder_id, dossier_jj_mm)
                 _envoyer_email_commandes_orphelines(gmail_svc, dossier_jj_mm, orphelins)
+            if email_ok:
+                _envoyer_email_annulees_rattrapees(gmail_svc, dossier_jj_mm, annulees_rattrapees)
     finally:
         if os.path.exists(chemin_pdf):
             os.remove(chemin_pdf)

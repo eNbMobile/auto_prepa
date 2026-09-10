@@ -13,7 +13,9 @@ Pour chaque jour concerne, reconstruit l'assemblage a partir de TOUS les
 bon_anticipation_NUMERO.txt actuellement presents dans son dossier (les
 fichiers individuels ne sont jamais supprimes, cf. archiver_anticipation_drive)
 et ecrase bon_anticipation_JJ_MM.txt + anticipation_JJ_MM.pdf en consequence
-— operation idempotente, sans risque a relancer.
+— operation idempotente, sans risque a relancer. Les commandes annulees ou
+remplacees (marqueurs du jour + registre global des annulations) sont exclues
+de la reconstruction : sans quoi ce rattrapage les ferait revenir.
 """
 
 import os
@@ -121,6 +123,10 @@ def main():
         return
 
     ordre_chemin = ac._charger_ordre_chemin_prepa(drive_svc)
+    # Registre global des annulations lu une seule fois : une commande annulee
+    # ou remplacee ne doit jamais etre reintroduite par une reconstruction,
+    # meme si son bon_anticipation_NUMERO.txt traine encore dans le dossier.
+    annulees_globales = ap.commandes_annulees(drive_svc)
 
     nb_jours_traites = 0
     mois_folders = sorted(_lister_sous_dossiers(drive_svc, anticipation_id), key=lambda t: t[1])
@@ -143,7 +149,11 @@ def main():
             if date_dossier < aujourdhui:
                 continue  # jour deja passe, hors perimetre du rattrapage
 
-            bons = ac._lister_bons_commande(drive_svc, jour_id)
+            annules_jour = annulees_globales | {
+                num for _, num in ac.lister_marqueurs_retrait(drive_svc, jour_id)}
+            bons = [(file_id, num)
+                    for file_id, num in ac._lister_bons_commande(drive_svc, jour_id)
+                    if num not in annules_jour]
             if not bons:
                 continue
 

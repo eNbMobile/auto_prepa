@@ -7,72 +7,39 @@ regenere le PDF brouillon anticipation_JJ_MM.pdf en consequence — pour qu'une
 commande annulee ne soit plus jamais preparee ni visible dans l'anticipation,
 meme quand l'assemblage a eu lieu avant l'annulation.
 
+Le retrait proprement dit est fait par ac.appliquer_annulations_jour, partage
+avec assembler_anticipation.py et anticipation_commandes.py : les trois
+etapes de la chaine appliquent les memes annulations, si bien qu'aucune ne
+peut laisser passer ce qu'une autre aurait manque. Ce workflow reste le
+chemin rapide (declenche des l'annulation), pas le seul.
+
 Comme assembler_anticipation.py, ne se fie pas seulement a --numero : reprend
 a chaque run TOUS les marqueurs annuler_anticipation_NUMERO.txt presents dans
 le dossier du jour (deposes par auto_prepa.py via
-_marquer_retrait_anticipation_drive), pour rattraper un dispatch perdu par le
-concurrency group partage avec anticipation_assemble.yml (meme groupe :
-assemblage et retrait ne s'executent donc jamais en parallele sur le meme
-fichier).
+_marquer_retrait_anticipation_drive) ainsi que le registre global des
+annulations (GITHUB/Annulations/commandes_annulees.txt), pour rattraper un
+dispatch perdu par le concurrency group partage avec anticipation_assemble.yml
+(meme groupe : assemblage et retrait ne s'executent donc jamais en parallele
+sur le meme fichier).
+
+Les marqueurs ne sont PAS purges en fin de run : ils doivent rester tant que
+le dossier du jour vit, sinon un assemblage declenche plus tard (commande
+suivante, rattrapage) n'a plus aucun moyen de savoir que ces commandes sont
+annulees et les reintegre. Ils sont supprimes avec le reste du dossier par
+anticipation_commandes._reinitialiser_dossier_jour_anticipation, une fois le
+PDF du jour envoye.
 
 Declenche en fire-and-forget par auto_prepa.py (repository_dispatch) : cf.
 auto_prepa.declencher_retrait_anticipation.
 """
 
 import os
-import re
 import sys
 
 from googleapiclient.discovery import build
 
 import auto_prepa as ap
 import anticipation_commandes as ac
-
-
-_RE_MARQUEUR_RETRAIT = re.compile(r'^annuler_anticipation_(\d+)\.txt$')
-
-
-def _lister_marqueurs_retrait(drive_svc, folder_id):
-    res = drive_svc.files().list(
-        q=(f"'{folder_id}' in parents and trashed=false "
-           f"and name contains 'annuler_anticipation_'"),
-        fields="files(id,name)",
-        pageSize=1000,
-    ).execute()
-    resultat = []
-    for f in res.get("files", []):
-        m = _RE_MARQUEUR_RETRAIT.match(f["name"])
-        if m:
-            resultat.append((f["id"], m.group(1)))
-    return resultat
-
-
-def _retirer_blocs(contenu_jour, numeros_a_retirer):
-    """Retire du contenu de bon_anticipation_JJ_MM.txt tous les blocs
-    '#CDE:NUMERO' ... dont le numero est dans numeros_a_retirer. Retourne le
-    contenu restant."""
-    lignes_resultat = []
-    ignorer = False
-    for ligne in contenu_jour.splitlines():
-        m = ac._RE_MARQUEUR_CDE.match(ligne.strip())
-        if m:
-            ignorer = m.group(1) in numeros_a_retirer
-            if ignorer:
-                continue
-        if not ignorer:
-            lignes_resultat.append(ligne)
-    return "\n".join(lignes_resultat) + ("\n" if lignes_resultat else "")
-
-
-def _telecharger_texte_dossier(drive_svc, folder_id, filename):
-    res = drive_svc.files().list(
-        q=f"name='{filename}' and '{folder_id}' in parents and trashed=false",
-        fields="files(id)",
-    ).execute()
-    files = res.get("files", [])
-    if not files:
-        return None, None
-    return ac._telecharger_texte(drive_svc, files[0]["id"]), files[0]["id"]
 
 
 def _parser_args(argv):
@@ -103,75 +70,24 @@ def main():
               f"— rien a retirer (cde {numero}).")
         return
 
-    marqueurs = _lister_marqueurs_retrait(drive_svc, folder_id)
-    numeros_a_retirer = {num for _, num in marqueurs}
-    if numero not in numeros_a_retirer:
-        print(f"Aucun marqueur annuler_anticipation_{numero}.txt trouve dans "
-              f"{dossier_mm_aaaa}/{dossier_jj_mm}/ — rien a retirer.")
-        return
+    # Le marqueur de --numero peut manquer (echec de son depot cote
+    # auto_prepa.py) : on le (re)depose pour que les runs suivants — retrait
+    # comme assemblage — sachent eux aussi que cette commande est annulee, et
+    # on le passe explicitement en numeros_sup pour ne pas dependre de sa
+    # visibilite immediate cote Drive.
+    ap._marquer_retrait_anticipation_drive(drive_svc, numero, dossier_mm_aaaa, dossier_jj_mm)
 
-    nom_jour = f"bon_anticipation_{dossier_jj_mm}.txt"
-    contenu_jour, file_id_jour = _telecharger_texte_dossier(drive_svc, folder_id, nom_jour)
-
-    modifie = False
-    contenu_restant = ""
-    if contenu_jour:
-        contenu_restant = _retirer_blocs(contenu_jour, numeros_a_retirer)
-        modifie = contenu_restant.strip() != contenu_jour.strip()
+    annules, _, modifie = ac.appliquer_annulations_jour(
+        drive_svc, folder_id, dossier_mm_aaaa, dossier_jj_mm,
+        numeros_sup={numero}, regenerer_pdf=True)
 
     if not modifie:
-        print(f"  Aucune des commande(s) marquee(s) "
-              f"({', '.join(sorted(numeros_a_retirer, key=ac._cle_tri_commande))}) "
-              f"n'etait presente dans {nom_jour} — rien a regenerer.")
-    else:
-        if contenu_restant.strip():
-            chemin_local_txt = os.path.join(ap.WORK_DIR, nom_jour)
-            with open(chemin_local_txt, "w", encoding="utf-8") as f:
-                f.write(contenu_restant)
-            try:
-                ap.deposer_fichier_jour_anticipation(drive_svc, chemin_local_txt, dossier_mm_aaaa, dossier_jj_mm)
-            finally:
-                os.remove(chemin_local_txt)
-            print(f"  {nom_jour} mis a jour (commande(s) retiree(s) : "
-                  f"{', '.join(sorted(numeros_a_retirer, key=ac._cle_tri_commande))})")
-        elif file_id_jour:
-            drive_svc.files().update(fileId=file_id_jour, body={"trashed": True}).execute()
-            print(f"  {nom_jour} vide apres retrait — mis a la corbeille.")
+        print(f"  Aucune des commande(s) annulee(s) "
+              f"({', '.join(sorted(annules, key=ac._cle_tri_commande))}) "
+              f"n'etait presente dans bon_anticipation_{dossier_jj_mm}.txt "
+              f"— rien a regenerer.")
 
-        nom_pdf = f"anticipation_{dossier_jj_mm}.pdf"
-        if not contenu_restant.strip():
-            res = drive_svc.files().list(
-                q=f"name='{nom_pdf}' and '{folder_id}' in parents and trashed=false",
-                fields="files(id)",
-            ).execute()
-            for f in res.get("files", []):
-                drive_svc.files().update(fileId=f["id"], body={"trashed": True}).execute()
-                print(f"  {nom_pdf} mis a la corbeille (plus aucun produit anticipe aujourd'hui).")
-        else:
-            produits = ac._parser_lignes_anticipation_jour(contenu_restant)
-            par_lettre = {}
-            for p in produits:
-                par_lettre.setdefault(p["lettre"], []).append(p)
-            produits_pdf = {lettre: v for lettre, v in par_lettre.items() if lettre in ac.RAYONS_LETTRE}
-
-            if produits_pdf:
-                jj, mm = dossier_jj_mm.split("_")
-                aaaa = dossier_mm_aaaa.split("_")[1]
-                date_complete = f"{jj}/{mm}/{aaaa}"
-                ordre_chemin = ac._charger_ordre_chemin_prepa(drive_svc)
-                chemin_pdf = ac._generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin)
-                if chemin_pdf:
-                    try:
-                        ap.deposer_fichier_jour_anticipation(drive_svc, chemin_pdf, dossier_mm_aaaa, dossier_jj_mm)
-                    finally:
-                        if os.path.exists(chemin_pdf):
-                            os.remove(chemin_pdf)
-
-    ac._retirer_commandes_fichier_anticipees(drive_svc, numeros_a_retirer, dossier_mm_aaaa, dossier_jj_mm)
-
-    for file_id, _ in marqueurs:
-        drive_svc.files().update(fileId=file_id, body={"trashed": True}).execute()
-    print(f"  {len(marqueurs)} marqueur(s) de retrait traite(s) et purge(s).")
+    ac._retirer_commandes_fichier_anticipees(drive_svc, annules, dossier_mm_aaaa, dossier_jj_mm)
 
 
 if __name__ == "__main__":
