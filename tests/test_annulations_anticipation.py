@@ -226,5 +226,105 @@ class TestEcarterCommandesAnnulees(unittest.TestCase):
         self.assertFalse(os.path.exists(self.cache_pdf))
 
 
+class TestAlerteAnticipationAnnulee(unittest.TestCase):
+    """L'alerte "Attention commande anticipee et annulee" ne doit partir que si
+    l'anticipation contenant la commande a REELLEMENT ete envoyee par mail a
+    l'equipe : tant qu'elle n'est qu'au brouillon, personne n'a sorti les
+    produits et le mail n'a aucun objet."""
+
+    def setUp(self):
+        self._patchs = []
+        self.envois = []
+
+        def _patch(module, nom, valeur):
+            self._patchs.append((module, nom, getattr(module, nom)))
+            setattr(module, nom, valeur)
+
+        self._patch = _patch
+        _patch(ap, "_telecharger_bdc_archive_drive", lambda d, num: None)
+        _patch(ap, "_envoyer_email_anticipation_annulee",
+               lambda gmail, civ, nom, prenom, ancien, nouveau=None:
+                   self.envois.append((ancien, nouveau)))
+
+    def tearDown(self):
+        for module, nom, valeur in reversed(self._patchs):
+            setattr(module, nom, valeur)
+
+    def test_pas_d_alerte_si_l_anticipation_n_a_jamais_ete_envoyee(self):
+        # Le scenario du faux positif : la commande est bien dans le brouillon
+        # du jour, mais commandes_envoyées_JJ_MM.txt n'existe pas encore.
+        self._patch(ap, "_telecharger_commandes_anticipation_envoyee",
+                    lambda d, mm, jj: set())
+        ap._alerter_si_commande_anticipee_annulee(
+            None, None, "54828441", "10_09", "09_2026", "54828725")
+        self.assertEqual(self.envois, [])
+
+    def test_alerte_si_la_commande_etait_dans_l_anticipation_envoyee(self):
+        self._patch(ap, "_telecharger_commandes_anticipation_envoyee",
+                    lambda d, mm, jj: {"54828441", "54830000"})
+        ap._alerter_si_commande_anticipee_annulee(
+            None, None, "54828441", "10_09", "09_2026", "54828725")
+        self.assertEqual(self.envois, [("54828441", "54828725")])
+
+
+class TestCorpsEmailAnticipationAnnulee(unittest.TestCase):
+    """Le corps du mail doit partir en HTML d'un seul tenant : en text/plain,
+    Gmail replie les lignes a ~78 colonnes et coupait les phrases en plein
+    milieu."""
+
+    def setUp(self):
+        self._destinataire = ap.EMAIL_ANTICIPATION
+        ap.EMAIL_ANTICIPATION = "equipe@example.com"
+        self.envoyes = []
+        parent = self
+
+        class _Messages:
+            def send(self, userId=None, body=None):
+                parent.envoyes.append(body["raw"])
+                return _FakeRequete({})
+
+        class _Users:
+            def messages(self):
+                return _Messages()
+
+        class _FakeGmail:
+            def users(self):
+                return _Users()
+
+        self.gmail = _FakeGmail()
+
+    def tearDown(self):
+        ap.EMAIL_ANTICIPATION = self._destinataire
+
+    def _corps_envoye(self):
+        import base64
+        from email import message_from_bytes
+
+        self.assertEqual(len(self.envoyes), 1)
+        msg = message_from_bytes(base64.urlsafe_b64decode(self.envoyes[0]))
+        return msg, msg.get_payload(decode=True).decode("utf-8")
+
+    def test_le_corps_est_un_html_sans_retour_a_la_ligne_force(self):
+        ap._envoyer_email_anticipation_annulee(
+            self.gmail, "M.", "BADMINTON ARNAGE MULSANNE", "", "54828441", "54828725")
+        msg, corps = self._corps_envoye()
+
+        self.assertEqual(msg.get_content_type(), "text/html")
+        phrase = ("La commande de Monsieur BADMINTON ARNAGE MULSANNE, n°54828441 "
+                  "a été annulée et remplacée par la commande n°54828725 et faisait "
+                  "partie de l'anticipation déjà envoyée.")
+        self.assertIn(phrase, corps)
+        # Un seul <br> tolere : celui de la signature.
+        self.assertEqual(corps.count("<br>"), 1)
+        self.assertNotIn("\n", corps)
+
+    def test_le_nom_du_client_est_echappe(self):
+        ap._envoyer_email_anticipation_annulee(
+            self.gmail, "M.", "DUPONT & <FILS>", "", "54828441")
+        _, corps = self._corps_envoye()
+        self.assertIn("DUPONT &amp; &lt;FILS&gt;", corps)
+        self.assertIn("a été annulée et faisait partie", corps)
+
+
 if __name__ == "__main__":
     unittest.main()

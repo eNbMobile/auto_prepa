@@ -1058,11 +1058,11 @@ def _telecharger_anticipation_drive(drive_svc, numero):
 _CIVILITES_LONGUES = {"M.": "Monsieur", "Mme": "Madame"}
 
 
-def _telecharger_commandes_anticipees_archivees(drive_svc, dossier_mm_aaaa, dossier_jj_mm):
-    """Telecharge et parse GITHUB/Anticipation/archives/MM_AAAA/JJ_MM/commandes_anticipées_JJ_MM.txt
-    (deja archive par anticipation_commandes.py). Retourne l'ensemble des numeros de
-    commande deja anticipes ce jour-la (vide si le fichier ou un dossier parent
-    n'existe pas encore)."""
+def _telecharger_numeros_archive_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm, nom_fichier):
+    """Telecharge et parse un fichier de numeros separes par des virgules depuis
+    GITHUB/Anticipation/archives/MM_AAAA/JJ_MM/ (ecrit par
+    anticipation_commandes.py). Retourne l'ensemble des numeros qu'il contient
+    (vide si le fichier ou un dossier parent n'existe pas encore)."""
     def _sous_dossier(parent_id, nom):
         if not parent_id:
             return None
@@ -1074,7 +1074,6 @@ def _telecharger_commandes_anticipees_archivees(drive_svc, dossier_mm_aaaa, doss
         files = res.get("files", [])
         return files[0]["id"] if files else None
 
-    nom_fichier = f"commandes_anticipées_{dossier_jj_mm}.txt"
     try:
         github_id = _sous_dossier("root", "GITHUB")
         anticipation_id = _sous_dossier(github_id, "Anticipation")
@@ -1103,27 +1102,46 @@ def _telecharger_commandes_anticipees_archivees(drive_svc, dossier_mm_aaaa, doss
         return set()
 
 
+def _telecharger_commandes_anticipation_envoyee(drive_svc, dossier_mm_aaaa, dossier_jj_mm):
+    """Numeros reellement PARTIS par mail a l'equipe dans l'anticipation du jour
+    (commandes_envoyées_JJ_MM.txt, ecrit par anticipation_commandes.py juste
+    apres l'envoi du PDF). C'est la seule liste qui justifie une alerte en cas
+    d'annulation : tant que l'anticipation n'a pas ete envoyee, personne n'a
+    sorti les produits de la commande."""
+    return _telecharger_numeros_archive_jour(
+        drive_svc, dossier_mm_aaaa, dossier_jj_mm,
+        f"commandes_envoyées_{dossier_jj_mm}.txt")
+
+
 def _envoyer_email_anticipation_annulee(gmail_svc, civilite, nom, prenom, num_ancien, num_nouveau=None):
-    """Alerte : la commande annulee (remplacee ou non) faisait deja partie
-    d'une anticipation archivee."""
+    """Alerte : la commande annulee (remplacee ou non) faisait partie d'une
+    anticipation DEJA ENVOYEE par mail a l'equipe (cf.
+    _alerter_si_commande_anticipee_annulee) — ses produits ont donc pu etre
+    sortis en rayon avant l'annulation.
+
+    Envoye en HTML, un seul <p> par paragraphe : en text/plain, Gmail replie le
+    corps a ~78 colonnes en inserant ses propres <br>, ce qui coupait les
+    phrases en plein milieu a l'affichage."""
     from email.mime.text import MIMEText
+    from html import escape
     destinataire = EMAIL_ANTICIPATION
     if not destinataire:
         return
     civilite_txt = _CIVILITES_LONGUES.get(civilite, "Monsieur/Madame")
-    client = " ".join(p for p in (civilite_txt, nom, prenom) if p)
+    client = escape(" ".join(p for p in (civilite_txt, nom, prenom) if p))
     motif = (f"a été annulée et remplacée par la commande n°{num_nouveau}"
              if num_nouveau else "a été annulée")
-    corps = (
-        f"Bonjour,\n\n"
-        f"La commande de {client}, n°{num_ancien} {motif} et faisait partie "
-        f"de l'anticipation. Son retrait du bon d'anticipation a été déclenché "
-        f"automatiquement.\n\n"
-        f"Merci d'être vigilant sur les produits de cette commande.\n\n"
-        f"Cordialement,\nErwan"
-    )
+    paragraphes = [
+        "Bonjour,",
+        (f"La commande de {client}, n°{num_ancien} {motif} et faisait partie de "
+         f"l'anticipation déjà envoyée. Son retrait du bon d'anticipation a été "
+         f"déclenché automatiquement."),
+        "Merci d'être vigilant sur les produits de cette commande.",
+        "Cordialement,<br>Erwan",
+    ]
+    corps = "<html><body>" + "".join(f"<p>{p}</p>" for p in paragraphes) + "</body></html>"
     try:
-        msg = MIMEText(corps, "plain", "utf-8")
+        msg = MIMEText(corps, "html", "utf-8")
         msg["to"] = destinataire
         msg["subject"] = "Attention commande anticipée et annulée"
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
@@ -1135,19 +1153,27 @@ def _envoyer_email_anticipation_annulee(gmail_svc, civilite, nom, prenom, num_an
 
 def _alerter_si_commande_anticipee_annulee(drive_svc, gmail_svc, num_ancien, dossier_jj_mm,
                                             dossier_mm_aaaa, num_nouveau=None):
-    """Si la commande annulee (remplacee ou non, num_ancien) faisait deja partie
-    de l'anticipation archivee du jour dossier_jj_mm/dossier_mm_aaaa (sa date de
-    livraison reelle, cf. _infos_email_original — pas necessairement aujourd'hui)
-    (commandes_anticipées_JJ_MM.txt), alerte par email avec le nom du client
-    (extrait de l'archive BDC, encore presente sur Drive a ce stade, avant sa
-    suppression par _supprimer_bdc_drive)."""
-    commandes_anticipees = _telecharger_commandes_anticipees_archivees(
+    """Alerte par email, avec le nom du client (extrait de l'archive BDC, encore
+    presente sur Drive a ce stade, avant sa suppression par
+    _supprimer_bdc_drive), UNIQUEMENT si la commande annulee (remplacee ou non,
+    num_ancien) figurait dans l'anticipation du jour dossier_jj_mm/dossier_mm_aaaa
+    (sa date de livraison reelle, cf. _infos_email_original — pas
+    necessairement aujourd'hui) DEJA ENVOYEE par mail a l'equipe
+    (commandes_envoyées_JJ_MM.txt).
+
+    Ce n'est pas la meme chose que de figurer dans le brouillon du jour
+    (commandes_anticipées_JJ_MM.txt) : tant que l'anticipation n'est pas
+    partie, personne n'a sorti les produits, la commande est simplement
+    retiree du brouillon en silence et l'alerte n'aurait aucun objet — c'est
+    le mail inutile que recevait l'equipe pour toute commande annulee le jour
+    meme de son arrivee, avant l'envoi de l'anticipation."""
+    commandes_envoyees = _telecharger_commandes_anticipation_envoyee(
         drive_svc, dossier_mm_aaaa, dossier_jj_mm)
-    if num_ancien not in commandes_anticipees:
+    if num_ancien not in commandes_envoyees:
         return
 
     print(f"    ATTENTION : commande {num_ancien} annulee faisait partie de "
-          f"l'anticipation du {dossier_jj_mm} !")
+          f"l'anticipation du {dossier_jj_mm} deja envoyee !")
 
     civilite = nom = prenom = ""
     pdf_path = _telecharger_bdc_archive_drive(drive_svc, num_ancien)
