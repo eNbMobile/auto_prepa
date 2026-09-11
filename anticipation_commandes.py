@@ -53,6 +53,13 @@ RAYONS_LETTRE = {
 # dans _elements_rayon.
 _LETTRES_AVEC_POIDS_SYSTEMATIQUE = ("B", "D")
 
+# Rayons dont le PDF consacre une ligne du tableau a chaque commande au lieu de
+# regrouper un meme produit sur une seule ligne : la Boucherie prepare commande
+# par commande, contrairement aux autres rayons qui ramassent par produit.
+# Doit rester un sous-ensemble de _LETTRES_AVEC_POIDS_SYSTEMATIQUE (le format
+# de ces lignes suppose la colonne Poids).
+_LETTRES_UNE_LIGNE_PAR_COMMANDE = ("B",)
+
 
 # Format des lignes de bon_anticipation.txt (16 champs separes par ';') :
 # 0 gencod ; 1 libelle ; 2 prix ; 3 prix au kg/L ; 4 qte ; 5 substitution ;
@@ -318,11 +325,11 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
     {lettre: [produit, ...]}), chaque rayon demarrant en haut d'une nouvelle
     page. Colonnes : quantite, photo, code-barres EAN13 + gencod, libelle,
     prix, numero de commande et heure (+ poids avant le prix pour la Boucherie
-    et la Poissonnerie). Un produit commande par plusieurs clients tient sur
-    une seule ligne (quantite totale a collecter, commandes et heures empilees
-    dans leur case), sauf en Boucherie et en Poissonnerie ou chaque commande a
-    sa propre ligne : le poids et le prix y dependent de la quantite commandee,
-    donc du client. Les lignes sont triees par heure de commande croissante
+    et la Poissonnerie, qui ajoute une colonne Qte detaillee par commande). Un
+    produit commande par plusieurs clients tient sur une seule ligne (quantite
+    totale a collecter, commandes et heures empilees dans leur case), sauf en
+    Boucherie ou chaque commande a sa propre ligne : ce rayon prepare commande
+    par commande. Les lignes sont triees par heure de commande croissante
     (l'ordre du chemin de preparation, chemin_prepa_ramasse.csv via
     ordre_chemin, ne departage plus qu'a heure egale), celles d'un meme produit
     restant groupees. Retourne le chemin local du PDF, ou None si reportlab est
@@ -364,18 +371,28 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
         ]
 
         # Boucherie (lettre B) et Poissonnerie (lettre D) : colonne Poids en
-        # plus, juste avant le Prix, et une ligne du tableau par commande
-        # (_LETTRES_AVEC_POIDS_SYSTEMATIQUE).
+        # plus, juste avant le Prix (_LETTRES_AVEC_POIDS_SYSTEMATIQUE). La
+        # Boucherie va plus loin : une ligne du tableau par commande, donc pas
+        # besoin d'une colonne Qte detaillee a cote du Prix
+        # (_LETTRES_UNE_LIGNE_PAR_COMMANDE).
         avec_poids = lettre in _LETTRES_AVEC_POIDS_SYSTEMATIQUE
+        par_commande = lettre in _LETTRES_UNE_LIGNE_PAR_COMMANDE
         largeur_code_barres = 95
-        if avec_poids:
+        if par_commande:
             col_widths = [46, 55, largeur_code_barres, 188, 45, 42, 57, 35]
             hdr_txts = ('Quantité', 'Photo', 'Code-barres', 'Libellé', 'Poids', 'Prix',
                         'Commande', 'Heure')
+        elif avec_poids:
+            col_widths = [46, 55, largeur_code_barres, 158, 45, 42, 30, 57, 35]
+            hdr_txts = ('Quantité', 'Photo', 'Code-barres', 'Libellé', 'Poids', 'Prix',
+                        'Qté', 'Commande', 'Heure')
         else:
             col_widths = [46, 55, largeur_code_barres, 232, 42, 57, 35]
             hdr_txts = ('Quantité', 'Photo', 'Code-barres', 'Libellé', 'Prix', 'Commande', 'Heure')
         derniere_col = len(hdr_txts) - 1
+        # Derniere colonne couverte par la cellule Poids/Prix (+ Qte quand le
+        # produit tient sur une seule ligne) : cf. _poids_prix_cell.
+        derniere_col_poids = 5 if par_commande else 6
 
         hdr = [Paragraph(t, header_s) for t in hdr_txts]
         data = [hdr]
@@ -420,15 +437,24 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
                 ]),
             )
 
-        def _poids_prix_cell(poids_txt, prix_txt, prix_kg):
-            """Poids et Prix cote a cote, avec le prix/kg centre en dessous sur
-            une ligne fusionnee, comme annote a la main sur le bon d'origine."""
+        def _poids_prix_cell(poids_txt, prix_txt, prix_kg, qte_txt=None):
+            """Poids et Prix cote a cote (+ Qte quand le rayon detaille les
+            commandes empilees dans une seule ligne : sinon le VALIGN MIDDLE du
+            tableau principal centre chaque bloc independamment sur sa propre
+            hauteur, et les lignes Qte se decalent des lignes Poids/Prix, plus
+            hautes d'une ligne a cause du prix/kg). Prix/kg centre en dessous
+            sur une ligne fusionnee, comme annote a la main sur le bon
+            d'origine."""
+            haut = [Paragraph(poids_txt, small_c), Paragraph(prix_txt, small_c)]
+            if qte_txt is not None:
+                haut.append(Paragraph(qte_txt, small_c))
+            derniere = len(haut) - 1
             return Table(
-                [[Paragraph(poids_txt, small_c), Paragraph(prix_txt, small_c)],
-                 [Paragraph(f"{prix_kg} €/Kg", small_c), '']],
-                colWidths=[col_widths[4], col_widths[5]],
+                [haut,
+                 [Paragraph(f"{prix_kg} €/Kg", small_c)] + [''] * derniere],
+                colWidths=col_widths[4:4 + len(haut)],
                 style=TableStyle([
-                    ('SPAN',          (0, 1), (1, 1)),
+                    ('SPAN',          (0, 1), (derniere, 1)),
                     ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
                     ('TOPPADDING',    (0, 0), (-1, -1), 0),
                     ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
@@ -449,13 +475,13 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
             if photo_bytes:
                 photos_trouvees += 1
 
-            if avec_poids:
-                # Boucherie et Poissonnerie : une ligne du tableau par
-                # commande, meme quand plusieurs clients ont commande le meme
-                # produit (poids et prix different d'un client a l'autre :
-                # poids = qte * poids unitaire, prix = prix/kg * ce poids).
-                # Les lignes d'un meme produit restent groupees, triees par
-                # heure de commande croissante (cf. _grouper_produits).
+            if par_commande:
+                # Boucherie : une ligne du tableau par commande, meme quand
+                # plusieurs clients ont commande le meme produit (poids et prix
+                # different d'un client a l'autre : poids = qte * poids
+                # unitaire, prix = prix/kg * ce poids). Les lignes d'un meme
+                # produit restent groupees, triees par heure de commande
+                # croissante (cf. _grouper_produits).
                 for commande, qte, heure in g['lignes']:
                     row = [Paragraph(qte, small), _photo_cell(photo_bytes),
                            _bc_cell(gencod), Paragraph(g['libelle'], small)]
@@ -476,7 +502,24 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
             # dans leur case (triees par heure de commande croissante).
             row = [Paragraph(_qte_totale(g['lignes']), small), _photo_cell(photo_bytes),
                    _bc_cell(gencod), Paragraph(g['libelle'], small)]
-            row.append(Paragraph(f"{g['prix']} €" if g['prix'] else '', small))
+            if avec_poids:
+                # Poissonnerie : le poids, le prix et la quantite restent
+                # detailles par commande, empiles en face du numero de commande
+                # correspondant.
+                poids_txt = "<br/>".join("" if not g['poids'] else f"{_poids_ligne(q, g['poids'])} Kg"
+                                         for _, q, _ in g['lignes'])
+                prix_txt = "<br/>".join("" if not (g['poids'] and g['prix_kg'])
+                                        else f"{_prix_ligne_poids(q, g['poids'], g['prix_kg'])} €"
+                                        for _, q, _ in g['lignes'])
+                qte_txt = "<br/>".join(q for _, q, _ in g['lignes'])
+                if g['poids'] and g['prix_kg']:
+                    row.extend([_poids_prix_cell(poids_txt, prix_txt, g['prix_kg'], qte_txt), '', ''])
+                    span_rows.append(len(data))
+                else:
+                    row.extend([Paragraph(poids_txt, small), Paragraph(prix_txt, small),
+                                Paragraph(qte_txt, small)])
+            else:
+                row.append(Paragraph(f"{g['prix']} €" if g['prix'] else '', small))
             # Commande(s) et heure(s) en fin de ligne : ce qui identifie le
             # client passe apres ce qu'il faut ramasser.
             row.append(Paragraph("<br/>".join(c for c, _, _ in g['lignes']), small))
@@ -500,7 +543,7 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
         # Prix/kg (Boucherie) : cellule Poids+Prix fusionnee sur la ligne ou
         # elle est affichee (cf. _poids_prix_cell ci-dessus).
         for idx in span_rows:
-            style.add('SPAN', (4, idx), (5, idx))
+            style.add('SPAN', (4, idx), (derniere_col_poids, idx))
 
         table = Table(data, colWidths=col_widths, repeatRows=1)
         table.setStyle(style)
