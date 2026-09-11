@@ -3,10 +3,11 @@
 Assemble, a chaque commande anticipable traitee par auto_prepa.py, le
 bon_anticipation_NUMERO.txt de cette commande dans le fichier du jour
 bon_anticipation_JJ_MM.txt (Drive GITHUB/Anticipation/MM_AAAA/JJ_MM/), met a
-jour commandes_anticipées_JJ_MM.txt (utilise par auto_prepa.py pour alerter
-si une commande annulee faisait partie de l'anticipation), puis regenere le
-PDF brouillon anticipation_JJ_MM.pdf correspondant (memes dossier/fichier,
-ecrases a chaque appel).
+jour commandes_anticipées_JJ_MM.txt (liste du brouillon, figee dans
+commandes_envoyées_JJ_MM.txt par anticipation_commandes.py une fois
+l'anticipation du jour partie par mail), puis regenere le PDF brouillon
+anticipation_JJ_MM.pdf correspondant (memes dossier/fichier, ecrases a
+chaque appel).
 
 Avant tout assemblage, applique les annulations en attente sur le dossier du
 jour (ac.appliquer_annulations_jour) et n'integre jamais une commande annulee

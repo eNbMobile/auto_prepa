@@ -642,16 +642,16 @@ def _cle_tri_commande(numero):
     return (0, int(numero)) if numero.isdigit() else (1, numero)
 
 
-def _maj_fichier_commandes_anticipees(drive_svc, commandes, dossier_mm_aaaa, dossier_jj_mm):
-    """Note dans GITHUB/Anticipation/archives/MM_AAAA/JJ_MM/commandes_anticipées_JJ_MM.txt
-    (separateur virgule) les numeros de commande anticipes ce jour-la. Si une
-    anticipation a deja ete lancee dans la journee pour ce meme JJ_MM (J, J+1,
-    ...), le fichier existant est fusionne avec les commandes de ce run plutot
+def _maj_fichier_numeros_archive(drive_svc, commandes, dossier_mm_aaaa, dossier_jj_mm,
+                                 nom_fichier):
+    """Note dans GITHUB/Anticipation/archives/MM_AAAA/JJ_MM/nom_fichier
+    (separateur virgule) les numeros de commande passes en argument. Si le
+    fichier existe deja (plusieurs anticipations dans la journee pour ce meme
+    JJ_MM : J, J+1, ...), son contenu est fusionne avec commandes plutot
     qu'ecrase."""
     if not commandes:
         return
 
-    nom_fichier = f"commandes_anticipées_{dossier_jj_mm}.txt"
     path = f"GITHUB/Anticipation/archives/{dossier_mm_aaaa}/{dossier_jj_mm}"
     try:
         github_id = ap._get_or_create_subfolder(drive_svc, "root", "GITHUB")
@@ -693,6 +693,39 @@ def _maj_fichier_commandes_anticipees(drive_svc, commandes, dossier_mm_aaaa, dos
         print(f"    {nom_fichier} => Drive {path}/ OK ({len(toutes)} commande(s) au total)")
     except Exception as e:
         print(f"    Mise a jour {nom_fichier} echouee : {e}")
+
+
+def _maj_fichier_commandes_anticipees(drive_svc, commandes, dossier_mm_aaaa, dossier_jj_mm):
+    """Commandes presentes dans le BROUILLON d'anticipation du jour
+    (commandes_anticipées_JJ_MM.txt), tenu a jour a chaque assemblage."""
+    _maj_fichier_numeros_archive(drive_svc, commandes, dossier_mm_aaaa, dossier_jj_mm,
+                                 f"commandes_anticipées_{dossier_jj_mm}.txt")
+
+
+def _maj_fichier_commandes_envoyees(drive_svc, commandes, dossier_mm_aaaa, dossier_jj_mm):
+    """Commandes reellement PARTIES par mail a l'equipe dans l'anticipation du
+    jour (commandes_envoyées_JJ_MM.txt) : seule cette liste, et non le
+    brouillon, justifie l'alerte d'auto_prepa.py quand l'une d'elles est
+    annulee ensuite (_alerter_si_commande_anticipee_annulee). Cumulative, pour
+    couvrir les jours ou plusieurs anticipations sont envoyees (J, J+1, ...)."""
+    _maj_fichier_numeros_archive(drive_svc, commandes, dossier_mm_aaaa, dossier_jj_mm,
+                                 f"commandes_envoyées_{dossier_jj_mm}.txt")
+
+
+def _enregistrer_commandes_anticipation_envoyee(drive_svc, dossier_mm_aaaa, dossier_jj_mm):
+    """Apres un envoi reussi du PDF d'anticipation du jour, fige la liste des
+    commandes qu'il contenait dans commandes_envoyées_JJ_MM.txt : le brouillon
+    (commandes_anticipées_JJ_MM.txt) est a jour a cet instant — les commandes
+    annulees en ont ete retirees juste avant l'envoi par
+    appliquer_annulations_jour."""
+    commandes = ap._telecharger_numeros_archive_jour(
+        drive_svc, dossier_mm_aaaa, dossier_jj_mm,
+        f"commandes_anticipées_{dossier_jj_mm}.txt")
+    if not commandes:
+        print(f"  Aucune commande a noter comme envoyee pour le {dossier_jj_mm}.")
+        return
+    _maj_fichier_commandes_envoyees(
+        drive_svc, sorted(commandes, key=_cle_tri_commande), dossier_mm_aaaa, dossier_jj_mm)
 
 
 def _retirer_commandes_fichier_anticipees(drive_svc, numeros_a_retirer, dossier_mm_aaaa, dossier_jj_mm):
@@ -1064,6 +1097,9 @@ def main():
         if archive_ok:
             print(f"\n{nom_pdf} => Drive Anticipation/archives OK")
             email_ok = _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf)
+            if email_ok:
+                _enregistrer_commandes_anticipation_envoyee(
+                    drive_svc, dossier_mm_aaaa, dossier_jj_mm)
             if email_ok and pdf_file_id:
                 _supprimer_pdf_jour_anticipation(drive_svc, pdf_file_id, nom_pdf)
                 orphelins = _reinitialiser_dossier_jour_anticipation(drive_svc, folder_id, dossier_jj_mm)
