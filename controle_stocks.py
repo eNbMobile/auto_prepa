@@ -328,10 +328,39 @@ def _charger_ventes_csv(chemin):
 
 
 
+def numeros_annules_registre():
+    """Numéros des commandes annulées / remplacées, lus dans le registre Drive
+    partagé avec auto_prepa (GITHUB/Annulations/commandes_annulees.txt).
+
+    Filet de sécurité pour les ventes : le BonDeCommande d'une commande annulée
+    est normalement supprimé du dossier Drive BDC au traitement du mail
+    d'annulation, mais s'il y survit (suppression échouée, ou BDC archivé APRÈS
+    l'annulation parce que l'email de confirmation n'avait pas encore été
+    traité), il est repris tel quel par generer_ventes et gonfle les ventes du
+    jour — en double avec la commande de remplacement, qui contient les mêmes
+    produits.
+
+    Set vide si Drive ou le registre est indisponible : on retombe alors sur le
+    comportement d'avant, sans filtrage.
+    """
+    svc = _get_drive_service()
+    if not svc:
+        return set()
+    try:
+        # Import tardif : auto_prepa importe livraison_drive, qui importe ce
+        # module — un import au niveau du module créerait un cycle.
+        import auto_prepa as ap
+        return ap.commandes_annulees(svc)
+    except Exception as e:
+        print(f"  Registre des annulations illisible ({e}) — aucun filtrage.")
+        return set()
+
+
 def generer_ventes(date_j1):
     """
     Extrait les ventes du jour date_j1 via pdftotext sur les BonDeCommande.
     Si ventes_JJ_MM.csv existe déjà dans WORK_DIR, le charge directement.
+    Les BonDeCommande des commandes annulées / remplacées sont écartés.
     Retourne ({gencod: qty}, {gencod: libelle}).
     """
     dossier    = date_j1.strftime("%d_%m")
@@ -357,6 +386,21 @@ def generer_ventes(date_j1):
     if not pdfs:
         print(f"  Aucun BonDeCommande trouvé dans {bdc_subdir}.")
         return {}, {}
+
+    annulees = numeros_annules_registre()
+    if annulees:
+        retenus = []
+        for pdf in pdfs:
+            numero = pdf.removeprefix("BonDeCommande_").removesuffix(".pdf")
+            if numero in annulees:
+                print(f"  Commande {numero} annulée/remplacée : exclue des ventes "
+                      f"(registre des annulations).")
+                continue
+            retenus.append(pdf)
+        pdfs = retenus
+        if not pdfs:
+            print(f"  Aucun BonDeCommande retenu dans {bdc_subdir}.")
+            return {}, {}
 
     print(f"  {len(pdfs)} BonDeCommande(s) …")
     gencods_r1 = charger_gencods_r1()
