@@ -126,11 +126,15 @@ def _marquer_email(gmail_svc, msg_id, label_id):
     except Exception as e:
         print(f"    Marquage email echoue : {e}")
 
-def telecharger_bons_email(gmail_svc, cache_dir):
+def telecharger_bons_email(gmail_svc, cache_dir, drive_svc=None):
     """
     Lit les emails de confirmation (no-reply@systeme-u.fr),
     telecharge bon_encaissement.pdf => BonDeCommande_XXX.pdf dans cache_dir.
     Retourne {filename: (dossier_jj_mm, dossier_mm_aaaa)} pour les nouveaux PDFs telecharges.
+
+    `drive_svc` (facultatif) sert a ecarter les commandes deja preparees a
+    partir d'un bon depose dans le dossier de traitement manuel, dont l'email
+    de confirmation finit malgre tout par arriver.
     """
     label_id = _get_or_create_gmail_label(gmail_svc, GMAIL_LABEL_CONF)
     q = f'from:{GMAIL_CONF_FROM} subject:"{GMAIL_CONF_SUBJECT}" -label:{GMAIL_LABEL_CONF}'
@@ -164,6 +168,14 @@ def telecharger_bons_email(gmail_svc, cache_dir):
                 continue
             numero = match_num.group(1)
             filename = f"BonDeCommande_{numero}.pdf"
+
+            # Commande deja preparee depuis un bon depose dans le dossier de
+            # traitement manuel : son email de confirmation, arrive apres coup,
+            # ne doit pas la faire traiter une seconde fois.
+            if _commande_deja_traitee(drive_svc, numero):
+                print(f"    Commande {numero} deja traitee (depot manuel) : email ignore.")
+                _marquer_email(gmail_svc, m['id'], label_id)
+                continue
 
             match_date = re.search(r'(\d{2}/\d{2}/\d{4})', subject)
             dossier_jj_mm = ""
@@ -199,6 +211,183 @@ def telecharger_bons_email(gmail_svc, cache_dir):
             print(f"    Erreur traitement email : {e}")
 
     return nouveaux
+
+# ---------------------------------------------------------------------------
+# Bons de commande deposes manuellement sur Drive
+# ---------------------------------------------------------------------------
+# Il arrive, tres rarement, qu'aucun email de confirmation ne soit recu pour
+# une commande : sans email, telecharger_bons_email ne la voit jamais et elle
+# n'est donc jamais preparee. Filet de secours : deposer a la main le bon
+# d'encaissement PDF dans le dossier Drive GITHUB/BDC/Traitement manuel (ou
+# GITHUB/MobUDrive_Bons/Traitement manuel). Chaque run le recupere et le
+# traite exactement comme une piece jointe d'email : numero de commande et
+# date de livraison sont alors lus dans le PDF lui-meme, a defaut de sujet
+# d'email. Une fois la commande traitee, le depot est mis a la corbeille pour
+# ne pas etre repris au run suivant (le PDF reste archive par
+# archiver_pdf_drive dans BDC/MM_AAAA/JJ_MM).
+DOSSIER_TRAITEMENT_MANUEL = "Traitement manuel"
+
+# Entete du bon d'encaissement : "Commande : 54868421 - H9 ... LIVRAISON ..."
+_RE_NUMERO_PDF = re.compile(r'Commande\s*:\s*(\d{6,})')
+_RE_NUMERO_NOM = re.compile(r'BonDeCommande[_\- ]*(\d{6,})', re.IGNORECASE)
+
+
+def _dossier_traitement_manuel(drive_svc):
+    """Retourne l'ID du sous-dossier de depot manuel, cherche dans le dossier
+    Drive BDC puis dans le dossier des bons. Comparaison insensible a la casse
+    ('Traitement manuel' / 'traitement manuel'). None s'il n'existe pas."""
+    for parent_id in (DRIVE_BDC_FOLDER_ID, DRIVE_BONS_FOLDER_ID):
+        if not parent_id:
+            continue
+        try:
+            res = drive_svc.files().list(
+                q=(f"'{parent_id}' in parents "
+                   f"and mimeType='application/vnd.google-apps.folder' and trashed=false"),
+                fields="files(id,name)",
+            ).execute()
+        except Exception as e:
+            print(f"  Dossier '{DOSSIER_TRAITEMENT_MANUEL}' inaccessible : {e}")
+            continue
+        for f in res.get("files", []):
+            if f.get("name", "").strip().casefold() == DOSSIER_TRAITEMENT_MANUEL.casefold():
+                return f["id"]
+    return None
+
+
+def _numero_bon_depose(nom_fichier, texte_pdf):
+    """Numero de commande d'un bon depose manuellement : lu dans le nom du
+    fichier (BonDeCommande_NUMERO.pdf), sinon dans l'entete du PDF
+    ("Commande : 54868421 - ..."), sinon dans tout nombre assez long du nom
+    (le fichier peut avoir ete renomme a la main)."""
+    m = _RE_NUMERO_NOM.search(nom_fichier)
+    if m:
+        return m.group(1)
+    m = _RE_NUMERO_PDF.search(texte_pdf)
+    if m:
+        return m.group(1)
+    m = re.search(r'(\d{6,})', nom_fichier)
+    return m.group(1) if m else ""
+
+
+def _commande_deja_traitee(drive_svc, numero, ignorer_parents=()):
+    """Vrai si la commande a deja ete preparee, et ne doit donc pas l'etre une
+    seconde fois : elle ressortirait sinon en double dans l'anticipation, la
+    livraison et le suivi des avoirs. Cas vise : une commande arrivee par les
+    deux voies, un bon depose a la main puis l'arrivee tardive de son email de
+    confirmation (ou l'inverse).
+
+    Deux conditions, dans cet ordre : son BonDeCommande_NUMERO.pdf est archive
+    sur Drive ailleurs que dans `ignorer_parents` (le dossier de depot manuel),
+    test rapide et negatif pour toute commande nouvelle ; ET elle figure dans
+    le suivi Avoir/Commandes en cours. Le second test evite de tenir pour
+    traitee une commande dont seul le PDF a ete archive, la generation du bon
+    ayant echoue juste apres (traiter_commande_pdf archive avant de generer) :
+    celle-la doit au contraire etre retentee au run suivant."""
+    if not drive_svc or not numero:
+        return False
+    nom = f"BonDeCommande_{numero}.pdf"
+    try:
+        res = drive_svc.files().list(
+            q=f"name='{nom}' and trashed=false",
+            fields="files(id,parents)",
+        ).execute()
+    except Exception as e:
+        print(f"    Recherche de {nom} sur Drive echouee : {e}")
+        return False
+    archive = False
+    for f in res.get("files", []):
+        parents = f.get("parents") or []
+        if any(p in ignorer_parents for p in parents):
+            continue
+        archive = True
+        break
+    return archive and _commande_dans_suivi_avoir(drive_svc, numero)
+
+
+def _archiver_depot_manuel(drive_svc, file_id, nom_fichier, motif):
+    """Met a la corbeille un bon depose manuellement (restaurable depuis Drive,
+    et de toute facon archive dans BDC/MM_AAAA/JJ_MM), pour qu'il ne soit pas
+    repris a chaque run."""
+    try:
+        drive_svc.files().update(fileId=file_id, body={"trashed": True}).execute()
+        print(f"    {nom_fichier} : depot manuel mis a la corbeille ({motif}).")
+    except Exception as e:
+        print(f"    Mise a la corbeille du depot manuel {nom_fichier} echouee : {e}")
+
+
+def telecharger_bons_traitement_manuel(drive_svc, cache_dir):
+    """Recupere les bons de commande deposes a la main dans le dossier Drive de
+    traitement manuel et les prepare comme ceux recus par email.
+
+    Retourne ({filename: (dossier_jj_mm, dossier_mm_aaaa)}, {filename: file_id})
+    ou file_id est l'identifiant Drive du depot, a mettre a la corbeille via
+    _archiver_depot_manuel une fois la commande effectivement traitee."""
+    dossier_id = _dossier_traitement_manuel(drive_svc)
+    if not dossier_id:
+        return {}, {}
+
+    try:
+        res = drive_svc.files().list(
+            q=(f"'{dossier_id}' in parents and mimeType='application/pdf' "
+               f"and trashed=false"),
+            fields="files(id,name)",
+        ).execute()
+        fichiers = res.get("files", [])
+    except Exception as e:
+        print(f"  Dossier '{DOSSIER_TRAITEMENT_MANUEL}' illisible ({e})")
+        return {}, {}
+
+    if not fichiers:
+        return {}, {}
+
+    print(f"  {len(fichiers)} bon(s) a traiter dans '{DOSSIER_TRAITEMENT_MANUEL}'.")
+    nouveaux = {}   # {filename: (dossier_jj_mm, dossier_mm_aaaa)}
+    depots = {}     # {filename: file_id du depot Drive}
+
+    for f in fichiers:
+        nom_depot = f.get("name", "")
+        tmp_path = os.path.join(cache_dir, f"depot_manuel_{f['id']}.pdf")
+        try:
+            download_pdf(drive_svc, f["id"], tmp_path)
+            texte = subprocess.run(["pdftotext", "-layout", tmp_path, "-"],
+                                   capture_output=True, text=True).stdout
+            if not texte.strip():
+                print(f"    {nom_depot} : PDF vide ou illisible, ignore.")
+                continue
+
+            numero = _numero_bon_depose(nom_depot, texte)
+            if not numero:
+                print(f"    {nom_depot} : numero de commande introuvable "
+                      f"(ni dans le nom du fichier, ni dans le PDF), ignore.")
+                continue
+
+            if _commande_deja_traitee(drive_svc, numero, ignorer_parents=(dossier_id,)):
+                print(f"    {nom_depot} : commande {numero} deja traitee.")
+                _archiver_depot_manuel(drive_svc, f["id"], nom_depot,
+                                       "commande deja traitee")
+                continue
+
+            _, _, _, date_cde, _ = extraire_client_creneau_pdf(texte)
+            if not date_cde:
+                print(f"    {nom_depot} : date de retrait/livraison introuvable "
+                      f"dans le PDF, ignore.")
+                continue
+
+            filename = f"BonDeCommande_{numero}.pdf"
+            os.replace(tmp_path, os.path.join(cache_dir, filename))
+            nouveaux[filename] = (date_cde[:5].replace('/', '_'),    # JJ_MM
+                                  date_cde[3:].replace('/', '_'))    # MM_AAAA
+            depots[filename] = f["id"]
+            print(f"    => {filename} OK (depot manuel, livraison {date_cde})")
+
+        except Exception as e:
+            print(f"    Erreur traitement du depot manuel {nom_depot} : {e}")
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    return nouveaux, depots
+
 
 def _telecharger_bdc_archive_drive(drive_svc, numero):
     """Telecharge le BonDeCommande_NUMERO.pdf archive dans Drive BDC (avant sa
@@ -1505,6 +1694,49 @@ def supprimer_commande_avoir_drive(drive_svc, numero):
     except Exception as e:
         print(f"    Suppression Drive GITHUB/Avoir/{AVOIR_SHEET_FILENAME} echouee : {e}")
 
+def _commande_dans_suivi_avoir(drive_svc, numero):
+    """Vrai si `numero` figure dans Drive GITHUB/Avoir/Commandes en cours (2e
+    colonne). La ligne y est inscrite par inscrire_commande_avoir_drive une
+    fois le bon de preparation genere : c'est donc la trace qu'une commande a
+    reellement ete preparee. Le suivi etant vide periodiquement par
+    verif_avoirs.py, une commande ancienne n'y figure plus et est alors tenue
+    pour non traitee — au pire elle est repreparee, jamais perdue."""
+    try:
+        parent = "root"
+        for nom in ("GITHUB", "Avoir"):
+            res = drive_svc.files().list(
+                q=(f"name='{nom}' and '{parent}' in parents "
+                   f"and mimeType='application/vnd.google-apps.folder' and trashed=false"),
+                fields="files(id)",
+            ).execute()
+            files = res.get("files", [])
+            if not files:
+                return False
+            parent = files[0]["id"]
+
+        res = drive_svc.files().list(
+            q=(f"name='{AVOIR_SHEET_FILENAME}' and '{parent}' in parents "
+               f"and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"),
+            fields="files(id)",
+        ).execute()
+        existing = res.get("files", [])
+        if not existing:
+            return False
+
+        buf = io.BytesIO()
+        dl = MediaIoBaseDownload(
+            buf, drive_svc.files().export_media(fileId=existing[0]["id"], mimeType="text/csv"))
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        contenu = buf.getvalue().decode("utf-8-sig", errors="replace")
+        for ligne in csv.reader(io.StringIO(contenu)):
+            if len(ligne) > 1 and ligne[1].strip() == str(numero):
+                return True
+    except Exception as e:
+        print(f"    Lecture Drive GITHUB/Avoir/{AVOIR_SHEET_FILENAME} echouee : {e}")
+    return False
+
 LOCK_FILE = os.path.expanduser("~/.auto_prepa.lock")
 
 def main():
@@ -1839,8 +2071,22 @@ def _main():
     shopopop_token, shopopop_drive_id, shopopop_connecte = traiter_modifications_clients(
         drive_svc, gmail_svc, sheets_svc,
         shopopop_token, shopopop_drive_id, shopopop_connecte)
-    nouveaux = telecharger_bons_email(gmail_svc, CACHE_DIR)
+    nouveaux = telecharger_bons_email(gmail_svc, CACHE_DIR, drive_svc)
+
+    # Bons deposes a la main sur Drive (commande sans email de confirmation) :
+    # meme traitement que ceux recus par email, a partir d'ici.
+    nouveaux_manuels, depots_manuels = telecharger_bons_traitement_manuel(
+        drive_svc, CACHE_DIR)
+    nouveaux.update(nouveaux_manuels)
+
     nouveaux = _ecarter_commandes_annulees(drive_svc, nouveaux)
+
+    # Un bon depose pour une commande entre-temps annulee/remplacee n'a plus
+    # lieu d'etre : sans cela il resterait dans le dossier et serait reexamine
+    # a chaque run.
+    for pdf in [p for p in depots_manuels if p not in nouveaux]:
+        _archiver_depot_manuel(drive_svc, depots_manuels.pop(pdf), pdf,
+                               "commande annulee ou remplacee")
 
     if not nouveaux:
         print("Pas de nouvelle commande.")
@@ -1856,6 +2102,11 @@ def _main():
         statut, shopopop_token, shopopop_drive_id, shopopop_connecte = traiter_commande_pdf(
             drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, dossier_mm_aaaa,
             heure_cron, shopopop_token, shopopop_drive_id, shopopop_connecte)
+        # Le depot manuel n'est retire qu'une fois la commande reellement
+        # traitee : sur "retry" (echec de generation) il reste en place et sera
+        # repris au run suivant.
+        if statut == "processed" and pdf in depots_manuels:
+            _archiver_depot_manuel(drive_svc, depots_manuels[pdf], pdf, "commande traitee")
         if statut == "stop":
             break
 

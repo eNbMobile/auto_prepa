@@ -80,7 +80,7 @@ jobs:
           echo "$(date '+%A %d/%m %H:%M') Paris — intervalle=${interval}min — run_window=$run_window"
           echo "run_window=$run_window" >> "$GITHUB_OUTPUT"
 
-      - name: Vérifier nouveaux emails Gmail
+      - name: Vérifier nouveaux emails Gmail et bons en traitement manuel
         id: check_pdfs
         if: steps.check_window.outputs.run_window == 'true'
         env:
@@ -171,8 +171,51 @@ jobs:
                   has_new = True
                   break
 
+          # Bons de commande déposés à la main dans Drive (GITHUB/BDC/Traitement
+          # manuel) : une commande dont l'email de confirmation n'est jamais
+          # arrivé n'est détectable que là — sans ce test, auto_prepa.py ne
+          # serait pas lancé et le bon déposé resterait sans suite.
+          def drive_list(q, fields="files(id,name)"):
+              url = "https://www.googleapis.com/drive/v3/files?" + urllib.parse.urlencode({
+                  "q": q, "fields": fields,
+              })
+              return json.loads(urlopen_retry(
+                  urllib.request.Request(url, headers=headers)
+              ).read()).get("files", [])
+
+          if not has_new and config_folder_id:
+              try:
+                  parents = []
+                  files = drive_list(
+                      f"'{config_folder_id}' in parents and name='config.json' and trashed=false",
+                      "files(id)")
+                  if files:
+                      dl_url = f"https://www.googleapis.com/drive/v3/files/{files[0]['id']}?alt=media"
+                      app_cfg = json.loads(urlopen_retry(
+                          urllib.request.Request(dl_url, headers=headers)
+                      ).read().decode("utf-8"))
+                      parents = [app_cfg.get("drive_bdc_folder_id", ""),
+                                 app_cfg.get("drive_bons_folder_id", "")]
+                  for parent in [p for p in parents if p]:
+                      for dossier in drive_list(
+                              f"'{parent}' in parents and trashed=false and "
+                              "mimeType='application/vnd.google-apps.folder'"):
+                          if dossier.get("name", "").strip().casefold() != "traitement manuel":
+                              continue
+                          bons = drive_list(
+                              f"'{dossier['id']}' in parents and trashed=false and "
+                              "mimeType='application/pdf'", "files(id)")
+                          if bons:
+                              print(f"{len(bons)} bon(s) déposé(s) en traitement manuel")
+                              has_new = True
+                              break
+                      if has_new:
+                          break
+              except Exception as e:
+                  print(f"Erreur vérification du traitement manuel : {e}")
+
           result = "true" if has_new else "false"
-          print(f"Emails non traités détectés → continuer={result}")
+          print(f"Emails ou bons non traités détectés → continuer={result}")
           with open(os.environ["GITHUB_OUTPUT"], "a") as f: f.write(f"has_new={result}\n")
           EOF
 
