@@ -1,0 +1,6 @@
+name = "wf"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+# Secret à définir après le déploiement (ne jamais le mettre ici en clair) :
+#   wrangler secret put GH_TOKEN
