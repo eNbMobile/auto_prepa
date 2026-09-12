@@ -130,8 +130,15 @@ def main():
         drive_download(access, index["j1.xlsx"], "j1.xlsx")
         print(f"  → j1.xlsx ({os.path.getsize('j1.xlsx'):,} octets)")
     else:
-        nom_j1 = f"stock_{date_debut.strftime('%d_%m_%Y')}_j.xlsx"
-        file_id_j1 = find_in_archive(access, DRIVE_CONFIG_FOLDER_ID, "stocks", nom_j1)
+        # Stocks du soir de la veille ; "_j" couvre les archives antérieures
+        # au découpage matin/soir (un seul export conservé par jour).
+        jour = date_debut.strftime('%d_%m_%Y')
+        nom_j1, file_id_j1 = None, None
+        for nom in (f"stock_{jour}_soir.xlsx", f"stock_{jour}_j.xlsx"):
+            file_id_j1 = find_in_archive(access, DRIVE_CONFIG_FOLDER_ID, "stocks", nom)
+            if file_id_j1:
+                nom_j1 = nom
+                break
         if file_id_j1:
             print(f"Téléchargement {nom_j1} (archive) → j1.xlsx …", flush=True)
             drive_download(access, file_id_j1, "j1.xlsx")

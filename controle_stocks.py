@@ -704,6 +704,16 @@ def _get_or_create_subfolder_drive(svc, parent_id, name):
         return None
 
 
+def nom_archive_stock(jour, moment):
+    """Nom d'archive d'un export de stocks Drive : stock_JJ_MM_AAAA_{matin,soir}.xlsx.
+
+    Deux exports par jour sont conservés : 'matin' (j.xlsx, stocks du jour) et
+    'soir' (j1.xlsx, stocks de fin de journée qui servent de base au contrôle
+    du lendemain).
+    """
+    return f"stock_{jour.strftime('%d_%m_%Y')}_{moment}.xlsx"
+
+
 def upload_to_archive(local_path, subfolder, filename=None, root_id=None):
     """Upload dans {root_id}/Archives/{subfolder}/ (écrase si existant).
 
@@ -1117,6 +1127,8 @@ def main():
         print(f"Lecture stock J-{nb_jours} : {fichier_j1}")
         stock_j1, libelles_stock, classeurs_stock = lire_stock(fichier_j1, classeur_requis=False)
         print(f"  → {len(stock_j1)} gencods, {len(libelles_stock)} libellés xlsx")
+        upload_to_archive(fichier_j1, "stocks", nom_archive_stock(date_j1, "soir"),
+                          root_id=DRIVE_CONFIG_FOLDER_ID)
     else:
         if fichier_j1:
             print(f"  {fichier_j1} absent — stock de départ vide.")
@@ -1125,8 +1137,8 @@ def main():
     print(f"Lecture stock J   : {fichier_j}")
     stock_j, libelles_stock_j, classeurs_stock_j = lire_stock(fichier_j)
     print(f"  → {len(stock_j)} gencods")
-    upload_to_archive(fichier_j, "stocks", f"stock_{date.today().strftime('%d_%m_%Y')}_j.xlsx",
-                       root_id=DRIVE_CONFIG_FOLDER_ID)
+    upload_to_archive(fichier_j, "stocks", nom_archive_stock(date.today(), "matin"),
+                      root_id=DRIVE_CONFIG_FOLDER_ID)
     for g, l in libelles_stock_j.items():
         if g not in libelles_stock:
             libelles_stock[g] = l
