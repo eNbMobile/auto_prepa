@@ -214,6 +214,29 @@ jobs:
               except Exception as e:
                   print(f"Erreur vérification du traitement manuel : {e}")
 
+          # Commande inscrite dans LIVRAISON DRIVE 2026 sans sa distance : tant
+          # que Shopopop ne l'a pas fournie et que l'alerte n'est pas partie,
+          # auto_prepa.py doit être relancé pour retenter, sans attendre qu'un
+          # nouvel email arrive (le fichier est écrit par livraison_drive.py,
+          # qui le supprime dès qu'il n'y a plus rien en attente).
+          if not has_new and config_folder_id:
+              try:
+                  files = drive_list(
+                      f"'{config_folder_id}' in parents and trashed=false and "
+                      "name='km_en_attente.json'", "files(id)")
+                  if files:
+                      dl_url = f"https://www.googleapis.com/drive/v3/files/{files[0]['id']}?alt=media"
+                      attente = json.loads(urlopen_retry(
+                          urllib.request.Request(dl_url, headers=headers)
+                      ).read().decode("utf-8"))
+                      actives = [n for n, i in attente.items() if not i.get("signale")]
+                      if actives:
+                          print(f"{len(actives)} commande(s) en attente de km Shopopop : "
+                                f"{', '.join(actives)}")
+                          has_new = True
+              except Exception as e:
+                  print(f"Erreur vérification des km en attente : {e}")
+
           result = "true" if has_new else "false"
           print(f"Emails ou bons non traités détectés → continuer={result}")
           with open(os.environ["GITHUB_OUTPUT"], "a") as f: f.write(f"has_new={result}\n")
