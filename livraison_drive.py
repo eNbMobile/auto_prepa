@@ -25,6 +25,14 @@ Le nom/prénom est toujours inscrit en CAPS. Dans EN ATTENTE, le n° de
 commande permet d'identifier sans ambiguïté la ligne à annuler (nom+jour
 peut correspondre à plusieurs commandes du même client le même jour).
 
+Le km (distance magasin -> client) est récupéré sur Shopopop dès
+l'inscription de la commande. Quand il manque (commande pas encore
+synchronisée côté Shopopop), il est retenté à chaque exécution suivante
+jusqu'au jour de la livraison inclus (retenter_km_manquants) ; ce n'est
+qu'ensuite, la livraison passée et la distance toujours absente, qu'un email
+demande de la saisir à la main (signaler_km_manquants_definitifs, cellule km
+passée en orange).
+
 auto_prepa.py appelle traiter_commande_livraison() pour chaque commande en
 LIVRAISON détectée (présence de ',Livraison,' sur la 2e ligne de
 bon_prepa.txt). Le workflow "Livraison Drive - En attente" (déclenché à
@@ -66,10 +74,19 @@ _MAX_LIGNES = 500  # profondeur de recherche de ligne libre / lecture EN ATTENTE
 _DELAI_RETRY_KM_SECONDES = 30
 
 # Au-dela de ce nombre de jours de retard sur la date de livraison, une ligne
-# sans km n'est plus retentee par retenter_km_manquants (cf. plus bas) : la
-# commande a de toute facon deja ete signalee par email et completee a la
-# main si besoin.
-_FENETRE_RETENTATIVE_JOURS = 3
+# sans km n'est plus signalee par email (signaler_km_manquants_definitifs) :
+# passe ce delai le signalement n'a plus d'interet, et cela evite de
+# reveiller de vieilles lignes laissees vides volontairement dans le
+# classeur.
+_FENETRE_SIGNALEMENT_JOURS = 3
+
+# Fond orange (#FFCC66) pose sur la cellule km d'une ligne dont la distance
+# n'a definitivement pas pu etre recuperee sur Shopopop : repere visuellement
+# dans le classeur la cellule a completer a la main, et sert de marqueur pour
+# n'envoyer qu'un seul email par ligne (cf. signaler_km_manquants_definitifs).
+# Composantes choisies exactement representables sur 8 bits (255/204/102),
+# pour etre relues telles quelles par _lignes_km_deja_signalees.
+_ORANGE_KM_A_COMPLETER = {"red": 1.0, "green": 0.8, "blue": 0.4}
 
 
 def _lendemain_ouvre(aujourdhui):
@@ -440,8 +457,13 @@ def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
     (la livraison est deja visible sur Shopopop des la commande, meme si sa
     date est trop lointaine pour etre renseignee tout de suite dans l'onglet
     du mois).
-    Retourne True si la commande a ete inscrite mais sans km (a signaler par
-    email par l'appelant), False sinon (km trouve, ou commande non inscrite)."""
+    Retourne True si la commande a ete inscrite mais sans km, False sinon (km
+    trouve, ou commande non inscrite). Un km absent n'est PAS signale par
+    email a ce stade : une commande tout juste passee n'est souvent pas encore
+    synchronisee cote Shopopop et son km est recupere tout seul par
+    retenter_km_manquants lors d'un run suivant. Le signalement n'intervient
+    qu'une fois la date de livraison passee, via
+    signaler_km_manquants_definitifs."""
     if not sheets_svc or not spreadsheet_id:
         print("    Sheets/LIVRAISON DRIVE 2026 indisponible, commande ignoree.")
         return False
@@ -469,7 +491,8 @@ def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
                 km = shopopop.distance_km(shopopop_token, shopopop_drive_id, date_cde, nom_complet)
                 if km is None:
                     print(f"    km Shopopop toujours introuvable pour {nom_complet} apres nouvelle "
-                          f"tentative (sera retente lors des prochaines executions).")
+                          f"tentative (sera retente lors des prochaines executions, et signale "
+                          f"par email seulement si toujours absent apres la livraison).")
         else:
             print(f"    Pas de token Shopopop, km non recherche pour {nom_complet}.")
         nom_maj, prenom_maj = nom.strip().upper(), prenom.strip().upper()
@@ -486,21 +509,28 @@ def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
         return False
 
 
-def _lister_km_manquants(sheets_svc, spreadsheet_id, maintenant=None):
+def lister_km_manquants(sheets_svc, spreadsheet_id, maintenant=None):
     """Repere, sans appeler Shopopop, les lignes LIVRAISON dont la colonne km
-    est encore vide : onglets du mois courant et du mois du lendemain ouvre
-    (au cas ou la date de livraison soit a cheval sur un changement de mois),
-    plus l'onglet EN ATTENTE. Ignore les lignes dont la date de livraison
-    remonte a plus de _FENETRE_RETENTATIVE_JOURS jours (deja signalees par
-    email, pas la peine de continuer a les retenter indefiniment). Retourne
-    [(onglet, ligne, nom_complet, date_cible), ...]."""
+    est encore vide : onglets du mois courant, du mois du lendemain ouvre et
+    du mois d'il y a _FENETRE_SIGNALEMENT_JOURS jours (au cas ou la date de
+    livraison soit a cheval sur un changement de mois), plus l'onglet EN
+    ATTENTE. Retourne [(onglet, ligne, nom, prenom, date_cible, numero), ...],
+    toutes dates confondues : c'est a l'appelant de garder celles qui
+    l'interessent (livraison a venir ou du jour pour une retentative,
+    livraison passee pour un signalement). Le resultat peut etre passe tel
+    quel a km_manquants_en_attente / retenter_km_manquants /
+    signaler_km_manquants_definitifs (parametre `manquants`), pour ne relire
+    le classeur qu'une fois par execution."""
     maintenant = maintenant or datetime.now(_TZ)
     aujourdhui = maintenant.date()
-    limite = aujourdhui - timedelta(days=_FENETRE_RETENTATIVE_JOURS)
 
-    a_retenter = []
+    manquants = []
 
-    mois_cibles = {MOIS_FR[aujourdhui.month - 1], MOIS_FR[_lendemain_ouvre(aujourdhui).month - 1]}
+    mois_cibles = {
+        MOIS_FR[aujourdhui.month - 1],
+        MOIS_FR[_lendemain_ouvre(aujourdhui).month - 1],
+        MOIS_FR[(aujourdhui - timedelta(days=_FENETRE_SIGNALEMENT_JOURS)).month - 1],
+    }
     for mois in mois_cibles:
         onglet = _trouver_onglet(sheets_svc, spreadsheet_id, mois)
         if not onglet:
@@ -509,6 +539,7 @@ def _lister_km_manquants(sheets_svc, spreadsheet_id, maintenant=None):
             spreadsheetId=spreadsheet_id,
             range=f"'{onglet}'!A2:E{1 + _MAX_LIGNES}").execute()
         for i, row in enumerate(res.get("values", [])):
+            numero = row[0].strip() if len(row) > 0 and row[0] else ""
             date_val = row[1].strip() if len(row) > 1 and row[1] else ""
             nom = row[2].strip() if len(row) > 2 and row[2] else ""
             prenom = row[3].strip() if len(row) > 3 and row[3] else ""
@@ -516,9 +547,9 @@ def _lister_km_manquants(sheets_svc, spreadsheet_id, maintenant=None):
             if not date_val or not nom or km_val:
                 continue
             cible = _parser_jour(date_val, aujourdhui)
-            if cible is None or cible < limite:
+            if cible is None:
                 continue
-            a_retenter.append((onglet, 2 + i, f"{nom} {prenom}".strip(), cible))
+            manquants.append((onglet, 2 + i, nom, prenom, cible, numero))
 
     onglet_attente = _trouver_onglet(sheets_svc, spreadsheet_id, ONGLET_EN_ATTENTE)
     if onglet_attente:
@@ -529,45 +560,73 @@ def _lister_km_manquants(sheets_svc, spreadsheet_id, maintenant=None):
             nom = row[0].strip() if len(row) > 0 and row[0] else ""
             prenom = row[1].strip() if len(row) > 1 and row[1] else ""
             jour = row[2].strip() if len(row) > 2 and row[2] else ""
+            numero = row[3].strip() if len(row) > 3 and row[3] else ""
             km_val = row[4].strip() if len(row) > 4 and row[4] else ""
             if not nom or not jour or km_val:
                 continue
             cible = _parser_jour(jour, aujourdhui)
-            if cible is None or cible < limite:
+            if cible is None:
                 continue
-            a_retenter.append((onglet_attente, 2 + i, f"{nom} {prenom}".strip(), cible))
+            manquants.append((onglet_attente, 2 + i, nom, prenom, cible, numero))
 
-    return a_retenter
+    return manquants
 
 
-def km_manquants_en_attente(sheets_svc, spreadsheet_id, maintenant=None):
+def _km_a_retenter(manquants, maintenant=None):
+    """Parmi `manquants` (cf. lister_km_manquants), les lignes dont la
+    livraison est encore a venir (ou est celle du jour) : les seules pour
+    lesquelles une nouvelle interrogation de Shopopop a un sens, l'API
+    back-office ne repondant que sur les livraisons "Programmees" (une fois la
+    livraison faite, la commande en sort et sa distance n'est plus
+    recuperable — cf. shopopop.distance_km)."""
+    aujourdhui = (maintenant or datetime.now(_TZ)).date()
+    return [m for m in manquants if m[4] >= aujourdhui]
+
+
+def _km_a_signaler(manquants, maintenant=None):
+    """Parmi `manquants` (cf. lister_km_manquants), les lignes dont la date de
+    livraison est passee depuis moins de _FENETRE_SIGNALEMENT_JOURS jours : la
+    recuperation automatique a definitivement echoue (plus rien a retenter,
+    cf. _km_a_retenter), il faut donc completer la colonne km a la main."""
+    aujourdhui = (maintenant or datetime.now(_TZ)).date()
+    limite = aujourdhui - timedelta(days=_FENETRE_SIGNALEMENT_JOURS)
+    return [m for m in manquants if limite <= m[4] < aujourdhui]
+
+
+def km_manquants_en_attente(sheets_svc, spreadsheet_id, maintenant=None, manquants=None):
     """True s'il existe au moins une ligne LIVRAISON avec un km encore vide a
-    retenter (cf. _lister_km_manquants). Ne fait que lire le classeur (aucun
+    retenter (cf. _km_a_retenter). Ne fait que lire le classeur (aucun
     appel Shopopop) : sert a decider, dans auto_prepa.py, s'il vaut la peine
     de se connecter a Shopopop meme quand aucune nouvelle commande LIVRAISON
     n'a ete rencontree lors du run en cours."""
-    return bool(_lister_km_manquants(sheets_svc, spreadsheet_id, maintenant))
+    if manquants is None:
+        manquants = lister_km_manquants(sheets_svc, spreadsheet_id, maintenant)
+    return bool(_km_a_retenter(manquants, maintenant))
 
 
-def retenter_km_manquants(sheets_svc, spreadsheet_id, shopopop_token, shopopop_drive_id, maintenant=None):
+def retenter_km_manquants(sheets_svc, spreadsheet_id, shopopop_token, shopopop_drive_id,
+                          maintenant=None, manquants=None):
     """Reparcourt les lignes LIVRAISON dont le km est reste vide (voir
-    _lister_km_manquants) et retente leur recuperation aupres de Shopopop —
+    _km_a_retenter) et retente leur recuperation aupres de Shopopop —
     la livraison a pu ne pas etre encore synchronisee cote Shopopop lors du
     ou des essais precedents (recherche initiale + retentative dans
     traiter_commande_livraison). Appelee a chaque execution du workflow
     (auto_prepa.py), elle complete ainsi progressivement les km manques d'une
-    execution a l'autre, jusqu'a _FENETRE_RETENTATIVE_JOURS jours apres la
-    date de livraison. Met a jour la cellule km (colonne E) des que trouve.
+    execution a l'autre, jusqu'au jour de la livraison inclus. Met a jour la
+    cellule km (colonne E) des que trouve.
     Retourne le nombre de km recuperes."""
     if not shopopop_token:
         return 0
-    a_retenter = _lister_km_manquants(sheets_svc, spreadsheet_id, maintenant)
+    if manquants is None:
+        manquants = lister_km_manquants(sheets_svc, spreadsheet_id, maintenant)
+    a_retenter = _km_a_retenter(manquants, maintenant)
     if not a_retenter:
         return 0
 
     print(f"    {len(a_retenter)} livraison(s) en attente de km, nouvelle tentative...")
     trouves = 0
-    for onglet, ligne, nom_complet, cible in a_retenter:
+    for onglet, ligne, nom, prenom, cible, _numero in a_retenter:
+        nom_complet = f"{nom} {prenom}".strip()
         km = shopopop.distance_km(shopopop_token, shopopop_drive_id, cible, nom_complet)
         if km is None:
             continue
@@ -578,6 +637,100 @@ def retenter_km_manquants(sheets_svc, spreadsheet_id, shopopop_token, shopopop_d
               f"pour {nom_complet} -> {km} km.")
         trouves += 1
     return trouves
+
+
+def _meme_couleur(couleur, reference, tolerance=0.02):
+    """Compare deux backgroundColor Sheets (composantes absentes = 0)."""
+    return all(abs(couleur.get(c, 0.0) - reference[c]) <= tolerance
+               for c in ("red", "green", "blue"))
+
+
+def _lignes_km_deja_signalees(sheets_svc, spreadsheet_id, titre_onglet):
+    """Numeros de ligne de `titre_onglet` dont la cellule km (colonne E) porte
+    deja le fond _ORANGE_KM_A_COMPLETER, c'est-a-dire dont l'absence de km a
+    deja fait l'objet d'un email (cf. signaler_km_manquants_definitifs)."""
+    res = sheets_svc.spreadsheets().get(
+        spreadsheetId=spreadsheet_id,
+        ranges=[f"'{titre_onglet}'!E2:E{1 + _MAX_LIGNES}"],
+        includeGridData=True,
+        fields="sheets(data(rowData(values(effectiveFormat(backgroundColor)))))").execute()
+    signalees = set()
+    for feuille in res.get("sheets", []):
+        for bloc in feuille.get("data", []):
+            for i, row in enumerate(bloc.get("rowData", [])):
+                valeurs = row.get("values") or []
+                if not valeurs:
+                    continue
+                fond = (valeurs[0].get("effectiveFormat") or {}).get("backgroundColor") or {}
+                if _meme_couleur(fond, _ORANGE_KM_A_COMPLETER):
+                    signalees.add(2 + i)
+    return signalees
+
+
+def _marquer_km_a_completer(sheets_svc, spreadsheet_id, titre_onglet, ligne):
+    """Met la cellule km (colonne E) de `ligne` en orange
+    (_ORANGE_KM_A_COMPLETER) : signale visuellement la distance a saisir a la
+    main et evite de renvoyer un email pour cette ligne aux runs suivants."""
+    sheet_id = _sheet_id(sheets_svc, spreadsheet_id, titre_onglet)
+    if sheet_id is None:
+        return False
+    sheets_svc.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={"requests": [{
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": ligne - 1, "endRowIndex": ligne,
+                    "startColumnIndex": 4, "endColumnIndex": 5,
+                },
+                "cell": {"userEnteredFormat": {"backgroundColor": _ORANGE_KM_A_COMPLETER}},
+                "fields": "userEnteredFormat.backgroundColor",
+            },
+        }]}).execute()
+    return True
+
+
+def signaler_km_manquants_definitifs(sheets_svc, spreadsheet_id, envoyer_email,
+                                     maintenant=None, manquants=None):
+    """Signale par email les livraisons dont la distance n'a jamais pu etre
+    recuperee sur Shopopop, une fois la date de livraison passee — c'est-a-dire
+    une fois toutes les retentatives epuisees (cf. _km_a_signaler). Le
+    signalement n'est volontairement PAS fait des le premier echec, au moment
+    ou la commande est inscrite : une commande tout juste passee n'est
+    souvent pas encore synchronisee cote Shopopop, et son km est alors
+    recupere tout seul par retenter_km_manquants au run suivant — prevenir
+    tout de suite reviendrait a demander une saisie manuelle inutile.
+
+    `envoyer_email(numero, nom, prenom, date_str)` doit retourner True si
+    l'email est bien parti : la cellule km n'est passee en orange
+    (_marquer_km_a_completer, qui evite un second email pour la meme ligne)
+    que dans ce cas. Retourne le nombre de lignes signalees.
+
+    `manquants` peut reprendre la liste deja etablie pour la retentative : les
+    km rattrapes entre-temps concernent forcement des livraisons du jour ou a
+    venir, jamais les lignes signalees ici (livraison passee)."""
+    if manquants is None:
+        manquants = lister_km_manquants(sheets_svc, spreadsheet_id, maintenant)
+    a_signaler = _km_a_signaler(manquants, maintenant)
+    if not a_signaler:
+        return 0
+
+    signalees = 0
+    deja_signalees = {}
+    for onglet, ligne, nom, prenom, cible, numero in a_signaler:
+        if onglet not in deja_signalees:
+            deja_signalees[onglet] = _lignes_km_deja_signalees(
+                sheets_svc, spreadsheet_id, onglet)
+        if ligne in deja_signalees[onglet]:
+            continue
+        nom_complet = f"{nom} {prenom}".strip()
+        print(f"    LIVRAISON DRIVE 2026 / {onglet} L{ligne} : km toujours absent apres la "
+              f"livraison du {cible.strftime('%d/%m/%Y')} ({nom_complet}), signalement par email.")
+        if not envoyer_email(numero, nom, prenom, cible.strftime("%d/%m/%Y")):
+            continue
+        _marquer_km_a_completer(sheets_svc, spreadsheet_id, onglet, ligne)
+        signalees += 1
+    return signalees
 
 
 def lire_commandes_jour(sheets_svc, spreadsheet_id, aujourdhui):
