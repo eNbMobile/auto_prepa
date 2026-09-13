@@ -1,40 +1,46 @@
 #!/usr/bin/env python3
 """
 Tests du cycle de vie de la colonne km de LIVRAISON DRIVE 2026 : un km absent
-au moment ou la commande est inscrite ne doit PAS declencher d'email tout de
-suite (la commande n'est souvent pas encore synchronisee cote Shopopop, et la
-retentative du run suivant recupere la distance). L'email n'est envoye
-qu'une fois la date de livraison passee, une seule fois par ligne (cellule km
-surlignee en orange).
+au moment ou la commande est inscrite ne declenche pas d'email tout de suite
+(la commande n'est souvent pas encore synchronisee cote Shopopop, et les
+retentatives des minutes suivantes recuperent la distance). La commande est
+notee dans un fichier d'attente sur Drive, et l'email ne part que si le km
+manque encore au bout de _DELAI_SIGNALEMENT_KM_MINUTES.
 
 Lancement : python3 -m unittest discover -s tests
 """
 
+import io
+import json
 import os
 import sys
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import controle_stocks as cs
 import livraison_drive as ld
 
 _TZ = ZoneInfo("Europe/Paris")
 SPREADSHEET_ID = "id_classeur"
+CONFIG_FOLDER_ID = "id_config"
+MAINTENANT = datetime(2026, 9, 15, 8, 0, tzinfo=_TZ)   # mardi
 
 
 class _Requete:
-    def __init__(self, resultat):
-        self._resultat = resultat
+    def __init__(self, resultat=None):
+        self._resultat = resultat if resultat is not None else {}
 
     def execute(self):
         return self._resultat
 
 
+# --------------------------------------------------------------------------
+# Faux service Sheets : un dict {onglet: [[cellules], ...]}, en-tete inclus.
+# --------------------------------------------------------------------------
 class _FakeValues:
-    """spreadsheets().values() : lit/ecrit un dict {onglet: [[cellules], ...]}."""
-
     def __init__(self, classeur):
         self._classeur = classeur
         self.updates = []
@@ -45,41 +51,27 @@ class _FakeValues:
 
     def get(self, spreadsheetId=None, range=None):
         lignes = self._classeur.get(self._onglet(range), [])
-        # A2:E... : les lignes commencent a la 2e (l'en-tete n'est pas relu).
         return _Requete({"values": [list(l) for l in lignes[1:]]})
 
     def update(self, spreadsheetId=None, range=None, valueInputOption=None, body=None):
         self.updates.append((range, body["values"]))
-        return _Requete({})
-
-    def append(self, **kwargs):
-        return _Requete({})
+        return _Requete()
 
 
 class _FakeSpreadsheets:
-    def __init__(self, classeur, fonds):
+    def __init__(self, classeur):
         self._classeur = classeur
-        self._fonds = fonds          # {onglet: {ligne: backgroundColor}}
         self._values = _FakeValues(classeur)
-        self.formats = []            # backgroundColor poses via batchUpdate
+        self.formats = []
 
     def values(self):
         return self._values
 
     def get(self, spreadsheetId=None, fields=None, ranges=None, includeGridData=None):
-        if not includeGridData:
-            return _Requete({"sheets": [
-                {"properties": {"title": titre, "sheetId": i}}
-                for i, titre in enumerate(self._classeur)
-            ]})
-        onglet = ranges[0].split('!')[0].strip("'")
-        fonds = self._fonds.get(onglet, {})
-        nb_lignes = max(len(self._classeur.get(onglet, [])) - 1, 0)
-        return _Requete({"sheets": [{"data": [{"rowData": [
-            {"values": [{"effectiveFormat": {"backgroundColor": fonds.get(
-                2 + i, {"red": 1.0, "green": 1.0, "blue": 1.0})}}]}
-            for i in range(nb_lignes)
-        ]}]}]})
+        return _Requete({"sheets": [
+            {"properties": {"title": titre, "sheetId": i}}
+            for i, titre in enumerate(self._classeur)
+        ]})
 
     def batchUpdate(self, spreadsheetId=None, body=None):
         for requete in body["requests"]:
@@ -90,30 +82,124 @@ class _FakeSpreadsheets:
                 cellule["range"]["startColumnIndex"],
                 cellule["cell"]["userEnteredFormat"]["backgroundColor"],
             ))
-        return _Requete({})
+        return _Requete()
 
 
 class _FakeSheets:
-    def __init__(self, classeur, fonds=None):
-        self._spreadsheets = _FakeSpreadsheets(classeur, fonds or {})
+    def __init__(self, classeur):
+        self._spreadsheets = _FakeSpreadsheets(classeur)
 
     def spreadsheets(self):
         return self._spreadsheets
 
 
-def _classeur(lignes_septembre, lignes_attente=()):
+# --------------------------------------------------------------------------
+# Faux service Drive : juste de quoi lire/ecrire/supprimer le fichier
+# d'attente dans le dossier de config.
+# --------------------------------------------------------------------------
+class _FakeMedia:
+    def __init__(self, contenu):
+        self.contenu = contenu
+
+
+class _FakeDriveFiles:
+    def __init__(self, fichiers):
+        self.fichiers = fichiers          # {nom: contenu str}
+        self.supprimes = []
+
+    def list(self, q=None, fields=None):
+        nom = q.split("name='")[1].split("'")[0]
+        return _Requete({"files": [{"id": f"id_{nom}"}] if nom in self.fichiers else []})
+
+    def get_media(self, fileId=None):
+        return fileId
+
+    def create(self, body=None, media_body=None, fields=None):
+        self.fichiers[body["name"]] = media_body.contenu
+        return _Requete({"id": f"id_{body['name']}"})
+
+    def update(self, fileId=None, media_body=None):
+        self.fichiers[fileId[3:]] = media_body.contenu
+        return _Requete()
+
+    def delete(self, fileId=None):
+        self.supprimes.append(fileId)
+        self.fichiers.pop(fileId[3:], None)
+        return _Requete()
+
+
+class _FakeDrive:
+    def __init__(self, fichiers=None):
+        self._files = _FakeDriveFiles(dict(fichiers or {}))
+
+    def files(self):
+        return self._files
+
+    def attente(self):
+        contenu = self._files.fichiers.get(ld.FICHIER_KM_EN_ATTENTE)
+        return json.loads(contenu) if contenu else {}
+
+
+def _fake_download(buf, fileId):
+    """Remplace MediaIoBaseDownload : rend le contenu du faux Drive."""
+    class _Dl:
+        def __init__(self, contenu):
+            self._contenu = contenu
+
+        def next_chunk(self):
+            buf.write(self._contenu.encode())
+            return None, True
+    return _Dl(_fake_download.drive._files.fichiers[fileId[3:]])
+
+
+def _classeur(lignes_mois, lignes_attente=()):
     return {
-        "SEPTEMBRE": [["N° cde", "Date", "Nom", "Prénom", "Distance"]] + [list(l) for l in lignes_septembre],
-        ld.ONGLET_EN_ATTENTE: [["Nom", "Prénom", "Jour", "N° commande", "km"]] + [list(l) for l in lignes_attente],
+        "SEPTEMBRE": [["N° cde", "Date", "Nom", "Prénom", "Distance"]]
+                     + [list(l) for l in lignes_mois],
+        ld.ONGLET_EN_ATTENTE: [["Nom", "Prénom", "Jour", "N° commande", "km"]]
+                              + [list(l) for l in lignes_attente],
     }
 
 
-MAINTENANT = datetime(2026, 9, 15, 8, 0, tzinfo=_TZ)   # mardi
+def _etat(numero="54924251", minutes=0, signale=False):
+    """Fichier d'attente contenant `numero`, en attente depuis `minutes`."""
+    depuis = (MAINTENANT - timedelta(minutes=minutes)).isoformat(timespec="seconds")
+    return {ld.FICHIER_KM_EN_ATTENTE: json.dumps(
+        {numero: {"depuis": depuis, "signale": signale}})}
 
 
-class TestInscriptionSansEmail(unittest.TestCase):
-    """A l'inscription, un km introuvable n'envoie plus d'email : il est juste
-    signale a l'appelant, la retentative des runs suivants s'en charge."""
+class _BaseKm(unittest.TestCase):
+    def setUp(self):
+        self._config_folder = cs.DRIVE_CONFIG_FOLDER_ID
+        cs.DRIVE_CONFIG_FOLDER_ID = CONFIG_FOLDER_ID
+        self._download = sys.modules["googleapiclient.http"].MediaIoBaseDownload
+        self._upload = sys.modules["googleapiclient.http"].MediaIoBaseUpload
+        sys.modules["googleapiclient.http"].MediaIoBaseDownload = _fake_download
+        sys.modules["googleapiclient.http"].MediaIoBaseUpload = \
+            lambda buf, mimetype=None, resumable=None: _FakeMedia(buf.getvalue().decode())
+
+    def tearDown(self):
+        cs.DRIVE_CONFIG_FOLDER_ID = self._config_folder
+        sys.modules["googleapiclient.http"].MediaIoBaseDownload = self._download
+        sys.modules["googleapiclient.http"].MediaIoBaseUpload = self._upload
+
+    def _drive(self, fichiers=None):
+        drive = _FakeDrive(fichiers)
+        _fake_download.drive = drive
+        return drive
+
+    def _signaler(self, sheets, drive, envoye=True, manquants=None):
+        emails = []
+        ld.signaler_km_manquants(
+            sheets, drive, SPREADSHEET_ID,
+            lambda *args: emails.append(args) or envoye,
+            maintenant=MAINTENANT, manquants=manquants)
+        return emails
+
+
+class TestInscriptionSansEmail(_BaseKm):
+    """A l'inscription, un km introuvable n'envoie pas d'email : la commande
+    est seulement mise en attente, le temps que Shopopop se synchronise."""
 
     def test_km_absent_signale_a_l_appelant_sans_email(self):
         appels = []
@@ -127,8 +213,22 @@ class TestInscriptionSansEmail(unittest.TestCase):
         self.assertTrue(km_manquant)
         self.assertEqual(len(appels), 2, "un 2e essai est fait dans le meme run")
 
+    def test_noter_km_en_attente_ouvre_le_compte_a_rebours(self):
+        drive = self._drive()
+        self.assertTrue(ld.noter_km_en_attente(drive, "54924251", maintenant=MAINTENANT))
+        self.assertEqual(drive.attente(),
+                         {"54924251": {"depuis": MAINTENANT.isoformat(timespec="seconds"),
+                                       "signale": False}})
 
-class TestRetentative(unittest.TestCase):
+    def test_noter_km_en_attente_ne_redemarre_pas_le_compte_a_rebours(self):
+        drive = self._drive(_etat(minutes=4))
+        self.assertFalse(ld.noter_km_en_attente(drive, "54924251", maintenant=MAINTENANT))
+        depuis = drive.attente()["54924251"]["depuis"]
+        self.assertEqual(depuis,
+                         (MAINTENANT - timedelta(minutes=4)).isoformat(timespec="seconds"))
+
+
+class TestRetentative(_BaseKm):
     def test_retente_la_livraison_du_jour_et_a_venir(self):
         sheets = _FakeSheets(_classeur([
             ["54924251", "15/09", "PAUMIER", "MARILYNE", ""],       # aujourd'hui
@@ -141,59 +241,131 @@ class TestRetentative(unittest.TestCase):
         self.assertEqual([(l[2], l[4]) for l in a_retenter],
                          [("PAUMIER", date(2026, 9, 15)), ("DUPONT", date(2026, 9, 16))])
 
-    def test_ecrit_le_km_recupere(self):
+    def test_ecrit_le_km_recupere_et_le_retire_des_manquants(self):
         sheets = _FakeSheets(_classeur([["54924251", "15/09", "PAUMIER", "MARILYNE", ""]]))
         ld.shopopop.distance_km = lambda token, drive, cible, nom: 5.43
-        self.assertEqual(
-            ld.retenter_km_manquants(sheets, SPREADSHEET_ID, "jeton", "14156", MAINTENANT), 1)
+        restants = ld.retenter_km_manquants(
+            sheets, SPREADSHEET_ID, "jeton", "14156", maintenant=MAINTENANT)
         self.assertEqual(sheets.spreadsheets().values().updates,
                          [("'SEPTEMBRE'!E2", [[5.43]])])
+        self.assertEqual(restants, [], "la ligne rattrapee ne doit plus etre signalable")
 
 
-class TestSignalementDefinitif(unittest.TestCase):
-    def _signaler(self, sheets, envoye=True):
-        emails = []
-        ld.signaler_km_manquants_definitifs(
-            sheets, SPREADSHEET_ID,
-            lambda *args: emails.append(args) or envoye,
-            maintenant=MAINTENANT)
-        return emails
+class TestSignalement(_BaseKm):
+    def _sheets(self):
+        return _FakeSheets(_classeur([["54924251", "15/09", "PAUMIER", "MARILYNE", ""]]))
 
-    def test_pas_d_email_avant_la_date_de_livraison(self):
-        sheets = _FakeSheets(_classeur([
-            ["54924251", "15/09", "PAUMIER", "MARILYNE", ""],   # livraison du jour
-            ["54924252", "16/09", "DUPONT", "JEAN", ""],        # livraison a venir
-        ]))
-        self.assertEqual(self._signaler(sheets), [])
+    def test_pas_d_email_avant_le_delai(self):
+        drive = self._drive(_etat(minutes=ld._DELAI_SIGNALEMENT_KM_MINUTES - 1))
+        self.assertEqual(self._signaler(self._sheets(), drive), [])
+        self.assertFalse(drive.attente()["54924251"]["signale"])
 
-    def test_email_une_fois_la_livraison_passee(self):
-        sheets = _FakeSheets(_classeur([["54924251", "14/09", "PAUMIER", "MARILYNE", ""]]))
-        self.assertEqual(self._signaler(sheets),
-                         [("54924251", "PAUMIER", "MARILYNE", "14/09/2026")])
+    def test_email_une_fois_le_delai_ecoule(self):
+        sheets, drive = self._sheets(), self._drive(
+            _etat(minutes=ld._DELAI_SIGNALEMENT_KM_MINUTES))
+        self.assertEqual(self._signaler(sheets, drive),
+                         [("54924251", "PAUMIER", "MARILYNE", "15/09/2026")])
         self.assertEqual(sheets.spreadsheets().formats,
                          [(0, 2, 4, ld._ORANGE_KM_A_COMPLETER)],
-                         "la cellule km est surlignee pour ne pas re-signaler la ligne")
+                         "la cellule km est surlignee pour la saisie manuelle")
+        self.assertTrue(drive.attente()["54924251"]["signale"])
 
-    def test_pas_de_second_email_pour_une_ligne_deja_signalee(self):
-        sheets = _FakeSheets(
-            _classeur([["54924251", "14/09", "PAUMIER", "MARILYNE", ""]]),
-            fonds={"SEPTEMBRE": {2: ld._ORANGE_KM_A_COMPLETER}})
-        self.assertEqual(self._signaler(sheets), [])
+    def test_pas_de_second_email_pour_une_commande_deja_signalee(self):
+        drive = self._drive(_etat(minutes=30, signale=True))
+        self.assertEqual(self._signaler(self._sheets(), drive), [])
 
     def test_pas_de_marquage_si_l_email_echoue(self):
-        sheets = _FakeSheets(_classeur([["54924251", "14/09", "PAUMIER", "MARILYNE", ""]]))
-        self.assertEqual(len(self._signaler(sheets, envoye=False)), 1)
-        self.assertEqual(sheets.spreadsheets().formats, [],
-                         "sans email parti, la ligne doit etre re-signalee au run suivant")
+        sheets, drive = self._sheets(), self._drive(_etat(minutes=10))
+        self.assertEqual(len(self._signaler(sheets, drive, envoye=False)), 1)
+        self.assertEqual(sheets.spreadsheets().formats, [])
+        self.assertFalse(drive.attente()["54924251"]["signale"],
+                         "sans email parti, la commande reste a signaler")
 
-    def test_ignore_les_livraisons_trop_anciennes(self):
-        sheets = _FakeSheets(_classeur([["54924251", "01/09", "PAUMIER", "MARILYNE", ""]]))
-        self.assertEqual(self._signaler(sheets), [])
+    def test_km_recupere_entre_temps_sort_du_fichier_d_attente(self):
+        sheets = _FakeSheets(_classeur([["54924251", "15/09", "PAUMIER", "MARILYNE", "5,43"]]))
+        drive = self._drive(_etat(minutes=10))
+        self.assertEqual(self._signaler(sheets, drive), [])
+        self.assertEqual(drive.attente(), {})
+        self.assertEqual(drive.files().supprimes, [f"id_{ld.FICHIER_KM_EN_ATTENTE}"],
+                         "plus rien en attente : le fichier disparait, les reveils s'arretent")
+
+    def test_commande_annulee_sort_du_fichier_d_attente(self):
+        drive = self._drive(_etat(minutes=10))
+        self.assertEqual(self._signaler(_FakeSheets(_classeur([])), drive), [])
+        self.assertEqual(drive.attente(), {})
+
+    def test_commande_trop_ancienne_abandonnee(self):
+        drive = self._drive(_etat(minutes=(ld._RETENTION_KM_EN_ATTENTE_JOURS * 24 * 60) + 1))
+        self.assertEqual(self._signaler(self._sheets(), drive), [])
+        self.assertEqual(drive.attente(), {})
 
     def test_signale_aussi_l_onglet_en_attente(self):
-        sheets = _FakeSheets(_classeur([], [["DUPONT", "JEAN", "14/09", "54924252", ""]]))
-        self.assertEqual(self._signaler(sheets),
-                         [("54924252", "DUPONT", "JEAN", "14/09/2026")])
+        sheets = _FakeSheets(_classeur([], [["DUPONT", "JEAN", "20/09", "54924252", ""]]))
+        drive = self._drive(_etat(numero="54924252", minutes=10))
+        self.assertEqual(self._signaler(sheets, drive),
+                         [("54924252", "DUPONT", "JEAN", "20/09/2026")])
+
+    def test_sans_fichier_d_attente_aucun_email(self):
+        """Une ligne sans km jamais mise en attente (saisie a la main dans le
+        classeur) n'est pas signalee."""
+        self.assertEqual(self._signaler(self._sheets(), self._drive()), [])
+
+
+class TestCycleComplet(_BaseKm):
+    """Enchainement reel : inscription sans km, retentatives des minutes
+    suivantes, puis email au bout du delai si Shopopop ne repond toujours
+    pas."""
+
+    def _run(self, sheets, drive, minutes, km_trouve=None):
+        """Simule une execution d'auto_prepa.py `minutes` apres l'inscription :
+        retentative Shopopop puis signalement. Retourne les emails envoyes."""
+        maintenant = MAINTENANT + timedelta(minutes=minutes)
+        ld.shopopop.distance_km = lambda *a, **k: km_trouve
+        manquants = ld.retenter_km_manquants(
+            sheets, SPREADSHEET_ID, "jeton", "14156", maintenant=maintenant)
+        emails = []
+        ld.signaler_km_manquants(
+            sheets, drive, SPREADSHEET_ID,
+            lambda *args: emails.append(args) or True,
+            maintenant=maintenant, manquants=manquants)
+        return emails
+
+    def test_email_au_bout_du_delai_si_shopopop_ne_repond_pas(self):
+        sheets = _FakeSheets(_classeur([["54924251", "15/09", "PAUMIER", "MARILYNE", ""]]))
+        drive = self._drive()
+        ld.noter_km_en_attente(drive, "54924251", maintenant=MAINTENANT)
+        self.assertTrue(ld.km_en_attente_actif(drive.attente()),
+                        "le workflow doit etre relance tant que le km manque")
+
+        self.assertEqual(self._run(sheets, drive, minutes=1), [], "trop tot")
+        self.assertEqual(
+            self._run(sheets, drive, minutes=ld._DELAI_SIGNALEMENT_KM_MINUTES),
+            [("54924251", "PAUMIER", "MARILYNE", "15/09/2026")])
+        self.assertFalse(ld.km_en_attente_actif(drive.attente()),
+                         "commande signalee : plus de reveil du workflow")
+        self.assertEqual(self._run(sheets, drive, minutes=20), [],
+                         "pas de rappel a chaque execution suivante")
+
+    def test_pas_d_email_si_shopopop_repond_avant_le_delai(self):
+        sheets = _FakeSheets(_classeur([["54924251", "15/09", "PAUMIER", "MARILYNE", ""]]))
+        drive = self._drive()
+        ld.noter_km_en_attente(drive, "54924251", maintenant=MAINTENANT)
+
+        self.assertEqual(self._run(sheets, drive, minutes=1), [])
+        # 2e run : Shopopop a synchronise la commande entre-temps.
+        sheets._spreadsheets._classeur["SEPTEMBRE"][1][4] = "5,43"
+        self.assertEqual(self._run(sheets, drive, minutes=2, km_trouve=5.43), [])
+        self.assertEqual(
+            self._run(sheets, drive, minutes=ld._DELAI_SIGNALEMENT_KM_MINUTES), [],
+            "le km est arrive a temps : aucun email, meme apres le delai")
+        self.assertEqual(drive.attente(), {})
+
+
+class TestReveilWorkflow(_BaseKm):
+    def test_km_en_attente_actif(self):
+        self.assertTrue(ld.km_en_attente_actif({"1": {"signale": False}}))
+        self.assertFalse(ld.km_en_attente_actif({"1": {"signale": True}}))
+        self.assertFalse(ld.km_en_attente_actif({}))
 
 
 if __name__ == "__main__":

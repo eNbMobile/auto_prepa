@@ -524,10 +524,12 @@ def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc,
                     if not shopopop_connecte:
                         shopopop_token, shopopop_drive_id = livraison_drive.connecter_shopopop(drive_svc)
                         shopopop_connecte = True
-                    livraison_drive.traiter_commande_livraison(
+                    km_manquant = livraison_drive.traiter_commande_livraison(
                         sheets_svc, LIVRAISON_SPREADSHEET_ID, nom_l, prenom_l, date_l,
                         numero_commande=num_nouveau,
                         shopopop_token=shopopop_token, shopopop_drive_id=shopopop_drive_id)
+                    if km_manquant:
+                        livraison_drive.noter_km_en_attente(drive_svc, num_nouveau)
                 _supprimer_bons_drive(drive_svc, num_ancien)
                 _supprimer_anticipation_archive_drive(drive_svc, num_ancien)
                 _supprimer_bdc_drive(drive_svc, num_ancien)
@@ -1485,12 +1487,12 @@ def _envoyer_email_km_manquant(gmail_svc, numero, nom, prenom, date_cde_str):
     site Shopopop indisponibles, ou destinataire introuvable dans les
     livraisons programmees) — a completer a la main dans LIVRAISON DRIVE 2026.
 
-    Appelee uniquement par livraison_drive.signaler_km_manquants_definitifs,
-    une fois la date de livraison passee et toutes les retentatives epuisees :
-    envoyer l'alerte des le premier echec reviendrait a demander une saisie
-    manuelle pour un km que la retentative du run suivant recupere presque
-    toujours. Retourne True si l'email est parti (l'appelant ne marque la
-    cellule comme signalee que dans ce cas)."""
+    Appelee uniquement par livraison_drive.signaler_km_manquants, quand la
+    distance manque encore quelques minutes apres l'inscription de la
+    commande : envoyer l'alerte des le premier echec reviendrait a demander
+    une saisie manuelle pour un km que les retentatives des minutes suivantes
+    recuperent le plus souvent. Retourne True si l'email est parti (l'appelant
+    ne marque la commande comme signalee que dans ce cas)."""
     from email.mime.text import MIMEText
     destinataire = EMAIL_ANTICIPATION
     if not destinataire:
@@ -1953,9 +1955,15 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
         if not shopopop_connecte:
             shopopop_token, shopopop_drive_id = livraison_drive.connecter_shopopop(drive_svc)
             shopopop_connecte = True
-        livraison_drive.traiter_commande_livraison(
+        km_manquant = livraison_drive.traiter_commande_livraison(
             sheets_svc, LIVRAISON_SPREADSHEET_ID, nom, prenom, date_cde, numero_commande=order_num,
             shopopop_token=shopopop_token, shopopop_drive_id=shopopop_drive_id)
+        # Ouvre le compte a rebours : la commande sera signalee par email si
+        # Shopopop ne fournit toujours pas la distance dans les minutes qui
+        # suivent, et sa presence dans le fichier d'attente fait relancer le
+        # workflow d'ici la, meme sans nouvel email a traiter.
+        if km_manquant:
+            livraison_drive.noter_km_en_attente(drive_svc, order_num)
 
     if lignes:
         if montant_pdf:
@@ -2082,29 +2090,31 @@ def _main():
     # commande n'etait pas encore synchronisee cote Shopopop au moment du
     # premier essai, cf. livraison_drive.traiter_commande_livraison). Faite a
     # chaque run, meme sans nouvelle commande a traiter ci-dessous : c'est le
-    # "run d'apres" qui rattrape le km, une connexion Shopopop dediee n'etant
-    # ouverte que s'il y a effectivement quelque chose a retenter. Le token
-    # obtenu ici est reutilise plus bas si une nouvelle commande LIVRAISON
-    # est aussi rencontree dans ce run (pas de 2e connexion).
+    # "run d'apres" qui rattrape le km — et tant qu'une commande attend sa
+    # distance, le workflow relance auto_prepa.py sans attendre un nouvel
+    # email (fichier livraison_drive.FICHIER_KM_EN_ATTENTE, teste par
+    # aut_prep.yml). Une connexion Shopopop dediee n'est ouverte que s'il y a
+    # effectivement quelque chose a retenter ; le token obtenu ici est
+    # reutilise plus bas si une nouvelle commande LIVRAISON est aussi
+    # rencontree dans ce run (pas de 2e connexion).
     km_manquants = livraison_drive.lister_km_manquants(sheets_svc, LIVRAISON_SPREADSHEET_ID)
     if livraison_drive.km_manquants_en_attente(
             sheets_svc, LIVRAISON_SPREADSHEET_ID, manquants=km_manquants):
         shopopop_token, shopopop_drive_id = livraison_drive.connecter_shopopop(drive_svc)
         shopopop_connecte = True
-        livraison_drive.retenter_km_manquants(
+        km_manquants = livraison_drive.retenter_km_manquants(
             sheets_svc, LIVRAISON_SPREADSHEET_ID, shopopop_token, shopopop_drive_id,
             manquants=km_manquants)
 
-    # Signalement des km definitivement manques : une fois la date de
-    # livraison passee, la commande sort des livraisons "Programmees" de
-    # Shopopop et sa distance n'est plus recuperable (plus rien a retenter
-    # ci-dessus) — c'est seulement la qu'un email demande de la saisir a la
-    # main, et non des le premier echec au moment de l'inscription (la
-    # commande n'est alors souvent pas encore synchronisee cote Shopopop et
-    # son km arrive tout seul au run suivant). Aucune connexion Shopopop
-    # necessaire : la meme lecture du classeur sert aux deux etapes.
-    livraison_drive.signaler_km_manquants_definitifs(
-        sheets_svc, LIVRAISON_SPREADSHEET_ID,
+    # Signalement des commandes inscrites sans km depuis plus de quelques
+    # minutes : passe ce delai, Shopopop ne fournira probablement plus la
+    # distance et il faut la saisir a la main le jour meme. Signaler des le
+    # premier echec serait premature (une commande tout juste passee n'est
+    # souvent pas encore synchronisee cote Shopopop, la retentative ci-dessus
+    # la rattrape); la liste utilisee est celle qui reste apres cette
+    # retentative. Aucune connexion Shopopop necessaire ici.
+    livraison_drive.signaler_km_manquants(
+        sheets_svc, drive_svc, LIVRAISON_SPREADSHEET_ID,
         lambda numero, nom, prenom, date_str: _envoyer_email_km_manquant(
             gmail_svc, numero, nom, prenom, date_str),
         manquants=km_manquants)
