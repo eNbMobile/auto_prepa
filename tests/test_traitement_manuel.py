@@ -93,8 +93,9 @@ class _FakeFiles:
         m_parent = re.search(r"'([^']+)' in parents", q)
         m_mime = re.search(r"mimeType='([^']+)'", q)
         m_name = re.search(r"name='([^']+)'", q)
+        corbeille_demandee = "trashed=true" in q
         for f in self.store:
-            if f.get("trashed"):
+            if bool(f.get("trashed")) != corbeille_demandee:
                 continue
             if m_parent and m_parent.group(1) not in f.get("parents", []):
                 continue
@@ -112,6 +113,8 @@ class _FakeFiles:
                 for f in self.store:
                     if f["id"] == fileId:
                         f["trashed"] = True
+                        if (body or {}).get("name"):
+                            f["name"] = body["name"]
         return _FakeRequete(effet=_effet)
 
 
@@ -221,6 +224,75 @@ class TestCommandeDejaTraitee(unittest.TestCase):
 
     def test_sans_drive(self):
         self.assertFalse(ap._commande_deja_traitee(None, "54868421"))
+
+
+class TestPrepareeDepuisDepotManuel(unittest.TestCase):
+    """Seule une commande preparee a partir d'un bon depose a la main doit faire
+    ignorer son email de confirmation. Un email deja traite puis replace a la
+    main en boite de reception (pour regenerer le bon apres mise a jour des
+    gencod) doit au contraire etre repris."""
+
+    def setUp(self):
+        ap.DRIVE_BDC_FOLDER_ID = BDC_ID
+        ap.DRIVE_BONS_FOLDER_ID = BONS_ID
+        self._download = ap.MediaIoBaseDownload
+        ap.MediaIoBaseDownload = _FakeDownloader
+
+    def tearDown(self):
+        ap.MediaIoBaseDownload = self._download
+
+    def test_depot_a_la_corbeille_et_commande_suivie(self):
+        drive = _FakeDrive([
+            dict(DOSSIER_MANUEL),
+            {"id": "depot1", "name": "BonDeCommande_54868421.pdf", "parents": [MANUEL_ID],
+             "mimeType": "application/pdf", "trashed": True},
+            {"id": "archive", "name": "BonDeCommande_54868421.pdf", "parents": ["id_jour"],
+             "mimeType": "application/pdf"},
+        ] + SUIVI_AVOIR, CSV_AVOIR)
+        self.assertTrue(ap._preparee_depuis_depot_manuel(drive, "54868421"))
+
+    def test_commande_traitee_par_email_seulement(self):
+        """Aucun depot manuel : l'email replace en boite de reception est repris."""
+        drive = _FakeDrive([
+            dict(DOSSIER_MANUEL),
+            {"id": "archive", "name": "BonDeCommande_54868421.pdf", "parents": ["id_jour"],
+             "mimeType": "application/pdf"},
+        ] + SUIVI_AVOIR, CSV_AVOIR)
+        self.assertFalse(ap._preparee_depuis_depot_manuel(drive, "54868421"))
+
+    def test_depot_jete_sans_generation_aboutie(self):
+        """Depot a la corbeille mais commande absente du suivi Avoir : le bon
+        n'a jamais ete genere, l'email doit etre traite."""
+        drive = _FakeDrive([
+            dict(DOSSIER_MANUEL),
+            {"id": "depot1", "name": "BonDeCommande_54868421.pdf", "parents": [MANUEL_ID],
+             "mimeType": "application/pdf", "trashed": True},
+            {"id": "archive", "name": "BonDeCommande_54868421.pdf", "parents": ["id_jour"],
+             "mimeType": "application/pdf"},
+        ] + SUIVI_AVOIR, "Civilité,N° commande,Nom,Prénom,Date,Créneau\r\n")
+        self.assertFalse(ap._preparee_depuis_depot_manuel(drive, "54868421"))
+
+    def test_sans_dossier_de_depot(self):
+        drive = _FakeDrive(list(SUIVI_AVOIR), CSV_AVOIR)
+        self.assertFalse(ap._preparee_depuis_depot_manuel(drive, "54868421"))
+
+    def test_sans_drive(self):
+        self.assertFalse(ap._preparee_depuis_depot_manuel(None, "54868421"))
+
+
+class TestArchiverDepotManuel(unittest.TestCase):
+    def test_depot_renomme_au_nom_canonique(self):
+        """Le depot mis a la corbeille prend le nom BonDeCommande_NUMERO.pdf,
+        trace relue ensuite par _preparee_depuis_depot_manuel."""
+        drive = _FakeDrive([
+            {"id": "depot1", "name": "bon_encaissement (1).pdf", "parents": [MANUEL_ID],
+             "mimeType": "application/pdf"},
+        ])
+        ap._archiver_depot_manuel(drive, "depot1", "BonDeCommande_54868421.pdf",
+                                  "commande traitee")
+        depot = next(f for f in drive.files().store if f["id"] == "depot1")
+        self.assertTrue(depot["trashed"])
+        self.assertEqual(depot["name"], "BonDeCommande_54868421.pdf")
 
 
 class TestTelechargerBonsTraitementManuel(unittest.TestCase):
