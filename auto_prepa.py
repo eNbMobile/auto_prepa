@@ -126,15 +126,18 @@ def _marquer_email(gmail_svc, msg_id, label_id):
     except Exception as e:
         print(f"    Marquage email echoue : {e}")
 
-def telecharger_bons_email(gmail_svc, cache_dir, drive_svc=None):
+def telecharger_bons_email(gmail_svc, cache_dir):
     """
     Lit les emails de confirmation (no-reply@systeme-u.fr),
     telecharge bon_encaissement.pdf => BonDeCommande_XXX.pdf dans cache_dir.
     Retourne {filename: (dossier_jj_mm, dossier_mm_aaaa)} pour les nouveaux PDFs telecharges.
 
-    `drive_svc` (facultatif) sert a ecarter les commandes deja preparees a
-    partir d'un bon depose dans le dossier de traitement manuel, dont l'email
-    de confirmation finit malgre tout par arriver.
+    Aucun filtrage des commandes deja preparees ici : un email non libellise
+    est toujours a traiter. Un bon n'est depose a la main que lorsque l'email
+    de confirmation n'est jamais arrive — il n'arrive donc pas davantage
+    ensuite — et une commande reprise volontairement (email replace en boite
+    de reception apres une mise a jour des gencod) ne duplique plus ses lignes
+    de suivi, traiter_commande_pdf les nettoyant avant de les reecrire.
     """
     label_id = _get_or_create_gmail_label(gmail_svc, GMAIL_LABEL_CONF)
     q = f'from:{GMAIL_CONF_FROM} subject:"{GMAIL_CONF_SUBJECT}" -label:{GMAIL_LABEL_CONF}'
@@ -168,15 +171,6 @@ def telecharger_bons_email(gmail_svc, cache_dir, drive_svc=None):
                 continue
             numero = match_num.group(1)
             filename = f"BonDeCommande_{numero}.pdf"
-
-            # Commande deja preparee depuis un bon depose dans le dossier de
-            # traitement manuel : son email de confirmation, arrive apres coup,
-            # ne doit pas la faire traiter une seconde fois.
-            if _preparee_depuis_depot_manuel(drive_svc, numero):
-                print(f"    Commande {numero} deja preparee depuis un bon depose "
-                      f"a la main : email ignore.")
-                _marquer_email(gmail_svc, m['id'], label_id)
-                continue
 
             match_date = re.search(r'(\d{2}/\d{2}/\d{4})', subject)
             dossier_jj_mm = ""
@@ -271,11 +265,13 @@ def _numero_bon_depose(nom_fichier, texte_pdf):
 
 
 def _commande_deja_traitee(drive_svc, numero, ignorer_parents=()):
-    """Vrai si la commande a deja ete preparee, et ne doit donc pas l'etre une
-    seconde fois : elle ressortirait sinon en double dans l'anticipation, la
-    livraison et le suivi des avoirs. Cas vise : une commande arrivee par les
-    deux voies, un bon depose a la main puis l'arrivee tardive de son email de
-    confirmation (ou l'inverse).
+    """Vrai si la commande a deja ete preparee. Deux usages :
+
+    - ecarter un bon depose a la main pour une commande deja traitee par son
+      email de confirmation (la preparer une seconde fois la ferait ressortir
+      en double dans l'anticipation, la livraison et le suivi des avoirs) ;
+    - reconnaitre, dans traiter_commande_pdf, une commande que l'on regenere,
+      dont les lignes de suivi sont alors nettoyees avant d'etre reecrites.
 
     Deux conditions, dans cet ordre : son BonDeCommande_NUMERO.pdf est archive
     sur Drive ailleurs que dans `ignorer_parents` (le dossier de depot manuel),
@@ -308,55 +304,12 @@ def _commande_deja_traitee(drive_svc, numero, ignorer_parents=()):
 def _archiver_depot_manuel(drive_svc, file_id, nom_fichier, motif):
     """Met a la corbeille un bon depose manuellement (restaurable depuis Drive,
     et de toute facon archive dans BDC/MM_AAAA/JJ_MM), pour qu'il ne soit pas
-    repris a chaque run.
-
-    Le depot est renomme au passage en BonDeCommande_NUMERO.pdf (`nom_fichier`,
-    toujours le nom canonique cote appelant) : c'est cette trace, dans la
-    corbeille du dossier de depot, que _preparee_depuis_depot_manuel relit pour
-    reconnaitre une commande preparee a la main — un bon depose sous un nom
-    quelconque ("bon_encaissement (1).pdf") resterait sinon introuvable."""
+    repris a chaque run."""
     try:
-        drive_svc.files().update(
-            fileId=file_id, body={"trashed": True, "name": nom_fichier}).execute()
+        drive_svc.files().update(fileId=file_id, body={"trashed": True}).execute()
         print(f"    {nom_fichier} : depot manuel mis a la corbeille ({motif}).")
     except Exception as e:
         print(f"    Mise a la corbeille du depot manuel {nom_fichier} echouee : {e}")
-
-
-def _preparee_depuis_depot_manuel(drive_svc, numero):
-    """Vrai si la commande a deja ete preparee a partir d'un bon depose a la
-    main dans le dossier de traitement manuel — seul cas ou son email de
-    confirmation, arrive apres coup, doit etre ignore : le traiter ferait
-    ressortir la commande en double dans l'anticipation, la livraison et le
-    suivi des avoirs.
-
-    Deux traces exigees : le depot lui-meme, mis a la corbeille (jamais
-    supprime) sous le nom BonDeCommande_NUMERO.pdf une fois la commande
-    traitee ; ET une preparation reellement aboutie (_commande_deja_traitee),
-    pour ne pas ecarter l'email d'une commande dont le depot a ete jete sans
-    que le bon ait pu etre genere.
-
-    Ce test remplace l'appel direct a _commande_deja_traitee : celui-ci
-    ecartait aussi les emails REPLACES a la main en boite de reception pour
-    faire regenerer un bon (gencod_adresses/gencod_nomenclatures mis a jour),
-    laissant les commandes concernees marquees traitees sans etre reprises."""
-    if not drive_svc or not numero:
-        return False
-    dossier_id = _dossier_traitement_manuel(drive_svc)
-    if not dossier_id:
-        return False
-    try:
-        res = drive_svc.files().list(
-            q=(f"name='BonDeCommande_{numero}.pdf' and '{dossier_id}' in parents "
-               f"and trashed=true"),
-            fields="files(id)",
-        ).execute()
-    except Exception as e:
-        print(f"    Recherche du depot manuel de {numero} echouee : {e}")
-        return False
-    if not res.get("files"):
-        return False
-    return _commande_deja_traitee(drive_svc, numero, ignorer_parents=(dossier_id,))
 
 
 def telecharger_bons_traitement_manuel(drive_svc, cache_dir):
@@ -2142,7 +2095,7 @@ def _main():
     shopopop_token, shopopop_drive_id, shopopop_connecte = traiter_modifications_clients(
         drive_svc, gmail_svc, sheets_svc,
         shopopop_token, shopopop_drive_id, shopopop_connecte)
-    nouveaux = telecharger_bons_email(gmail_svc, CACHE_DIR, drive_svc)
+    nouveaux = telecharger_bons_email(gmail_svc, CACHE_DIR)
 
     # Bons deposes a la main sur Drive (commande sans email de confirmation) :
     # meme traitement que ceux recus par email, a partir d'ici.
