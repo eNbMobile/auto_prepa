@@ -172,8 +172,9 @@ def telecharger_bons_email(gmail_svc, cache_dir, drive_svc=None):
             # Commande deja preparee depuis un bon depose dans le dossier de
             # traitement manuel : son email de confirmation, arrive apres coup,
             # ne doit pas la faire traiter une seconde fois.
-            if _commande_deja_traitee(drive_svc, numero):
-                print(f"    Commande {numero} deja traitee (depot manuel) : email ignore.")
+            if _preparee_depuis_depot_manuel(drive_svc, numero):
+                print(f"    Commande {numero} deja preparee depuis un bon depose "
+                      f"a la main : email ignore.")
                 _marquer_email(gmail_svc, m['id'], label_id)
                 continue
 
@@ -307,12 +308,55 @@ def _commande_deja_traitee(drive_svc, numero, ignorer_parents=()):
 def _archiver_depot_manuel(drive_svc, file_id, nom_fichier, motif):
     """Met a la corbeille un bon depose manuellement (restaurable depuis Drive,
     et de toute facon archive dans BDC/MM_AAAA/JJ_MM), pour qu'il ne soit pas
-    repris a chaque run."""
+    repris a chaque run.
+
+    Le depot est renomme au passage en BonDeCommande_NUMERO.pdf (`nom_fichier`,
+    toujours le nom canonique cote appelant) : c'est cette trace, dans la
+    corbeille du dossier de depot, que _preparee_depuis_depot_manuel relit pour
+    reconnaitre une commande preparee a la main — un bon depose sous un nom
+    quelconque ("bon_encaissement (1).pdf") resterait sinon introuvable."""
     try:
-        drive_svc.files().update(fileId=file_id, body={"trashed": True}).execute()
+        drive_svc.files().update(
+            fileId=file_id, body={"trashed": True, "name": nom_fichier}).execute()
         print(f"    {nom_fichier} : depot manuel mis a la corbeille ({motif}).")
     except Exception as e:
         print(f"    Mise a la corbeille du depot manuel {nom_fichier} echouee : {e}")
+
+
+def _preparee_depuis_depot_manuel(drive_svc, numero):
+    """Vrai si la commande a deja ete preparee a partir d'un bon depose a la
+    main dans le dossier de traitement manuel — seul cas ou son email de
+    confirmation, arrive apres coup, doit etre ignore : le traiter ferait
+    ressortir la commande en double dans l'anticipation, la livraison et le
+    suivi des avoirs.
+
+    Deux traces exigees : le depot lui-meme, mis a la corbeille (jamais
+    supprime) sous le nom BonDeCommande_NUMERO.pdf une fois la commande
+    traitee ; ET une preparation reellement aboutie (_commande_deja_traitee),
+    pour ne pas ecarter l'email d'une commande dont le depot a ete jete sans
+    que le bon ait pu etre genere.
+
+    Ce test remplace l'appel direct a _commande_deja_traitee : celui-ci
+    ecartait aussi les emails REPLACES a la main en boite de reception pour
+    faire regenerer un bon (gencod_adresses/gencod_nomenclatures mis a jour),
+    laissant les commandes concernees marquees traitees sans etre reprises."""
+    if not drive_svc or not numero:
+        return False
+    dossier_id = _dossier_traitement_manuel(drive_svc)
+    if not dossier_id:
+        return False
+    try:
+        res = drive_svc.files().list(
+            q=(f"name='BonDeCommande_{numero}.pdf' and '{dossier_id}' in parents "
+               f"and trashed=true"),
+            fields="files(id)",
+        ).execute()
+    except Exception as e:
+        print(f"    Recherche du depot manuel de {numero} echouee : {e}")
+        return False
+    if not res.get("files"):
+        return False
+    return _commande_deja_traitee(drive_svc, numero, ignorer_parents=(dossier_id,))
 
 
 def telecharger_bons_traitement_manuel(drive_svc, cache_dir):
@@ -718,8 +762,13 @@ def _dossier_anticipation_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm, archiv
     return _sous_dossier(mois_id, dossier_jj_mm)
 
 
-def archiver_anticipation_drive(drive_svc, anticipation_path, dossier_jj_mm, dossier_mm_aaaa):
-    """Copie bon_anticipation_NUMERO.txt dans Drive GITHUB/Anticipation/MM_AAAA/JJ_MM/."""
+def archiver_anticipation_drive(drive_svc, anticipation_path, dossier_jj_mm, dossier_mm_aaaa,
+                                ecraser=False):
+    """Copie bon_anticipation_NUMERO.txt dans Drive GITHUB/Anticipation/MM_AAAA/JJ_MM/.
+
+    Le fichier deja archive est conserve tel quel, sauf `ecraser` : c'est le cas
+    d'une commande regeneree apres mise a jour des gencod, dont l'anticipation
+    archivee porte encore les anciennes adresses."""
     if not dossier_jj_mm or not dossier_mm_aaaa:
         return
     filename = os.path.basename(anticipation_path)
@@ -732,9 +781,14 @@ def archiver_anticipation_drive(drive_svc, anticipation_path, dossier_jj_mm, dos
             q=f"name='{filename}' and '{subfolder_id}' in parents and trashed=false",
             fields="files(id)",
         ).execute()
-        if res.get("files"):
+        existant = res.get("files", [])
+        if existant and not ecraser:
             return
         media = MediaFileUpload(anticipation_path, mimetype="text/plain", resumable=False)
+        if existant:
+            drive_svc.files().update(fileId=existant[0]["id"], media_body=media).execute()
+            print(f"    {filename} => Drive {path}/ mis a jour")
+            return
         drive_svc.files().create(
             body={"name": filename, "parents": [subfolder_id]},
             media_body=media,
@@ -1891,6 +1945,22 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
     print(" OK")
 
     civilite, nom, prenom, date_cde, creneau = extraire_client_creneau_pdf(pt.stdout)
+
+    # Commande deja preparee que l'on regenere (email de confirmation replace a
+    # la main en boite de reception apres une mise a jour de gencod_adresses /
+    # gencod_nomenclatures) : ses lignes de suivi existantes sont retirees
+    # avant d'etre reecrites plus bas. Ni inscrire_commande_avoir_drive ni
+    # LIVRAISON DRIVE ne dedoublonnent : sans ce nettoyage, chaque reprise
+    # laisserait la commande deux fois dans Avoir/Commandes en cours et dans
+    # l'onglet du mois (ou EN ATTENTE).
+    regeneration = _commande_deja_traitee(drive_svc, order_num)
+    if regeneration:
+        print(f"    Commande {order_num} deja preparee : suivis nettoyes avant regeneration.")
+        supprimer_commande_avoir_drive(drive_svc, order_num)
+        livraison_drive.annuler_commande_livraison(
+            sheets_svc, LIVRAISON_SPREADSHEET_ID, nom, prenom, date_cde,
+            numero_commande=order_num)
+
     inscrire_commande_avoir_drive(drive_svc, civilite, order_num, nom, prenom, date_cde, creneau)
 
     avertissements_nomenclature = [
@@ -1975,7 +2045,8 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
 
     anticipation_dst = os.path.join(WORK_DIR, f"bon_anticipation_{order_num}.txt")
     if os.path.exists(anticipation_dst) and os.path.getsize(anticipation_dst) > 0:
-        archiver_anticipation_drive(drive_svc, anticipation_dst, dossier_jj_mm, dossier_mm_aaaa)
+        archiver_anticipation_drive(drive_svc, anticipation_dst, dossier_jj_mm, dossier_mm_aaaa,
+                                    ecraser=regeneration)
         declencher_assemblage_anticipation(order_num, dossier_jj_mm, dossier_mm_aaaa)
 
     for fname in [f"bon_prepa_{order_num}.txt",
