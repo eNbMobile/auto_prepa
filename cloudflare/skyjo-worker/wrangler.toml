@@ -1,0 +1,8 @@
+name = "skyjo"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+# Stockage des parties (namespace KV « skyjo-parties » déjà créé sur le compte).
+[[kv_namespaces]]
+binding = "PARTIES"
+id = "f05d35cd270d4460851306b1cdc51c9e"
