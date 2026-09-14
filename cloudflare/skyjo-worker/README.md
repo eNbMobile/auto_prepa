@@ -32,6 +32,17 @@ Ouvrir la racine `/` sans paramètre affiche un petit formulaire (nombre de
 joueurs, noms, score de fin) qui construit le lien, plus la liste des dernières
 parties enregistrées.
 
+## Joueurs enregistrés
+
+Les noms sont mémorisés dans le KV (clé `joueurs`) et proposés dans un menu
+déroulant par ligne du formulaire, préremplies avec les joueurs habituels.
+Pour un joueur qui n'existe pas encore : soit l'option « + Nouveau joueur… »
+du menu, soit le champ « Nouveau joueur » de la carte *Joueurs enregistrés*.
+Un nom entre aussi tout seul dans la liste dès qu'une partie qui l'utilise
+enregistre sa première manche. La croix d'une puce retire le nom de la liste,
+sans toucher aux parties déjà jouées ; les noms générés (« Joueur 3 ») ne sont
+jamais mémorisés.
+
 ## Enregistrement automatique
 
 - Chaque manche validée est écrite immédiatement dans le KV, sans bouton
@@ -45,7 +56,9 @@ parties enregistrées.
 
 Routes JSON si besoin : `GET /api/etat`, `GET /api/parties`,
 `POST /api/manche`, `POST /api/annuler`, `POST /api/nouvelle`
-(les paramètres de joueurs se passent dans la query string).
+(les paramètres de joueurs se passent dans la query string), plus
+`GET /api/joueurs`, `POST /api/joueurs` et `POST /api/joueurs/supprimer`
+(corps `{"nom": "…"}`) pour la liste des joueurs.
 
 ## Déploiement
 

@@ -243,6 +243,66 @@ async function listerParties(env, limit = 30) {
   return parties;
 }
 
+/* --------------------------------------------------- joueurs enregistrés */
+
+const CLE_JOUEURS = 'joueurs';
+
+/** Nom retenu pour la liste, ou null si vide ou généré automatiquement. */
+function nomValide(nom) {
+  const propre = String(nom || '').trim().slice(0, 20);
+  if (!propre) return null;
+  if (/^joueur \d+$/i.test(propre)) return null;
+  return propre;
+}
+
+async function lireJoueurs(env) {
+  const store = kv(env);
+  if (!store) return [];
+  const brut = await store.get(CLE_JOUEURS);
+  if (!brut) return [];
+  try {
+    const liste = JSON.parse(brut);
+    return Array.isArray(liste) ? liste.filter((n) => typeof n === 'string') : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function trierJoueurs(liste) {
+  return liste.sort((a, b) => a.localeCompare(b, 'fr', { sensitivity: 'base' }));
+}
+
+async function ajouterJoueurs(env, noms) {
+  const store = kv(env);
+  if (!store) return [];
+  const liste = await lireJoueurs(env);
+  const connus = new Set(liste.map((n) => n.toLowerCase()));
+  let modifie = false;
+
+  for (const brut of noms) {
+    const nom = nomValide(brut);
+    if (!nom || connus.has(nom.toLowerCase())) continue;
+    liste.push(nom);
+    connus.add(nom.toLowerCase());
+    modifie = true;
+  }
+
+  if (modifie) await store.put(CLE_JOUEURS, JSON.stringify(trierJoueurs(liste)));
+  return trierJoueurs(liste);
+}
+
+async function supprimerJoueur(env, nom) {
+  const store = kv(env);
+  if (!store) return [];
+  const cible = String(nom || '').trim().toLowerCase();
+  const liste = await lireJoueurs(env);
+  const restants = liste.filter((n) => n.toLowerCase() !== cible);
+  if (restants.length !== liste.length) {
+    await store.put(CLE_JOUEURS, JSON.stringify(restants));
+  }
+  return restants;
+}
+
 /* ------------------------------------------------------------------ styles */
 
 const CSS = `
@@ -298,6 +358,16 @@ const CSS = `
     border-bottom:1px solid rgba(255,255,255,0.08); font-size:0.9rem; align-items:center;}
   .game-row:last-child{border-bottom:none;}
   .tag{font-size:0.7rem; color:var(--muted);}
+  .chips{display:flex; flex-wrap:wrap; gap:8px; margin:6px 0 12px;}
+  .chip{display:inline-flex; align-items:center; gap:8px; background:rgba(255,255,255,0.12);
+    border-radius:999px; padding:6px 8px 6px 12px; font-size:0.85rem;}
+  .chip button{background:none; color:var(--muted); padding:0 2px; font-size:0.85rem; line-height:1;}
+  .chip button:hover{color:var(--panel);}
+  .ajout{display:flex; gap:8px;}
+  .ajout input{flex:1;}
+  .ajout button{background:rgba(255,255,255,0.15); color:var(--panel); white-space:nowrap;}
+  .card h2{font-size:1rem; margin:0;}
+  select.sel-joueur{margin-bottom:4px;}
 `;
 
 function page(titre, corps) {
@@ -310,7 +380,7 @@ function page(titre, corps) {
 
 /* ------------------------------------------------------------ page d'accueil */
 
-function pageAccueil(parties) {
+function pageAccueil(parties, joueurs) {
   const listeParties = parties.length === 0
     ? '<div class="empty">Aucune partie enregistrée pour l\'instant</div>'
     : parties.slice(0, 8).map((p) => {
@@ -333,20 +403,32 @@ function pageAccueil(parties) {
     + '<p></p><button class="primary" id="go">Commencer la partie</button>'
     + '<p class="tag" id="apercu"></p>'
     + '</div>'
+    + '<div class="card">'
+    + '<h2>Joueurs enregistrés</h2>'
+    + '<div id="listeJoueurs"></div>'
+    + '<div class="ajout">'
+    + '<input type="text" id="nouveauJoueur" maxlength="20" placeholder="Nouveau joueur">'
+    + '<button id="addJoueur">Ajouter</button>'
+    + '</div>'
+    + '<p class="tag" id="statutJoueurs"></p>'
+    + '</div>'
     + '<h2 style="font-size:1rem; text-align:center">Parties enregistrées</h2>'
     + '<div class="history">' + listeParties + '</div>'
     + '<div class="links"><a href="/historique">Voir tout l\'historique</a></div>'
-    + '<script>' + JS_ACCUEIL + '</script>';
+    + '<script>var JOUEURS = ' + toScriptJson(joueurs) + ';' + JS_ACCUEIL + '</script>';
 
   return page('Skyjo', corps);
 }
 
 const JS_ACCUEIL = `
   var MIN = ${MIN_JOUEURS}, MAX = ${MAX_JOUEURS};
+  var NOUVEAU = '__nouveau__';
   var selNb = document.getElementById('nb');
   var zoneNoms = document.getElementById('noms');
   var champLimite = document.getElementById('limite');
   var apercu = document.getElementById('apercu');
+  var listeJoueurs = document.getElementById('listeJoueurs');
+  var statutJoueurs = document.getElementById('statutJoueurs');
 
   for (var i = MIN; i <= MAX; i++) {
     var o = document.createElement('option');
@@ -356,32 +438,108 @@ const JS_ACCUEIL = `
     selNb.appendChild(o);
   }
 
+  function estConnu(nom) {
+    for (var i = 0; i < JOUEURS.length; i++) {
+      if (JOUEURS[i] === nom) return true;
+    }
+    return false;
+  }
+
+  /** Remplit un menu déroulant avec les joueurs connus. */
+  function remplirSelect(select) {
+    select.textContent = '';
+    var vide = document.createElement('option');
+    vide.value = '';
+    vide.textContent = '— choisir —';
+    select.appendChild(vide);
+    for (var i = 0; i < JOUEURS.length; i++) {
+      var o = document.createElement('option');
+      o.value = JOUEURS[i];
+      o.textContent = JOUEURS[i];
+      select.appendChild(o);
+    }
+    var nouv = document.createElement('option');
+    nouv.value = NOUVEAU;
+    nouv.textContent = '+ Nouveau joueur…';
+    select.appendChild(nouv);
+  }
+
+  function surChangement(e) {
+    var select = e.target;
+    var champ = select.nextElementSibling;
+    champ.hidden = select.value !== NOUVEAU;
+    if (!champ.hidden) champ.focus();
+    majApercu();
+  }
+
   function construireChamps() {
-    var anciens = [];
-    var inputs = zoneNoms.querySelectorAll('input');
-    for (var k = 0; k < inputs.length; k++) anciens.push(inputs[k].value);
-    zoneNoms.textContent = '';
     var n = parseInt(selNb.value, 10);
+    var choix = completer(lireChoix(), n);
+    zoneNoms.textContent = '';
+
     for (var i = 0; i < n; i++) {
       var lab = document.createElement('label');
       lab.textContent = 'Joueur ' + (i + 1);
-      var inp = document.createElement('input');
-      inp.type = 'text';
-      inp.maxLength = 20;
-      inp.placeholder = 'Joueur ' + (i + 1);
-      inp.value = anciens[i] || '';
-      inp.addEventListener('input', majApercu);
+
+      var select = document.createElement('select');
+      select.className = 'sel-joueur';
+      remplirSelect(select);
+
+      var champ = document.createElement('input');
+      champ.type = 'text';
+      champ.maxLength = 20;
+      champ.placeholder = 'Nom du nouveau joueur';
+      champ.hidden = true;
+
+      var valeur = choix[i] || '';
+      if (valeur && !estConnu(valeur)) {
+        select.value = NOUVEAU;
+        champ.hidden = false;
+        champ.value = valeur;
+      } else {
+        select.value = valeur;
+      }
+
+      select.addEventListener('change', surChangement);
+      champ.addEventListener('input', majApercu);
+
       zoneNoms.appendChild(lab);
-      zoneNoms.appendChild(inp);
+      zoneNoms.appendChild(select);
+      zoneNoms.appendChild(champ);
     }
     majApercu();
   }
 
+  /** Complète les lignes encore vides avec les joueurs connus non utilisés. */
+  function completer(choix, n) {
+    var pris = {};
+    for (var i = 0; i < choix.length; i++) {
+      if (choix[i]) pris[choix[i].toLowerCase()] = true;
+    }
+    var libres = JOUEURS.filter(function (nom) { return !pris[nom.toLowerCase()]; });
+    var out = [];
+    for (var k = 0; k < n; k++) {
+      out.push(choix[k] || libres.shift() || '');
+    }
+    return out;
+  }
+
+  /** Nom retenu pour chaque ligne, chaîne vide si rien n'est choisi. */
+  function lireChoix() {
+    var out = [];
+    var selects = zoneNoms.querySelectorAll('select');
+    for (var k = 0; k < selects.length; k++) {
+      var select = selects[k];
+      out.push(select.value === NOUVEAU ? select.nextElementSibling.value.trim() : select.value);
+    }
+    return out;
+  }
+
   function lireNoms() {
+    var choix = lireChoix();
     var noms = [];
-    var inputs = zoneNoms.querySelectorAll('input');
-    for (var k = 0; k < inputs.length; k++) {
-      noms.push((inputs[k].value || inputs[k].placeholder).trim());
+    for (var i = 0; i < choix.length; i++) {
+      noms.push(choix[i] || ('Joueur ' + (i + 1)));
     }
     return noms;
   }
@@ -396,11 +554,104 @@ const JS_ACCUEIL = `
     apercu.textContent = 'Lien de la partie : ' + location.origin + lienPartie();
   }
 
+  function rendreJoueurs() {
+    listeJoueurs.textContent = '';
+    if (JOUEURS.length === 0) {
+      var vide = document.createElement('div');
+      vide.className = 'empty';
+      vide.textContent = 'Aucun joueur enregistré pour l\\'instant';
+      listeJoueurs.appendChild(vide);
+      return;
+    }
+    var boite = document.createElement('div');
+    boite.className = 'chips';
+    JOUEURS.forEach(function (nom) {
+      var puce = document.createElement('span');
+      puce.className = 'chip';
+      var texte = document.createElement('span');
+      texte.textContent = nom;
+      var croix = document.createElement('button');
+      croix.type = 'button';
+      croix.textContent = '✕';
+      croix.title = 'Retirer ' + nom;
+      croix.addEventListener('click', function () {
+        if (!confirm('Retirer ' + nom + ' de la liste ? Les parties déjà enregistrées ne changent pas.')) return;
+        majListe('/api/joueurs/supprimer', nom);
+      });
+      puce.appendChild(texte);
+      puce.appendChild(croix);
+      boite.appendChild(puce);
+    });
+    listeJoueurs.appendChild(boite);
+  }
+
+  function majListe(chemin, nom) {
+    statutJoueurs.textContent = 'Enregistrement…';
+    return fetch(chemin, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ nom: nom })
+    }).then(function (r) {
+      return r.json().then(function (data) {
+        if (!r.ok) throw new Error(data && data.erreur ? data.erreur : 'Erreur ' + r.status);
+        return data;
+      });
+    }).then(function (data) {
+      JOUEURS = data.joueurs;
+      rendreJoueurs();
+      construireChamps();
+      statutJoueurs.textContent = '';
+    }).catch(function (err) {
+      statutJoueurs.textContent = 'Échec : ' + err.message;
+    });
+  }
+
+  function ajouterSaisi() {
+    var champ = document.getElementById('nouveauJoueur');
+    var nom = champ.value.trim();
+    if (!nom) { champ.focus(); return; }
+    champ.value = '';
+    majListe('/api/joueurs', nom);
+  }
+
+  /** Mémorise les noms tapés à la volée avant d'ouvrir la partie. */
+  function enregistrerNouveaux(noms) {
+    var aFaire = [];
+    for (var i = 0; i < noms.length; i++) {
+      if (noms[i] && !estConnu(noms[i]) && !/^joueur \\d+$/i.test(noms[i])) aFaire.push(noms[i]);
+    }
+    if (aFaire.length === 0) return Promise.resolve();
+    return Promise.all(aFaire.map(function (nom) {
+      return fetch('/api/joueurs', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ nom: nom })
+      }).catch(function () {});
+    }));
+  }
+
   selNb.addEventListener('change', construireChamps);
   champLimite.addEventListener('input', majApercu);
-  document.getElementById('go').addEventListener('click', function () {
-    location.href = lienPartie();
+  document.getElementById('addJoueur').addEventListener('click', ajouterSaisi);
+  document.getElementById('nouveauJoueur').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') ajouterSaisi();
   });
+
+  document.getElementById('go').addEventListener('click', function () {
+    var noms = lireNoms();
+    var vus = {};
+    for (var i = 0; i < noms.length; i++) {
+      var cle = noms[i].toLowerCase();
+      if (vus[cle]) {
+        alert('Deux joueurs portent le même nom : ' + noms[i]);
+        return;
+      }
+      vus[cle] = true;
+    }
+    enregistrerNouveaux(noms).then(function () { location.href = lienPartie(); });
+  });
+
+  rendreJoueurs();
   construireChamps();
 `;
 
@@ -617,6 +868,33 @@ export default {
       return json({ parties: await listerParties(env, 100) });
     }
 
+    if (chemin === '/api/joueurs' || chemin === '/api/joueurs/supprimer') {
+      if (request.method === 'GET' && chemin === '/api/joueurs') {
+        return json({ joueurs: await lireJoueurs(env) });
+      }
+      if (request.method !== 'POST') return json({ erreur: 'Méthode non autorisée.' }, 405);
+      if (!kv(env)) {
+        return json({ erreur: 'Stockage non configuré (binding KV « PARTIES »).' }, 500);
+      }
+
+      let corpsJoueur = {};
+      try {
+        corpsJoueur = await request.json();
+      } catch (err) {
+        corpsJoueur = {};
+      }
+
+      if (chemin === '/api/joueurs/supprimer') {
+        return json({ joueurs: await supprimerJoueur(env, corpsJoueur.nom) });
+      }
+
+      const nom = nomValide(corpsJoueur.nom);
+      if (!nom) {
+        return json({ erreur: 'Nom vide, trop long, ou réservé (« Joueur 1 »).' }, 400);
+      }
+      return json({ joueurs: await ajouterJoueurs(env, [nom]) });
+    }
+
     const apiEcriture = ['/api/manche', '/api/annuler', '/api/nouvelle'];
     if (apiEcriture.includes(chemin)) {
       if (request.method !== 'POST') return json({ erreur: 'Méthode non autorisée.' }, 405);
@@ -647,6 +925,8 @@ export default {
         }
         partie.manches.push(propres);
         await sauverPartie(env, params, partie);
+        // Une partie qui démarre fait entrer ses joueurs dans la liste.
+        if (partie.manches.length === 1) await ajouterJoueurs(env, partie.joueurs);
         return json(etatPublic(partie));
       }
 
@@ -678,7 +958,7 @@ export default {
 
     const params = lireParams(url);
     if (!params) {
-      return htmlResponse(pageAccueil(await listerParties(env, 8)));
+      return htmlResponse(pageAccueil(await listerParties(env, 8), await lireJoueurs(env)));
     }
     return htmlResponse(pageJeu(await chargerPartie(env, params)));
   },
