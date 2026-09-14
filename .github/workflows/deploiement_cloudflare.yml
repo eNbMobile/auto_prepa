@@ -29,7 +29,19 @@ jobs:
       - name: Installer Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
+
+      - name: Vérifier le secret Cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::Le secret de dépôt CLOUDFLARE_API_TOKEN est absent."
+            echo "Crée un token sur https://dash.cloudflare.com/profile/api-tokens"
+            echo "(Workers Scripts: Edit, Workers KV Storage: Edit, Account Settings: Read)"
+            echo "puis ajoute-le dans Settings > Secrets and variables > Actions."
+            exit 1
+          fi
 
       - name: Déployer le worker
         working-directory: cloudflare/${{ inputs.worker }}
