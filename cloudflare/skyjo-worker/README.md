@@ -61,6 +61,22 @@ Le namespace KV `skyjo-parties` est déjà créé sur le compte et son identifia
 est renseigné dans `wrangler.toml` (binding `PARTIES`) : rien d'autre à
 configurer, et aucun secret n'est nécessaire (ce worker ne touche pas à GitHub).
 
+### Déployer sans wrangler en local
+
+Le workflow GitHub Actions **Déploiement Cloudflare**
+(`.github/workflows/deploiement_cloudflare.yml`) fait le même `wrangler deploy`
+depuis Actions, pour n'importe quel worker du dossier `cloudflare/`. Il lui faut
+un secret de dépôt `CLOUDFLARE_API_TOKEN` (Settings → Secrets and variables →
+Actions), créé sur https://dash.cloudflare.com/profile/api-tokens avec les
+permissions de compte :
+
+- `Workers Scripts: Edit`
+- `Workers KV Storage: Edit`
+- `Account Settings: Read`
+
+Ensuite, GitHub → Actions → « Déploiement Cloudflare » → Run workflow, en
+choisissant le worker.
+
 Si tu devais recréer le namespace un jour :
 
 ```bash
