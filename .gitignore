@@ -10,7 +10,6 @@ v 4.0.0/prepa_drive_degrade
 
 auto_prepa.py
 analyse_mensuelle.py
-fix_anomalies.py
 
 gmail_filters_local.json
 

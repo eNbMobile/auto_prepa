@@ -10,9 +10,9 @@ content can be downloaded") et bloque tout le pipeline auto_prepa.
 Incident du 05/09/2026 : gencod_adresses.csv et gencod_nomenclatures.csv ont
 ete convertis en Google Sheets vers 13h46, et plus aucune commande n'a ete
 generee pendant ~20h alors que les emails de confirmation continuaient
-d'arriver (cf. rattraper_commandes.py pour le rattrapage des commandes
-concernees). Une premiere reconversion manuelle (export Google Sheets vers
-CSV depuis l'interface web) a laisse les fichiers en fins de ligne CRLF et
+d'arriver (les commandes concernees ont ete rattrapees a l'epoque par un
+script dedie, depuis supprime). Une premiere reconversion manuelle (export
+Google Sheets vers CSV depuis l'interface web) a laisse les fichiers en fins de ligne CRLF et
 a fait planter (SIGSEGV) le binaire prepa_drive_degrade, qui attend du CSV
 Unix classique (LF) - d'ou la normalisation des fins de ligne ci-dessous en
 plus de la reconversion de mimeType.
