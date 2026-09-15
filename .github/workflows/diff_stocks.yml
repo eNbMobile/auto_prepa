@@ -1,0 +1,68 @@
+name: Différence Stocks
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Date du stock J-1 (JJ/MM/AAAA) — laisser vide pour hier"
+        required: false
+        type: string
+      tous:
+        description: "Comparer tous les gencods (sans le filtre R1)"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: diff_stocks
+  cancel-in-progress: false
+
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python et dépendances
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer les dépendances pip
+        run: pip install -r requirements.txt
+
+      - name: Comparer les stocks J-1 / J
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          WORK_DIR: "v 4.0.0"
+        run: |
+          DATE_ARG=""
+          if [ -n "${{ inputs.date }}" ]; then
+            DATE_ARG="--date ${{ inputs.date }}"
+          elif [ "$(date +%u)" -eq 1 ]; then
+            # Lundi : le stock de référence est celui de samedi (J-2)
+            DATE_ARG="--date $(date -d '2 days ago' +%d/%m/%Y)"
+          fi
+          TOUS_ARG=""
+          if [ "${{ inputs.tous }}" = "true" ]; then
+            TOUS_ARG="--tous"
+          fi
+          python3 bootstrap.py diff_stocks.py $DATE_ARG $TOUS_ARG
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+            echo "Secret GOOGLE_TOKEN_JSON mis à jour."
+          fi

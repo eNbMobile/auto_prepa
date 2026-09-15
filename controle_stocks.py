@@ -765,11 +765,12 @@ def upload_to_archive(local_path, subfolder, filename=None, root_id=None):
 # PDF des écarts + envoi email
 # ─────────────────────────────────────────────────────────────────
 
-def _construire_pdf_tableau(rows, titre_html, nom_pdf, complet=True, vms_map=None):
+def _construire_pdf_tableau(rows, titre_html, nom_pdf, complet=True, vms_map=None, diff=False):
     """Génère un PDF tableau pour la liste de lignes fournie. Retourne le chemin ou None.
 
     complet=True  : code-barres, libellé, J-1, ventes, théo, J, écart.
     complet=False : code-barres, libellé, stock du jour (+ VMS si vms_map fourni).
+    diff=True     : code-barres, libellé, J-1, J, différence (prioritaire sur complet).
     """
     try:
         from reportlab.lib.pagesizes import A4
@@ -806,7 +807,10 @@ def _construire_pdf_tableau(rows, titre_html, nom_pdf, complet=True, vms_map=Non
     elements.append(Paragraph(titre_html, styles['Title']))
     elements.append(Spacer(1, 5*mm))
 
-    if complet:
+    if diff:
+        col_widths = [108, 246, 55, 50, 68]  # ≈ 527 pt
+        hdr_txts = ['Code-barres', 'Libellé', 'Stock J-1', 'Stock J', 'Différence']
+    elif complet:
         col_widths = [108, 246, 33, 40, 33, 33, 34]  # ≈ 527 pt (marges 3mm, sans colonne gencod)
         hdr_txts = ['Code-barres', 'Libellé', 'J-1', 'Ventes', 'Théo', 'J', 'Écart']
     elif vms_map is not None:
@@ -815,10 +819,13 @@ def _construire_pdf_tableau(rows, titre_html, nom_pdf, complet=True, vms_map=Non
     else:
         col_widths = [108, 366, 53]  # ≈ 527 pt
         hdr_txts = ['Code-barres', 'Libellé', 'Stock du jour']
-    hdr = [Paragraph(t, header_s) for t in hdr_txts]
+    header_c = ParagraphStyle('hdr_c', parent=header_s, alignment=1)
+    hdr = [Paragraph(t, header_s if i < 2 or not diff else header_c)
+           for i, t in enumerate(hdr_txts)]
     data = [hdr]
 
-    tiny_c = ParagraphStyle('tiny_c', fontSize=7, leading=8, alignment=1)
+    tiny_c  = ParagraphStyle('tiny_c', fontSize=7, leading=8, alignment=1)
+    small_c = ParagraphStyle('small_c', fontSize=8, leading=10, alignment=1)
 
     for r in rows:
         gencod, s_j1, v, s_theo, s_j, ecart, _, lib = r
@@ -837,7 +844,15 @@ def _construire_pdf_tableau(rows, titre_html, nom_pdf, complet=True, vms_map=Non
             )
         else:
             bc_cell = Paragraph(gencod, small)
-        if complet:
+        if diff:
+            data.append([
+                bc_cell,
+                Paragraph(lib, small),
+                Paragraph(str(int(s_j1)), small_c),
+                Paragraph(str(int(s_j)),  small_c),
+                Paragraph(f"{int(ecart):+d}", small_c),
+            ])
+        elif complet:
             data.append([
                 bc_cell,
                 Paragraph(lib, small),
@@ -868,11 +883,12 @@ def _construire_pdf_tableau(rows, titre_html, nom_pdf, complet=True, vms_map=Non
         ('TOPPADDING',     (0, 0), (-1, -1), 12),
         ('BOTTOMPADDING',  (0, 0), (-1, -1), 12),
     ])
-    if complet:
+    if complet or diff:
+        col_ecart = 4 if diff else 6
         for i, r in enumerate(rows, 1):
             c = colors.HexColor('#D32F2F') if float(r[5]) < 0 else colors.HexColor('#E65100')
-            style.add('TEXTCOLOR', (6, i), (6, i), c)
-            style.add('FONTNAME',  (6, i), (6, i), 'Helvetica-Bold')
+            style.add('TEXTCOLOR', (col_ecart, i), (col_ecart, i), c)
+            style.add('FONTNAME',  (col_ecart, i), (col_ecart, i), 'Helvetica-Bold')
 
     table = Table(data, colWidths=col_widths, repeatRows=1)
     table.setStyle(style)
