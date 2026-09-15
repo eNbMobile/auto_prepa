@@ -2,10 +2,15 @@
 """
 Différence de stocks entre les deux exports Drive j1.xlsx (J-1) et j.xlsx (J).
 
-Reprend le circuit du contrôle de stocks (mêmes fichiers, même périmètre de
-gencods R1, même mise en page PDF avec code-barres) mais sans les ventes ni le
-stock théorique : le PDF liste le stock J-1, le stock J et la différence entre
-les deux, et ne contient que les lignes qui diffèrent.
+Reprend le circuit du contrôle de stocks (même périmètre de gencods R1, même
+mise en page PDF avec code-barres) mais sans les ventes ni le stock théorique :
+le PDF liste le stock J-1, le stock J et la différence entre les deux, et ne
+contient que les lignes qui diffèrent.
+
+Les deux exports sont cherchés d'abord dans le dépôt lui-même (racine, stocks/
+ou WORK_DIR) : il suffit d'y déposer j1.xlsx et j.xlsx et de lancer le
+workflow. À défaut, ils sont téléchargés depuis le dossier Drive du contrôle de
+stocks, puis depuis les archives.
 
 Usage :
   python3 diff_stocks.py [j1.xlsx [j.xlsx]] [--date JJ/MM/AAAA] [--tous]
@@ -22,29 +27,64 @@ from datetime import date, timedelta
 import controle_stocks as cs
 
 
+# Emplacements fouillés dans le dépôt, dans l'ordre : racine du checkout,
+# sous-dossier stocks/, puis le répertoire de travail habituel ("v 4.0.0").
+DOSSIERS_LOCAUX = ("", "stocks", cs.WORK_DIR)
+
+
+def chercher_local(nom, chemin_demande=None):
+    """Cherche un export dans le dépôt. Retourne le chemin trouvé ou None."""
+    candidats = [chemin_demande] if chemin_demande else []
+    candidats += [os.path.join(d, nom) for d in DOSSIERS_LOCAUX]
+    for chemin in candidats:
+        if chemin and os.path.exists(chemin):
+            return chemin
+    return None
+
+
+def _emplacements_attendus(nom):
+    return ", ".join(os.path.join(d, nom) or nom for d in DOSSIERS_LOCAUX)
+
+
 def resoudre_fichiers(fichier_j1, fichier_j, date_j1):
-    """Récupère les deux exports (local, sinon Drive contrôle, sinon archives).
-    Quitte en erreur si l'un des deux reste introuvable."""
-    if not os.path.exists(fichier_j):
-        print("Téléchargement j.xlsx depuis Drive contrôle …")
-        if not cs.telecharger_fichier_controle("j.xlsx", fichier_j):
-            print("ERREUR : j.xlsx introuvable — stock J indisponible.")
+    """Localise les deux exports et retourne (chemin_j1, chemin_j).
+
+    Priorité au dépôt lui-même (chemin passé en argument, racine, stocks/,
+    WORK_DIR), puis repli sur le dossier Drive du contrôle de stocks et enfin
+    sur les archives. Quitte en erreur si l'un des deux reste introuvable.
+    """
+    chemin_j = chercher_local("j.xlsx", fichier_j)
+    if chemin_j:
+        print(f"Stock J   trouvé dans le dépôt : {chemin_j}")
+    else:
+        print("j.xlsx absent du dépôt — téléchargement depuis Drive contrôle …")
+        if cs.telecharger_fichier_controle("j.xlsx", "j.xlsx"):
+            chemin_j = "j.xlsx"
+        else:
+            print("ERREUR : j.xlsx introuvable — stock J indisponible.\n"
+                  f"  Déposez-le dans le dépôt ({_emplacements_attendus('j.xlsx')}) "
+                  "ou dans le dossier Drive du contrôle de stocks.")
             sys.exit(1)
 
-    if os.path.exists(fichier_j1):
-        return
-    print("Téléchargement j1.xlsx depuis Drive contrôle …")
-    if cs.telecharger_fichier_controle("j1.xlsx", fichier_j1):
-        return
+    chemin_j1 = chercher_local("j1.xlsx", fichier_j1)
+    if chemin_j1:
+        print(f"Stock J-1 trouvé dans le dépôt : {chemin_j1}")
+        return chemin_j1, chemin_j
+
+    print("j1.xlsx absent du dépôt — téléchargement depuis Drive contrôle …")
+    if cs.telecharger_fichier_controle("j1.xlsx", "j1.xlsx"):
+        return "j1.xlsx", chemin_j
     # Repli : stocks du soir de J-1 archivés ("_j" pour les archives antérieures
     # au découpage matin/soir), comme dans download_stocks.py.
     jour = date_j1.strftime('%d_%m_%Y')
     for nom in (cs.nom_archive_stock(date_j1, "soir"), f"stock_{jour}_j.xlsx"):
-        if cs.telecharger_fichier_archive("stocks", nom, fichier_j1,
+        if cs.telecharger_fichier_archive("stocks", nom, "j1.xlsx",
                                           root_id=cs.DRIVE_CONFIG_FOLDER_ID):
-            return
-    print("ERREUR : j1.xlsx introuvable (Drive contrôle et archives) — "
-          "stock de départ indisponible.")
+            return "j1.xlsx", chemin_j
+    print("ERREUR : j1.xlsx introuvable (dépôt, Drive contrôle et archives) — "
+          "stock de départ indisponible.\n"
+          f"  Déposez-le dans le dépôt ({_emplacements_attendus('j1.xlsx')}) "
+          "ou dans le dossier Drive du contrôle de stocks.")
     sys.exit(1)
 
 
@@ -164,13 +204,13 @@ def main():
     if len(args) > 2:
         print(__doc__)
         sys.exit(1)
-    fichier_j1 = args[0] if len(args) >= 1 else "j1.xlsx"
-    fichier_j  = args[1] if len(args) == 2 else "j.xlsx"
+    fichier_j1 = args[0] if len(args) >= 1 else None
+    fichier_j  = args[1] if len(args) == 2 else None
 
     date_j = date.today()
 
     cs._charger_config()
-    resoudre_fichiers(fichier_j1, fichier_j, date_j1)
+    fichier_j1, fichier_j = resoudre_fichiers(fichier_j1, fichier_j, date_j1)
 
     print(f"\nLecture stock J-1 : {fichier_j1}")
     stock_j1, libelles_j1, _ = cs.lire_stock(fichier_j1, classeur_requis=False)

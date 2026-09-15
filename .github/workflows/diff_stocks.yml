@@ -1,3 +1,9 @@
+# Compare les exports de stocks j1.xlsx (J-1) et j.xlsx (J) et envoie par
+# email un PDF des seules lignes qui diffèrent.
+#
+# Les deux fichiers sont lus dans le dépôt : déposez-les à la racine (ou dans
+# stocks/) sur la branche choisie au lancement, puis lancez ce workflow. S'ils
+# n'y sont pas, ils sont cherchés dans le dossier Drive du contrôle de stocks.
 name: Différence Stocks
 
 on:
@@ -34,6 +40,9 @@ jobs:
 
       - name: Installer les dépendances pip
         run: pip install -r requirements.txt
+
+      - name: Exports de stocks présents dans le dépôt
+        run: ls -l j1.xlsx j.xlsx stocks/*.xlsx 2>/dev/null || echo "Aucun export dans le dépôt — repli sur Drive."
 
       - name: Comparer les stocks J-1 / J
         env:

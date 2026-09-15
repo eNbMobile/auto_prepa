@@ -14,3 +14,8 @@ analyse_mensuelle.py
 gmail_filters_local.json
 
 *.xlsx
+# …sauf les exports de stocks déposés dans le dépôt pour les workflows
+# (Différence Stocks, Contrôle Stocks) : ils sont lus depuis le checkout.
+!j.xlsx
+!j1.xlsx
+!stocks/*.xlsx
