@@ -11,6 +11,7 @@ Lancement : python3 -m unittest discover -s tests
 
 import os
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -56,6 +57,46 @@ class TestComparerStocks(unittest.TestCase):
     def test_stock_a_zero_des_deux_cotes_ignore(self):
         diffs, _, communs = ds.comparer_stocks({"1": 0.0}, {"1": 0.0})
         self.assertEqual((diffs, communs), ([], 1))
+
+
+class TestChercherLocal(unittest.TestCase):
+    """Les exports déposés dans le dépôt doivent être trouvés sans passer par
+    Drive : c'est le mode d'emploi du workflow (on dépose j1.xlsx et j.xlsx
+    dans le dépôt, on lance le workflow)."""
+
+    def setUp(self):
+        self._cwd = os.getcwd()
+        self._tmp = tempfile.TemporaryDirectory()
+        os.chdir(self._tmp.name)
+
+    def tearDown(self):
+        os.chdir(self._cwd)
+        self._tmp.cleanup()
+
+    def _creer(self, chemin):
+        os.makedirs(os.path.dirname(chemin) or ".", exist_ok=True)
+        open(chemin, "w").close()
+
+    def test_racine_du_depot(self):
+        self._creer("j.xlsx")
+        self.assertEqual(ds.chercher_local("j.xlsx"), "j.xlsx")
+
+    def test_sous_dossier_stocks(self):
+        self._creer("stocks/j1.xlsx")
+        self.assertEqual(ds.chercher_local("j1.xlsx"), os.path.join("stocks", "j1.xlsx"))
+
+    def test_chemin_explicite_prioritaire(self):
+        self._creer("j.xlsx")
+        self._creer("autre/export.xlsx")
+        self.assertEqual(ds.chercher_local("j.xlsx", "autre/export.xlsx"),
+                         "autre/export.xlsx")
+
+    def test_chemin_explicite_absent_retombe_sur_le_depot(self):
+        self._creer("j.xlsx")
+        self.assertEqual(ds.chercher_local("j.xlsx", "inexistant.xlsx"), "j.xlsx")
+
+    def test_absent_partout(self):
+        self.assertIsNone(ds.chercher_local("j.xlsx"))
 
 
 class TestGenererPdfDiff(unittest.TestCase):
