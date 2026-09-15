@@ -1481,6 +1481,79 @@ def _envoyer_email_anomalie_bon(gmail_svc, numero, lignes_invalides):
     except Exception as e:
         print(f"    Envoi email anomalie {numero} echoue : {e}")
 
+_SUJET_BON_ABSENT = "AUCUN bon de prepa genere"
+
+
+def _alerte_bon_absent_deja_envoyee(gmail_svc, numero):
+    """Vrai si une alerte 'aucun bon de prepa' est deja partie pour cette
+    commande (recherche dans les messages envoyes)."""
+    try:
+        res = gmail_svc.users().messages().list(
+            userId='me',
+            q=f'in:sent subject:"{_SUJET_BON_ABSENT}" "{numero}"',
+            maxResults=1).execute()
+        return bool(res.get('messages', []))
+    except Exception as e:
+        print(f"    Recherche d'une alerte deja envoyee pour {numero} echouee : {e}")
+        return False
+
+
+def _envoyer_email_bon_absent(gmail_svc, numero, motif, detail=""):
+    """Alerte par email quand une commande a ete traitee sans qu'aucun bon de
+    prepa n'en sorte.
+
+    Sans elle, l'echec est totalement silencieux : le bon de commande est
+    archive sur Drive avant la generation et l'email de confirmation est
+    libellise des son telechargement, si bien que la commande n'est jamais
+    reprise, que le workflow reste vert et que l'absence du bon ne se
+    remarque qu'au moment de preparer la commande. C'est ce qui s'est passe
+    les 14 et 15/09/2026 : le binaire de generation plantait (SIGSEGV) sur
+    certaines commandes apres une mise a jour de gencod_nomenclatures.csv, et
+    une vingtaine de commandes du 15/09 ont disparu sans le moindre signal.
+
+    `motif` resume la cause (plantage du binaire, bon vide, PDF illisible,
+    config d'adressage indisponible, upload Drive echoue) et `detail` porte la
+    sortie technique utile au diagnostic.
+
+    Une seule alerte par commande : un bon depose a la main dont la generation
+    echoue reste dans le dossier de depot et est repris a chaque run (toutes
+    les minutes en journee), ce qui enverrait sinon une alerte par minute. Le
+    garde-fou est la recherche de l'alerte deja envoyee dans les messages
+    envoyes — si cette recherche echoue, l'alerte part quand meme (un doublon
+    vaut mieux qu'une commande perdue en silence)."""
+    from email.mime.text import MIMEText
+    destinataire = EMAIL_ANTICIPATION
+    if not destinataire:
+        return False
+    if _alerte_bon_absent_deja_envoyee(gmail_svc, numero):
+        print(f"    Alerte bon absent deja envoyee pour cde {numero} : pas de relance.")
+        return False
+    corps = (
+        f"Bonjour,\n\n"
+        f"La commande {numero} a ete traitee mais aucun bon de preparation "
+        f"n'a ete genere : elle n'apparaitra donc pas dans l'appli de prepa.\n\n"
+        f"Cause : {motif}\n"
+    )
+    if detail:
+        corps += f"\nDetail :\n{detail}\n"
+    corps += (
+        f"\nLe bon de commande reste archive sur Drive dans BDC/<mois>/<jour>/ : "
+        f"pour reprendre la commande, deposer une copie de "
+        f"BonDeCommande_{numero}.pdf dans le dossier Drive "
+        f"'{DOSSIER_TRAITEMENT_MANUEL}' (elle sera retraitee au run suivant).\n"
+    )
+    try:
+        msg = MIMEText(corps, "plain", "utf-8")
+        msg["to"] = destinataire
+        msg["subject"] = f"Commande {numero} - {_SUJET_BON_ABSENT}"
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
+        print(f"    ALERTE bon absent envoyee pour cde {numero} => {destinataire}")
+        return True
+    except Exception as e:
+        print(f"    Envoi alerte bon absent {numero} echoue : {e}")
+        return False
+
 def _envoyer_email_km_manquant(gmail_svc, numero, nom, prenom, date_cde_str):
     """Alerte par email quand la distance (colonne km) n'a definitivement pas
     pu etre recuperee sur Shopopop pour une commande LIVRAISON (identifiants/
@@ -1855,6 +1928,12 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
         fpath = os.path.join(WORK_DIR, csv_requis)
         if not os.path.exists(fpath) or os.path.getsize(fpath) == 0:
             print(f"  ERREUR CRITIQUE : {csv_requis} absent ou vide dans {WORK_DIR}")
+            _envoyer_email_bon_absent(
+                gmail_svc, order_num,
+                "config d'adressage indisponible",
+                f"{csv_requis} absent ou vide : le telechargement depuis Drive a "
+                f"echoue. Les commandes suivantes du run sont elles aussi "
+                f"laissees de cote.")
             return "stop", shopopop_token, shopopop_drive_id, shopopop_connecte
 
     pdf_path = os.path.join(WORK_DIR, pdf)
@@ -1863,6 +1942,10 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
     if not pt.stdout.strip():
         print(f"  ECHEC pdftotext - PDF vide ou non lisible : {pdf}")
         os.remove(pdf_path)
+        _envoyer_email_bon_absent(
+            gmail_svc, order_num,
+            "bon de commande illisible",
+            "pdftotext n'a rien extrait du PDF joint a l'email de confirmation.")
         return "processed", shopopop_token, shopopop_drive_id, shopopop_connecte
 
     articles_pdf, produits_pdf = extraire_articles_produits_pdf(pt.stdout)
@@ -1902,12 +1985,28 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
         p = os.path.join(WORK_DIR, pdf)
         if os.path.exists(p):
             os.remove(p)
+        # "retry" ne vaut que pour un bon depose a la main (il reste dans le
+        # dossier de depot) : une commande arrivee par email, elle, est deja
+        # libellisee et ne repassera plus jamais — d'ou l'alerte.
+        _envoyer_email_bon_absent(
+            gmail_svc, order_num,
+            f"plantage du binaire de generation (code {r.returncode})",
+            (f"stdout : {r.stdout[:300]}\nstderr : {r.stderr[:300]}"
+             if (r.stdout or r.stderr) else
+             "aucune sortie (code negatif = arret par signal, souvent une "
+             "donnee de config inattendue : gencod_adresses.csv, "
+             "gencod_nomenclatures.csv, chemin_prepa_*.csv)."))
         return "retry", shopopop_token, shopopop_drive_id, shopopop_connecte
 
     bon_prepa_path = os.path.join(WORK_DIR, "bon_prepa.txt")
     if not os.path.exists(bon_prepa_path) or os.path.getsize(bon_prepa_path) == 0:
         print(f" VIDE - bon_prepa.txt absent ou vide")
         if r.stdout: print(f"    sortie C++ : {r.stdout[:300]}")
+        _envoyer_email_bon_absent(
+            gmail_svc, order_num,
+            "bon de prepa vide",
+            f"le binaire s'est termine normalement mais n'a rien ecrit dans "
+            f"bon_prepa.txt.\nsortie : {r.stdout[:300]}")
         return "processed", shopopop_token, shopopop_drive_id, shopopop_connecte
     print(" OK")
 
@@ -2020,12 +2119,20 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
                                     ecraser=regeneration)
         declencher_assemblage_anticipation(order_num, dossier_jj_mm, dossier_mm_aaaa)
 
-    for fname in [f"bon_prepa_{order_num}.txt",
-                  f"bon_anticipation_{order_num}.txt"]:
+    nom_bon_prepa = f"bon_prepa_{order_num}.txt"
+    for fname in [nom_bon_prepa, f"bon_anticipation_{order_num}.txt"]:
         fpath = os.path.join(WORK_DIR, fname)
         if os.path.exists(fpath):
             if upload_bon(drive_svc, fpath):
                 os.remove(fpath)
+            elif fname == nom_bon_prepa:
+                # Bon genere correctement mais jamais depose dans le dossier que
+                # lit l'appli de prepa : pour elle, la commande n'existe pas.
+                _envoyer_email_bon_absent(
+                    gmail_svc, order_num,
+                    "depot du bon sur Drive echoue",
+                    f"{fname} a bien ete genere mais son upload dans le dossier "
+                    f"des bons a echoue.")
 
     pdf_work = os.path.join(WORK_DIR, pdf)
     if os.path.exists(pdf_work):
