@@ -1,0 +1,9 @@
+name = "skyjoenligne"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+# Parties en cours et joueurs enregistrés (base D1 « skyjoenligne » déjà créée).
+[[d1_databases]]
+binding = "DB"
+database_name = "skyjoenligne"
+database_id = "c7f4673d-ecf1-4b71-a1b4-de3bf7b3c672"
