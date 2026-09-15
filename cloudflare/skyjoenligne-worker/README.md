@@ -17,8 +17,10 @@ URL une fois déployé : `https://skyjoenligne.controle-stocks.workers.dev`
    4 colonnes) et en retourne deux. Celui dont les deux cartes totalisent le
    plus commence.
 4. À son tour : prendre la carte de la défausse (elle doit remplacer une case),
-   ou piocher puis choisir de **garder** la carte (elle remplace une case) ou de
-   **la défausser** en retournant une carte encore cachée.
+   ou piocher. Une fois la carte en main, deux gestes : toucher une case de sa
+   grille pour l'y placer, ou **poser la carte sur la défausse** (la pile
+   affiche alors « Jeter ici ») puis toucher une carte encore face cachée pour
+   la retourner.
 5. Trois cartes identiques visibles dans une colonne : la colonne est éliminée.
 6. Dès qu'un joueur a retourné ses douze cartes, les autres jouent un dernier
    tour, puis tout est révélé. Si celui qui a terminé n'a pas le plus petit
