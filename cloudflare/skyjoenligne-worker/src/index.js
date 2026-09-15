@@ -1094,6 +1094,25 @@ const JS_TABLE = `
     return zone;
   }
 
+  /** Toutes les grilles retournées en fin de manche, la sienne comprise. */
+  function grillesFinalesEl() {
+    var zone = el('div', 'adversaires');
+    ETAT.joueurs.forEach(function (joueur, index) {
+      var bloc = el('div', 'adv');
+      bloc.style.setProperty('--accent', joueur.couleur);
+      var nom = el('div', 'nom');
+      nom.appendChild(el('span', null, joueur.nom + (index === ETAT.moi ? ' (toi)' : '')));
+      var manche = joueur.scoresManches.length
+        ? joueur.scoresManches[joueur.scoresManches.length - 1]
+        : 0;
+      nom.appendChild(el('span', 'pts', manche + ' pts'));
+      bloc.appendChild(nom);
+      bloc.appendChild(grilleEl(joueur, false));
+      zone.appendChild(bloc);
+    });
+    return zone;
+  }
+
   function scoresEl() {
     var table = el('table');
     var thead = el('thead');
@@ -1253,7 +1272,11 @@ const JS_TABLE = `
     statut.id = 'statut';
     vue.appendChild(statut);
 
+    vue.appendChild(el('div', 'subtitle', 'Les cartes de la manche ' + ETAT.manche));
+    vue.appendChild(grillesFinalesEl());
+
     var bloc = el('div', 'card');
+    bloc.style.marginTop = '14px';
     bloc.appendChild(scoresEl());
     var bouton = el('button', 'primary', fini ? 'Nouvelle partie' : 'Manche suivante');
     bouton.addEventListener('click', function () {
