@@ -570,7 +570,6 @@ const CSS = `
   .rangee{display:flex; gap:8px; align-items:center;}
   .rangee > *{flex:1;}
   .rangee button{flex:0 0 auto;}
-  .rangee.egale button{flex:1;}
   .statut{text-align:center; font-size:0.8rem; color:var(--muted); min-height:16px; margin-bottom:8px;}
   .erreur{color:#FFB4A2;}
   .code-salle{
@@ -623,6 +622,7 @@ const CSS = `
   .chip button{background:none; color:var(--muted); padding:0 2px; font-size:0.8rem;}
   .empty{text-align:center; color:var(--muted); padding:12px 0; font-size:0.85rem;}
   .aide{font-size:0.78rem; color:var(--muted); text-align:center; margin-top:8px;}
+  .lien{background:none; color:var(--or); text-decoration:underline; padding:0 2px; font-size:0.78rem;}
   a{color:var(--or);}
 `;
 
@@ -1012,6 +1012,10 @@ const JS_TABLE = `
     return function () { agir('defausser', index); };
   }
 
+  function aCarteCachee() {
+    return ETAT.joueurs[ETAT.moi].grille.some(function (c) { return c.etat === 'cachee'; });
+  }
+
   function tableEl() {
     var zone = el('div', 'table');
 
@@ -1028,13 +1032,20 @@ const JS_TABLE = `
     zone.appendChild(pilePioche);
 
     var pileDefausse = el('div', 'pile');
+    var jeterIci = monTour && ETAT.carteEnMain
+      && ETAT.carteEnMain.origine === 'pioche' && aCarteCachee();
+    var clicDefausse = null;
+    if (monTour && !ETAT.carteEnMain && ETAT.defausse !== null) {
+      clicDefausse = function () { agir('prendreDefausse'); };
+    } else if (jeterIci) {
+      // On arme seulement : la carte ne part qu'une fois la case à retourner choisie.
+      clicDefausse = function () { MODE = 'defausser'; rendre(); };
+    }
     pileDefausse.appendChild(carteEl(
       ETAT.defausse === null ? null : { etat: 'visible', v: ETAT.defausse },
-      monTour && !ETAT.carteEnMain && ETAT.defausse !== null
-        ? function () { agir('prendreDefausse'); }
-        : null
+      clicDefausse
     ));
-    pileDefausse.appendChild(el('span', 'etiquette', 'Défausse'));
+    pileDefausse.appendChild(el('span', 'etiquette', jeterIci ? 'Jeter ici' : 'Défausse'));
     zone.appendChild(pileDefausse);
 
     if (ETAT.carteEnMain) {
@@ -1050,24 +1061,13 @@ const JS_TABLE = `
     return zone;
   }
 
-  function choixModeEl() {
-    var bloc = el('div');
-    var ligne = el('div', 'rangee egale');
-
-    var garder = el('button', MODE === 'echanger' ? 'primary' : 'ghost', 'Garder la carte');
-    garder.style.marginTop = '0';
-    garder.addEventListener('click', function () { MODE = 'echanger'; rendre(); });
-
-    var jeter = el('button', MODE === 'defausser' ? 'primary' : 'ghost', 'La défausser');
-    jeter.style.marginTop = '0';
-    jeter.addEventListener('click', function () { MODE = 'defausser'; rendre(); });
-
-    ligne.appendChild(garder);
-    ligne.appendChild(jeter);
-    bloc.appendChild(ligne);
-    bloc.appendChild(el('div', 'aide', MODE === 'echanger'
-      ? 'Touche la case de ta grille à remplacer.'
-      : 'Touche une carte encore face cachée à retourner.'));
+  function aideJeter() {
+    var bloc = el('div', 'aide');
+    bloc.appendChild(el('span', null, 'Tu jettes cette carte : touche une carte encore face cachée. '));
+    var annuler = el('button', 'lien', 'Annuler');
+    annuler.type = 'button';
+    annuler.addEventListener('click', function () { MODE = 'echanger'; rendre(); });
+    bloc.appendChild(annuler);
     return bloc;
   }
 
@@ -1205,8 +1205,13 @@ const JS_TABLE = `
     if (ETAT.phase === 'jeu' && ETAT.tour === ETAT.moi && ETAT.carteEnMain) {
       if (ETAT.carteEnMain.origine === 'defausse') {
         maZone.appendChild(el('div', 'aide', 'Touche la case de ta grille à remplacer.'));
+      } else if (MODE === 'defausser') {
+        maZone.appendChild(aideJeter());
       } else {
-        maZone.appendChild(choixModeEl());
+        maZone.appendChild(el('div', 'aide',
+          aCarteCachee()
+            ? 'Touche la case à remplacer, ou la défausse pour jeter cette carte.'
+            : 'Touche la case de ta grille à remplacer.'));
       }
     } else if (ETAT.phase === 'jeu' && ETAT.tour === ETAT.moi) {
       maZone.appendChild(el('div', 'aide', 'Prends la carte de la défausse ou pioche.'));
