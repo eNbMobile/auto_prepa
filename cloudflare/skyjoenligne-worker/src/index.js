@@ -551,13 +551,15 @@ const CSS = `
     margin:0; min-height:100vh; background:var(--bg);
     background-image: radial-gradient(circle at 20% 10%, rgba(255,255,255,0.06), transparent 45%);
     font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    color:var(--panel); padding:18px 14px 50px;
+    color:var(--panel); padding:12px 12px 24px;
   }
   .wrap{max-width:560px; margin:0 auto;}
   h1{text-align:center; font-size:1.5rem; margin:0 0 2px;}
   .subtitle{text-align:center; color:var(--muted); font-size:0.85rem; margin-bottom:16px;}
-  .card{background:rgba(255,255,255,0.06); border-radius:14px; padding:14px; margin-bottom:14px;}
+  .card{background:rgba(255,255,255,0.06); border-radius:14px; padding:10px; margin-bottom:10px;}
   .card h2{font-size:1rem; margin:0 0 8px;}
+  .entete{display:flex; justify-content:space-between; gap:8px; font-size:0.76rem;
+    color:var(--muted); margin-bottom:8px;}
   label{display:block; font-size:0.78rem; color:var(--muted); margin:10px 0 4px;}
   input, select{
     width:100%; padding:9px 8px; border-radius:10px; border:1px solid #ddd;
@@ -577,16 +579,17 @@ const CSS = `
     color:var(--or); margin:6px 0 2px;
   }
   .bandeau{
-    text-align:center; border-radius:12px; padding:10px; font-weight:700; margin-bottom:12px;
+    text-align:center; border-radius:12px; padding:8px; font-weight:700; margin-bottom:10px;
     background:rgba(255,255,255,0.1);
   }
   .bandeau.moi{background:var(--or); color:#14213D;}
   .bandeau.fin{background:#2A9D8F; color:#fff;}
 
-  .grille{display:grid; grid-template-columns:repeat(4, 1fr); gap:6px;}
+  .grille{display:grid; grid-template-columns:repeat(4, 1fr); gap:5px;}
+  .card > .grille{max-width:280px; margin:0 auto;}
   .carte{
-    aspect-ratio:2/3; border-radius:8px; display:flex; align-items:center; justify-content:center;
-    font-weight:700; font-size:1.25rem; color:#14213D; border:2px solid rgba(0,0,0,0.15);
+    aspect-ratio:1; border-radius:8px; display:flex; align-items:center; justify-content:center;
+    font-weight:700; font-size:1.15rem; color:#14213D; border:2px solid rgba(0,0,0,0.15);
     padding:0; width:100%;
   }
   .carte.dos{
@@ -598,33 +601,44 @@ const CSS = `
   .carte.cliquable{cursor:pointer; box-shadow:0 0 0 2px var(--or);}
   .carte.cliquable:hover{transform:translateY(-2px);}
 
-  .table{display:flex; gap:14px; justify-content:center; align-items:flex-start; margin-bottom:14px;}
-  .pile{text-align:center; width:74px;}
-  .pile .carte{font-size:1.2rem;}
+  .table{display:flex; gap:12px; justify-content:center; align-items:flex-start; margin-bottom:10px;}
+  .pile{text-align:center; width:64px;}
+  .pile .carte{font-size:1.1rem;}
   .pile .etiquette{font-size:0.7rem; color:var(--muted); margin-top:4px; display:block;}
   .pile .etiquette.jetee{color:var(--or); font-weight:600;}
 
-  .adversaires{display:grid; grid-template-columns:repeat(auto-fit, minmax(128px,1fr)); gap:10px;}
-  .adv{background:rgba(255,255,255,0.05); border-radius:12px; padding:8px; border-top:4px solid var(--accent);}
-  .adv .nom{font-size:0.82rem; font-weight:600; display:flex; justify-content:space-between; gap:6px; margin-bottom:6px;}
+  .adversaires{display:grid; gap:8px; justify-items:center;
+    grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));}
+  .adv{background:rgba(255,255,255,0.05); border-radius:12px; padding:7px;
+    border-top:4px solid var(--accent); width:100%; max-width:190px;}
+  .adv .nom{font-size:0.8rem; font-weight:600; display:flex; justify-content:space-between; gap:6px; margin-bottom:5px;}
   .adv .nom .pts{color:var(--muted); font-weight:400;}
   .adv .grille{gap:3px;}
-  .adv .carte{font-size:0.75rem; border-width:1px; border-radius:5px;}
+  .adv .carte{font-size:0.72rem; border-width:1px; border-radius:5px;}
   .adv.actif{box-shadow:0 0 0 2px var(--or);}
 
   table{width:100%; border-collapse:collapse; font-size:0.88rem;}
   th, td{padding:7px 5px; text-align:center; border-bottom:1px solid rgba(255,255,255,0.08);}
   th{color:var(--muted); font-weight:600;}
   tr:last-child td{border-bottom:none;}
-  .journal{font-size:0.75rem; color:var(--muted); line-height:1.5; margin-top:10px;}
+  .journal{font-size:0.72rem; color:var(--muted); line-height:1.45; margin-top:8px;}
   .chips{display:flex; flex-wrap:wrap; gap:8px; margin:6px 0 4px;}
   .chip{display:inline-flex; align-items:center; gap:8px; background:rgba(255,255,255,0.12);
     border-radius:999px; padding:5px 8px 5px 12px; font-size:0.82rem;}
   .chip button{background:none; color:var(--muted); padding:0 2px; font-size:0.8rem;}
   .empty{text-align:center; color:var(--muted); padding:12px 0; font-size:0.85rem;}
-  .aide{font-size:0.78rem; color:var(--muted); text-align:center; margin-top:8px;}
+  .aide{font-size:0.76rem; color:var(--muted); text-align:center; margin-top:6px;}
   .lien{background:none; color:var(--or); text-decoration:underline; padding:0 2px; font-size:0.78rem;}
   a{color:var(--or);}
+
+  /* Écrans courts : on resserre encore pour garder l'adversaire sous les yeux. */
+  @media (max-height: 640px){
+    .card > .grille{max-width:236px;}
+    .pile{width:56px;}
+    .adv{max-width:170px;}
+    .bandeau{padding:6px; margin-bottom:8px;}
+    .journal div:not(:last-child){display:none;}
+  }
 `;
 
 function pageHtml(joueursConnus) {
@@ -946,16 +960,10 @@ const JS_TABLE = `
   /* --------------------------------------------------------- salle et jeu */
 
   function enTete() {
-    var bloc = el('div', 'card');
-    var haut = el('div', 'rangee');
-    haut.appendChild(el('span', null, 'Salle ' + ETAT.code));
-    var droite = el('span', null,
-      ETAT.manche > 0 ? 'Manche ' + ETAT.manche + ' — fin à ' + ETAT.limite : 'Fin à ' + ETAT.limite);
-    droite.style.textAlign = 'right';
-    droite.style.color = '#9AA5C4';
-    droite.style.fontSize = '0.8rem';
-    haut.appendChild(droite);
-    bloc.appendChild(haut);
+    var bloc = el('div', 'entete');
+    bloc.appendChild(el('span', null, 'Salle ' + ETAT.code));
+    bloc.appendChild(el('span', null,
+      ETAT.manche > 0 ? 'Manche ' + ETAT.manche + ' — fin à ' + ETAT.limite : 'Fin à ' + ETAT.limite));
     return bloc;
   }
 
@@ -1142,9 +1150,10 @@ const JS_TABLE = `
     return table;
   }
 
-  function journalEl() {
+  function journalEl(maximum) {
     var bloc = el('div', 'journal');
-    ETAT.journal.forEach(function (ligne) {
+    var lignes = maximum ? ETAT.journal.slice(-maximum) : ETAT.journal;
+    lignes.forEach(function (ligne) {
       bloc.appendChild(el('div', null, ligne));
     });
     return bloc;
@@ -1251,7 +1260,7 @@ const JS_TABLE = `
     vue.appendChild(maZone);
 
     vue.appendChild(adversairesEl());
-    vue.appendChild(journalEl());
+    vue.appendChild(journalEl(3));
     app.textContent = '';
     app.appendChild(vue);
   }
