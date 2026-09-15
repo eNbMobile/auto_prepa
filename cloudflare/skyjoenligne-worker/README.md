@@ -23,8 +23,9 @@ URL une fois déployé : `https://skyjoenligne.controle-stocks.workers.dev`
    la retourner.
 5. Trois cartes identiques visibles dans une colonne : la colonne est éliminée.
 6. Dès qu'un joueur a retourné ses douze cartes, les autres jouent un dernier
-   tour, puis tout est révélé. Si celui qui a terminé n'a pas le plus petit
-   total à lui seul, son score positif est doublé.
+   tour, puis tout est révélé : l'écran de résultats montre les grilles
+   complètes de chacun avant le tableau des points. Si celui qui a terminé n'a
+   pas le plus petit total à lui seul, son score positif est doublé.
 7. La partie s'arrête quand un joueur atteint la limite (100 par défaut) : le
    plus petit total gagne.
 
