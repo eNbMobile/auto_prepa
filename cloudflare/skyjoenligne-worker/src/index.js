@@ -602,6 +602,7 @@ const CSS = `
   .pile{text-align:center; width:74px;}
   .pile .carte{font-size:1.2rem;}
   .pile .etiquette{font-size:0.7rem; color:var(--muted); margin-top:4px; display:block;}
+  .pile .etiquette.jetee{color:var(--or); font-weight:600;}
 
   .adversaires{display:grid; grid-template-columns:repeat(auto-fit, minmax(128px,1fr)); gap:10px;}
   .adv{background:rgba(255,255,255,0.05); border-radius:12px; padding:8px; border-top:4px solid var(--accent);}
@@ -1032,23 +1033,28 @@ const JS_TABLE = `
     zone.appendChild(pilePioche);
 
     var pileDefausse = el('div', 'pile');
-    var jeterIci = monTour && ETAT.carteEnMain
-      && ETAT.carteEnMain.origine === 'pioche' && aCarteCachee();
+    var piochee = monTour && ETAT.carteEnMain && ETAT.carteEnMain.origine === 'pioche';
+    // Une fois le geste armé, la carte est montrée sur la pile : elle n'est plus en main.
+    var jetee = piochee && MODE === 'defausser';
+    var jeterIci = piochee && !jetee && aCarteCachee();
+
     var clicDefausse = null;
     if (monTour && !ETAT.carteEnMain && ETAT.defausse !== null) {
       clicDefausse = function () { agir('prendreDefausse'); };
     } else if (jeterIci) {
-      // On arme seulement : la carte ne part qu'une fois la case à retourner choisie.
       clicDefausse = function () { MODE = 'defausser'; rendre(); };
     }
+
+    var dessus = jetee ? ETAT.carteEnMain.v : ETAT.defausse;
     pileDefausse.appendChild(carteEl(
-      ETAT.defausse === null ? null : { etat: 'visible', v: ETAT.defausse },
+      dessus === null ? null : { etat: 'visible', v: dessus },
       clicDefausse
     ));
-    pileDefausse.appendChild(el('span', 'etiquette', jeterIci ? 'Jeter ici' : 'Défausse'));
+    pileDefausse.appendChild(el('span', 'etiquette' + (jetee ? ' jetee' : ''),
+      jetee ? 'Jetée ✓' : (jeterIci ? 'Jeter ici' : 'Défausse')));
     zone.appendChild(pileDefausse);
 
-    if (ETAT.carteEnMain) {
+    if (ETAT.carteEnMain && !jetee) {
       var pileMain = el('div', 'pile');
       var carte = ETAT.carteEnMain.v === null
         ? { etat: 'cachee' }
@@ -1063,8 +1069,9 @@ const JS_TABLE = `
 
   function aideJeter() {
     var bloc = el('div', 'aide');
-    bloc.appendChild(el('span', null, 'Tu jettes cette carte : touche une carte encore face cachée. '));
-    var annuler = el('button', 'lien', 'Annuler');
+    bloc.appendChild(el('span', null,
+      'Carte jetée. Touche maintenant une carte encore face cachée pour la retourner. '));
+    var annuler = el('button', 'lien', 'Reprendre la carte');
     annuler.type = 'button';
     annuler.addEventListener('click', function () { MODE = 'echanger'; rendre(); });
     bloc.appendChild(annuler);
@@ -1180,7 +1187,13 @@ const JS_TABLE = `
         ? el('div', 'bandeau', 'En attente des autres joueurs…')
         : el('div', 'bandeau moi', 'Retourne deux cartes');
     } else if (ETAT.tour === ETAT.moi) {
-      bandeau = el('div', 'bandeau moi', ETAT.carteEnMain ? 'Place ou défausse ta carte' : 'À toi de jouer');
+      var texte = 'À toi de jouer';
+      if (ETAT.carteEnMain) {
+        texte = (MODE === 'defausser' && ETAT.carteEnMain.origine === 'pioche')
+          ? 'Retourne une carte face cachée'
+          : 'Place ou défausse ta carte';
+      }
+      bandeau = el('div', 'bandeau moi', texte);
     } else {
       bandeau = el('div', 'bandeau', 'Tour de ' + ETAT.joueurs[ETAT.tour].nom);
     }
