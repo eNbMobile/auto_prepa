@@ -8,9 +8,10 @@ le PDF liste le stock J-1, le stock J et la différence entre les deux, et ne
 contient que les lignes qui diffèrent.
 
 Les deux exports sont cherchés d'abord dans le dépôt lui-même (racine, stocks/
-ou WORK_DIR) : il suffit d'y déposer j1.xlsx et j.xlsx et de lancer le
-workflow. À défaut, ils sont téléchargés depuis le dossier Drive du contrôle de
-stocks, puis depuis les archives.
+ou WORK_DIR). À défaut, ils sont téléchargés depuis Drive : d'abord le dossier
+de dépôt ("GITHUB" par défaut, ou DRIVE_STOCKS_FOLDER_ID), puis le dossier du
+contrôle de stocks, puis n'importe où sur le Drive (fichier le plus récent), et
+enfin — pour j1.xlsx seulement — les archives des stocks du soir.
 
 Usage :
   python3 diff_stocks.py [j1.xlsx [j.xlsx]] [--date JJ/MM/AAAA] [--tous]
@@ -46,6 +47,96 @@ def _emplacements_attendus(nom):
     return ", ".join(os.path.join(d, nom) or nom for d in DOSSIERS_LOCAUX)
 
 
+# Dossier Drive où les exports sont déposés à la main pour ce traitement. Le
+# dossier du contrôle de stocks (config.json) ne reçoit que ses propres
+# exports : les fichiers déposés pour la comparaison le sont dans un dossier
+# dédié, "GITHUB" sauf indication contraire.
+DRIVE_STOCKS_FOLDER_ID   = os.environ.get("DRIVE_STOCKS_FOLDER_ID", "").strip()
+DRIVE_STOCKS_FOLDER_NAME = os.environ.get("DRIVE_STOCKS_FOLDER_NAME", "GITHUB").strip()
+
+
+def _drive_id_dossier(svc, nom):
+    """ID du dossier Drive portant ce nom, ou None."""
+    res = svc.files().list(
+        q=(f"name='{nom}' and mimeType='application/vnd.google-apps.folder' "
+           f"and trashed=false"),
+        fields="files(id)", pageSize=10).execute()
+    files = res.get("files", [])
+    return files[0]["id"] if files else None
+
+
+def _drive_fichier_recent(svc, nom, parent_id=None):
+    """(file_id, nom du dossier parent) du fichier le plus récemment modifié
+    portant ce nom, dans parent_id si fourni, sinon sur tout le Drive."""
+    q = f"name='{nom}' and trashed=false"
+    if parent_id:
+        q += f" and '{parent_id}' in parents"
+    res = svc.files().list(q=q, fields="files(id,parents)",
+                           orderBy="modifiedTime desc", pageSize=10).execute()
+    files = res.get("files", [])
+    if not files:
+        return None, None
+    parents = files[0].get("parents") or []
+    dossier = ""
+    if parents:
+        try:
+            dossier = svc.files().get(fileId=parents[0], fields="name").execute().get("name", "")
+        except Exception:
+            pass
+    return files[0]["id"], dossier
+
+
+def telecharger_depuis_drive(nom, dest):
+    """Télécharge un export depuis Drive dans dest. Retourne dest ou None.
+
+    Ordre de recherche : dossier de dépôt (DRIVE_STOCKS_FOLDER_ID, sinon le
+    dossier nommé DRIVE_STOCKS_FOLDER_NAME), dossier du contrôle de stocks,
+    puis tout le Drive — le fichier le plus récemment modifié l'emporte. Le
+    dossier d'où vient le fichier est affiché.
+    """
+    try:
+        import io as _io
+        from googleapiclient.http import MediaIoBaseDownload
+        svc = cs._get_drive_service()
+        if not svc:
+            return None
+
+        parents = []
+        if DRIVE_STOCKS_FOLDER_ID:
+            parents.append(DRIVE_STOCKS_FOLDER_ID)
+        elif DRIVE_STOCKS_FOLDER_NAME:
+            depot = _drive_id_dossier(svc, DRIVE_STOCKS_FOLDER_NAME)
+            if depot:
+                parents.append(depot)
+        if cs.DRIVE_CONTROLE_FOLDER_ID:
+            parents.append(cs.DRIVE_CONTROLE_FOLDER_ID)
+
+        file_id, dossier = None, None
+        for parent_id in parents:
+            file_id, dossier = _drive_fichier_recent(svc, nom, parent_id)
+            if file_id:
+                break
+        if not file_id:
+            # Dernier recours : n'importe où sur le Drive, le plus récent.
+            file_id, dossier = _drive_fichier_recent(svc, nom)
+        if not file_id:
+            return None
+
+        buf = _io.BytesIO()
+        dl  = MediaIoBaseDownload(buf, svc.files().get_media(fileId=file_id))
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        with open(dest, "wb") as f:
+            f.write(buf.getvalue())
+        print(f"  → {nom} téléchargé depuis le dossier Drive "
+              f"{dossier or '(inconnu)'} ({os.path.getsize(dest):,} octets)")
+        return dest
+    except Exception as e:
+        print(f"  Téléchargement de {nom} depuis Drive échoué : {e}")
+        return None
+
+
 def resoudre_fichiers(fichier_j1, fichier_j, date_j1):
     """Localise les deux exports et retourne (chemin_j1, chemin_j).
 
@@ -57,13 +148,13 @@ def resoudre_fichiers(fichier_j1, fichier_j, date_j1):
     if chemin_j:
         print(f"Stock J   trouvé dans le dépôt : {chemin_j}")
     else:
-        print("j.xlsx absent du dépôt — téléchargement depuis Drive contrôle …")
-        if cs.telecharger_fichier_controle("j.xlsx", "j.xlsx"):
+        print("j.xlsx absent du dépôt — recherche sur Drive …")
+        if telecharger_depuis_drive("j.xlsx", "j.xlsx"):
             chemin_j = "j.xlsx"
         else:
             print("ERREUR : j.xlsx introuvable — stock J indisponible.\n"
                   f"  Déposez-le dans le dépôt ({_emplacements_attendus('j.xlsx')}) "
-                  "ou dans le dossier Drive du contrôle de stocks.")
+                  f"ou dans le dossier Drive {DRIVE_STOCKS_FOLDER_NAME}.")
             sys.exit(1)
 
     chemin_j1 = chercher_local("j1.xlsx", fichier_j1)
@@ -71,8 +162,8 @@ def resoudre_fichiers(fichier_j1, fichier_j, date_j1):
         print(f"Stock J-1 trouvé dans le dépôt : {chemin_j1}")
         return chemin_j1, chemin_j
 
-    print("j1.xlsx absent du dépôt — téléchargement depuis Drive contrôle …")
-    if cs.telecharger_fichier_controle("j1.xlsx", "j1.xlsx"):
+    print("j1.xlsx absent du dépôt — recherche sur Drive …")
+    if telecharger_depuis_drive("j1.xlsx", "j1.xlsx"):
         return "j1.xlsx", chemin_j
     # Repli : stocks du soir de J-1 archivés ("_j" pour les archives antérieures
     # au découpage matin/soir), comme dans download_stocks.py.
@@ -81,10 +172,10 @@ def resoudre_fichiers(fichier_j1, fichier_j, date_j1):
         if cs.telecharger_fichier_archive("stocks", nom, "j1.xlsx",
                                           root_id=cs.DRIVE_CONFIG_FOLDER_ID):
             return "j1.xlsx", chemin_j
-    print("ERREUR : j1.xlsx introuvable (dépôt, Drive contrôle et archives) — "
+    print("ERREUR : j1.xlsx introuvable (dépôt, Drive et archives) — "
           "stock de départ indisponible.\n"
           f"  Déposez-le dans le dépôt ({_emplacements_attendus('j1.xlsx')}) "
-          "ou dans le dossier Drive du contrôle de stocks.")
+          f"ou dans le dossier Drive {DRIVE_STOCKS_FOLDER_NAME}.")
     sys.exit(1)
 
 
