@@ -1,9 +1,10 @@
 # Compare les exports de stocks j1.xlsx (J-1) et j.xlsx (J) et envoie par
 # email un PDF des seules lignes qui diffèrent.
 #
-# Les deux fichiers sont lus dans le dépôt : déposez-les à la racine (ou dans
-# stocks/) sur la branche choisie au lancement, puis lancez ce workflow. S'ils
-# n'y sont pas, ils sont cherchés dans le dossier Drive du contrôle de stocks.
+# Les deux fichiers sont cherchés d'abord dans le dépôt (racine ou stocks/ sur
+# la branche choisie au lancement), puis sur Drive : dossier de dépôt "GITHUB"
+# (ou DRIVE_STOCKS_FOLDER_ID), dossier du contrôle de stocks, et enfin
+# n'importe où sur le Drive — le fichier le plus récent l'emporte.
 name: Différence Stocks
 
 on:
@@ -48,6 +49,11 @@ jobs:
         env:
           GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
           DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          # Dossier Drive où j1.xlsx et j.xlsx sont déposés à la main. Par
+          # défaut, le dossier nommé "GITHUB" ; un identifiant de dossier peut
+          # être imposé via le secret DRIVE_STOCKS_FOLDER_ID.
+          DRIVE_STOCKS_FOLDER_ID: ${{ secrets.DRIVE_STOCKS_FOLDER_ID }}
+          DRIVE_STOCKS_FOLDER_NAME: "GITHUB"
           WORK_DIR: "v 4.0.0"
         run: |
           DATE_ARG=""
