@@ -668,6 +668,7 @@ const JS_APP_BASE = `
   var MODE = 'echanger';
   var minuteur = null;
   var enCours = false;
+  var echecs = 0;
 
   var JETON = localStorage.getItem('skyjo:jeton');
   if (!JETON) {
@@ -703,6 +704,19 @@ const JS_APP_BASE = `
     }
   }
 
+  /** « Failed to fetch » et consorts : la requête n'est jamais partie. */
+  function estPanneReseau(err) {
+    var texte = String(err && err.message ? err.message : err);
+    return /failed to fetch|networkerror|load failed|network request failed/i.test(texte);
+  }
+
+  function messageErreur(err, pendantUnCoup) {
+    if (!estPanneReseau(err)) return err.message;
+    return pendantUnCoup
+      ? "Connexion perdue : ton coup n'est pas parti, retouche la carte."
+      : 'Connexion interrompue, reprise dès que le réseau revient…';
+  }
+
   function poster(chemin, corps) {
     if (enCours) return Promise.resolve(null);
     enCours = true;
@@ -724,7 +738,7 @@ const JS_APP_BASE = `
       return data;
     }).catch(function (err) {
       enCours = false;
-      dire(err.message, true);
+      dire(messageErreur(err, true), true);
       return null;
     });
   }
@@ -741,12 +755,15 @@ const JS_APP_BASE = `
         return data;
       });
     }).then(function (data) {
+      if (echecs > 0) { echecs = 0; dire(''); }
       if (data.inchange) return;
       ETAT = data;
       if (ETAT.moi === null) { quitterLocal(); return; }
       rendre();
     }).catch(function (err) {
-      dire(err.message, true);
+      echecs++;
+      // Un téléphone qui se réveille rate souvent une requête : on laisse passer.
+      if (echecs >= 2 || !estPanneReseau(err)) dire(messageErreur(err, false), true);
     });
   }
 
@@ -763,6 +780,13 @@ const JS_APP_BASE = `
     if (minuteur) clearInterval(minuteur);
     minuteur = setInterval(function () { rafraichir(false); }, 1500);
   }
+
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && CODE) rafraichir(true);
+  });
+  window.addEventListener('online', function () {
+    if (CODE) rafraichir(true);
+  });
 
   function quitterLocal() {
     CODE = null;
