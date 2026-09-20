@@ -48,6 +48,11 @@ RAYONS_LETTRE = {
     "G": "Traiteur chaud",
 }
 
+# Ordre des rayons dans le PDF (une page par rayon) : la BVP d'abord, puis la
+# boucherie, le bazar, le traiteur chaud et la poissonnerie. Une lettre absente
+# d'ici passe apres, par ordre alphabetique.
+_ORDRE_RAYONS_PDF = ("C", "B", "A", "G", "D")
+
 # Rayons dont le format PDF affiche systematiquement poids/qte + prix + prix/kg
 # par ligne de commande (comme la Boucherie) : cf. avec_poids/poids_variable
 # dans _elements_rayon.
@@ -320,10 +325,19 @@ def _prix_ligne_poids(qte, poids_unitaire, prix_kg):
     return f"{qte_f * poids_f * prix_kg_f:.2f}".replace('.', ',')
 
 
+def _rang_rayon_pdf(lettre):
+    """Cle de tri des rayons dans le PDF : l'ordre de _ORDRE_RAYONS_PDF, les
+    lettres inconnues a la suite, par ordre alphabetique."""
+    try:
+        return (0, _ORDRE_RAYONS_PDF.index(lettre), lettre)
+    except ValueError:
+        return (1, 0, lettre)
+
+
 def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin):
     """Genere un unique PDF reunissant tous les rayons fournis (produits_pdf :
     {lettre: [produit, ...]}), chaque rayon demarrant en haut d'une nouvelle
-    page. Colonnes : quantite, photo, code-barres EAN13 + gencod, libelle,
+    page, dans l'ordre de _ORDRE_RAYONS_PDF. Colonnes : quantite, photo, code-barres EAN13 + gencod, libelle,
     prix, numero de commande et heure (+ poids avant le prix pour la Boucherie
     et la Poissonnerie, qui ajoute une colonne Qte detaillee par commande). Un
     produit commande par plusieurs clients tient sur une seule ligne (quantite
@@ -350,10 +364,12 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
         return None
 
     small    = ParagraphStyle('small', fontSize=8, leading=10)
-    # Quantite centree dans sa colonne : l'ALIGN du TableStyle ne centre que
-    # les cellules non textuelles (photo, code-barres), un Paragraph occupant
-    # toute la largeur de la cellule, son alignement vient de son style.
-    small_ctr = ParagraphStyle('small_ctr', fontSize=8, leading=10, alignment=1)
+    # Quantite a ramasser : le chiffre le plus lu du tableau, donc en gros et
+    # en gras. Centree par son propre style : l'ALIGN du TableStyle ne centre
+    # que les cellules non textuelles (photo, code-barres), un Paragraph
+    # occupant toute la largeur de sa cellule.
+    qte_s    = ParagraphStyle('qte', fontName='Helvetica-Bold', fontSize=16,
+                              leading=19, alignment=1)
     small_c  = ParagraphStyle('small_c', fontSize=8, leading=8, alignment=1)
     header_s = ParagraphStyle('hdr', fontSize=8, leading=10, textColor=colors.white)
     tiny_c   = ParagraphStyle('tiny_c', fontSize=7, leading=8, alignment=1)
@@ -382,16 +398,20 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
         avec_poids = lettre in _LETTRES_AVEC_POIDS_SYSTEMATIQUE
         par_commande = lettre in _LETTRES_UNE_LIGNE_PAR_COMMANDE
         largeur_code_barres = 95
+        # Colonne Quantite un peu plus large que les autres bons : le chiffre
+        # y est ecrit en 16 (cf. qte_s), une quantite au poids type "12,50"
+        # ne tiendrait pas sur une seule ligne sinon. La largeur reprise vient
+        # du Libelle, la colonne la plus large.
         if par_commande:
-            col_widths = [46, 55, largeur_code_barres, 188, 45, 42, 57, 35]
+            col_widths = [56, 55, largeur_code_barres, 178, 45, 42, 57, 35]
             hdr_txts = ('Quantité', 'Photo', 'Code-barres', 'Libellé', 'Poids', 'Prix',
                         'Commande', 'Heure')
         elif avec_poids:
-            col_widths = [46, 55, largeur_code_barres, 158, 45, 42, 30, 57, 35]
+            col_widths = [56, 55, largeur_code_barres, 148, 45, 42, 30, 57, 35]
             hdr_txts = ('Quantité', 'Photo', 'Code-barres', 'Libellé', 'Poids', 'Prix',
                         'Qté', 'Commande', 'Heure')
         else:
-            col_widths = [46, 55, largeur_code_barres, 232, 42, 57, 35]
+            col_widths = [56, 55, largeur_code_barres, 222, 42, 57, 35]
             hdr_txts = ('Quantité', 'Photo', 'Code-barres', 'Libellé', 'Prix', 'Commande', 'Heure')
         derniere_col = len(hdr_txts) - 1
         # Derniere colonne couverte par la cellule Poids/Prix (+ Qte quand le
@@ -487,7 +507,7 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
                 # produit restent groupees, triees par heure de commande
                 # croissante (cf. _grouper_produits).
                 for commande, qte, heure in g['lignes']:
-                    row = [Paragraph(qte, small_ctr), _photo_cell(photo_bytes),
+                    row = [Paragraph(qte, qte_s), _photo_cell(photo_bytes),
                            _bc_cell(gencod), Paragraph(g['libelle'], small)]
                     poids_txt = f"{_poids_ligne(qte, g['poids'])} Kg" if g['poids'] else ''
                     if g['poids'] and g['prix_kg']:
@@ -504,7 +524,7 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
             # Autres rayons : une seule ligne par produit, quantite totale a
             # collecter tous clients confondus, commandes et heures empilees
             # dans leur case (triees par heure de commande croissante).
-            row = [Paragraph(_qte_totale(g['lignes']), small_ctr), _photo_cell(photo_bytes),
+            row = [Paragraph(_qte_totale(g['lignes']), qte_s), _photo_cell(photo_bytes),
                    _bc_cell(gencod), Paragraph(g['libelle'], small)]
             if avec_poids:
                 # Poissonnerie : le poids, le prix et la quantite restent
@@ -566,7 +586,7 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
                             leftMargin=5 * mm, rightMargin=5 * mm)
 
     elements_total = []
-    for i, lettre in enumerate(sorted(produits_pdf.keys())):
+    for i, lettre in enumerate(sorted(produits_pdf.keys(), key=_rang_rayon_pdf)):
         if i > 0:
             elements_total.append(PageBreak())
         elements_total.extend(_elements_rayon(produits_pdf[lettre], lettre, RAYONS_LETTRE[lettre]))
