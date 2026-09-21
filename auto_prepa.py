@@ -470,12 +470,18 @@ def _traiter_commande_potentiellement_anticipee(drive_svc, gmail_svc, numero, nu
         return
 
     contenu_antici = _telecharger_anticipation_drive(drive_svc, numero)
-    if contenu_antici:
+    commandes_envoyees = _telecharger_commandes_anticipation_envoyee(
+        drive_svc, dossier_mm_aaaa, dossier_jj_mm)
+    if contenu_antici and numero in commandes_envoyees:
         _envoyer_email_anticipation(gmail_svc, numero, contenu_antici)
+    elif contenu_antici:
+        print(f"    Anticipation du {dossier_jj_mm} pas encore envoyee : le bon "
+              f"d'anticipation de la cde {numero} n'est pas renvoye par mail "
+              f"(rien n'a ete sorti en rayon).")
 
     _alerter_si_commande_anticipee_annulee(
         drive_svc, gmail_svc, numero, dossier_jj_mm, dossier_mm_aaaa, numero_remplacement,
-        contenu_ancien=contenu_antici)
+        contenu_ancien=contenu_antici, commandes_envoyees=commandes_envoyees)
 
     _marquer_retrait_anticipation_drive(drive_svc, numero, dossier_mm_aaaa, dossier_jj_mm)
     declencher_retrait_anticipation(numero, dossier_jj_mm, dossier_mm_aaaa)
@@ -1726,7 +1732,7 @@ def _purger_alertes_anticipation_en_attente(drive_svc, gmail_svc, numeros_en_cou
 
 def _alerter_si_commande_anticipee_annulee(drive_svc, gmail_svc, num_ancien, dossier_jj_mm,
                                             dossier_mm_aaaa, num_nouveau=None,
-                                            contenu_ancien=""):
+                                            contenu_ancien="", commandes_envoyees=None):
     """Alerte par email, avec le nom du client (extrait de l'archive BDC, encore
     presente sur Drive a ce stade, avant sa suppression par
     _supprimer_bdc_drive), UNIQUEMENT si la commande annulee (remplacee ou non,
@@ -1740,9 +1746,14 @@ def _alerter_si_commande_anticipee_annulee(drive_svc, gmail_svc, num_ancien, dos
     partie, personne n'a sorti les produits, la commande est simplement
     retiree du brouillon en silence et l'alerte n'aurait aucun objet — c'est
     le mail inutile que recevait l'equipe pour toute commande annulee le jour
-    meme de son arrivee, avant l'envoi de l'anticipation."""
-    commandes_envoyees = _telecharger_commandes_anticipation_envoyee(
-        drive_svc, dossier_mm_aaaa, dossier_jj_mm)
+    meme de son arrivee, avant l'envoi de l'anticipation.
+
+    commandes_envoyees : liste deja lue par l'appelant (qui s'en sert pour la
+    meme decision sur le mail "anticipation renouvelee"), pour ne pas
+    retelecharger le fichier ; None = la lire ici."""
+    if commandes_envoyees is None:
+        commandes_envoyees = _telecharger_commandes_anticipation_envoyee(
+            drive_svc, dossier_mm_aaaa, dossier_jj_mm)
     if num_ancien not in commandes_envoyees:
         return
 
@@ -1781,7 +1792,13 @@ def _alerter_si_commande_anticipee_annulee(drive_svc, gmail_svc, num_ancien, dos
 
 
 def _envoyer_email_anticipation(gmail_svc, numero, contenu):
-    """Envoie le contenu du bon d'anticipation supprime par email."""
+    """Envoie le contenu du bon d'anticipation supprime par email, pour que
+    l'equipe sache quels produits deja sortis en rayon correspondent a la
+    commande annulee/remplacee.
+
+    A n'appeler que si l'anticipation du jour de livraison est DEJA PARTIE par
+    mail (cf. _telecharger_commandes_anticipation_envoyee) : sinon personne n'a
+    rien sorti et ce mail n'a aucun objet."""
     from email.mime.text import MIMEText
     destinataire = EMAIL_ANTICIPATION
     sujet = f"Commande {numero} - anticipation renouvelee"

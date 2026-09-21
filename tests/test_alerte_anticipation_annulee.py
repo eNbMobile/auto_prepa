@@ -62,6 +62,11 @@ class _FakeGmail:
         return _Users()
 
 
+def _sujet(message):
+    brut = base64.urlsafe_b64decode(message["raw"] + "==")
+    return message_from_bytes(brut)["subject"]
+
+
 def _corps(message):
     brut = base64.urlsafe_b64decode(message["raw"] + "==")
     return message_from_bytes(brut).get_payload(decode=True).decode("utf-8")
@@ -389,6 +394,65 @@ class TestPurgeAlertesEnAttente(unittest.TestCase):
 
         self.assertEqual(self.gmail.envoyes, [])
         self.assertEqual(self.corbeille, [])
+
+
+class TestMailAnticipationRenouvelee(unittest.TestCase):
+    """Le mail "Commande N - anticipation renouvelee" renvoie a l'equipe le bon
+    d'anticipation d'une commande annulee/remplacee. Il n'a d'interet que si
+    l'anticipation du jour de livraison est DEJA PARTIE : sinon personne n'a
+    rien sorti en rayon et le mail est inutile (cas d'une commande annulee la
+    veille de sa livraison, avant l'envoi de l'anticipation)."""
+
+    def setUp(self):
+        self._destinataire = ap.EMAIL_ANTICIPATION
+        ap.EMAIL_ANTICIPATION = "prepa@exemple.fr"
+        self.gmail = _FakeGmail()
+        self._patchs = []
+        self.envoyees = {"54764266"}
+        self.anticipation = f"{LESSIVE}\n{JOUET}\n"
+        self.alertes = []
+
+        def _patch(nom, valeur):
+            self._patchs.append((nom, getattr(ap, nom)))
+            setattr(ap, nom, valeur)
+
+        _patch("enregistrer_commande_annulee", lambda d, num: None)
+        _patch("_infos_email_original", lambda g, num: (None, "22_09", "09_2026"))
+        _patch("_telecharger_anticipation_drive", lambda d, num: self.anticipation)
+        _patch("_telecharger_commandes_anticipation_envoyee",
+               lambda d, mm, jj: self.envoyees)
+        _patch("_alerter_si_commande_anticipee_annulee",
+               lambda *a, **k: self.alertes.append((a, k)))
+        _patch("_marquer_retrait_anticipation_drive", lambda d, num, mm, jj: None)
+        _patch("declencher_retrait_anticipation", lambda num, jj, mm: None)
+
+    def tearDown(self):
+        for nom, valeur in reversed(self._patchs):
+            setattr(ap, nom, valeur)
+        ap.EMAIL_ANTICIPATION = self._destinataire
+
+    def _traiter(self):
+        ap._traiter_commande_potentiellement_anticipee(None, self.gmail, "54764266")
+
+    def test_anticipation_deja_envoyee_le_bon_est_renvoye(self):
+        self._traiter()
+
+        self.assertEqual(len(self.gmail.envoyes), 1)
+        self.assertIn("anticipation renouvelee", _sujet(self.gmail.envoyes[0]))
+        self.assertIn("LESSIVE X4", _corps(self.gmail.envoyes[0]))
+
+    def test_anticipation_pas_encore_envoyee_aucun_mail(self):
+        self.envoyees = set()
+        self._traiter()
+
+        self.assertEqual(self.gmail.envoyes, [])
+
+    def test_la_liste_des_commandes_envoyees_est_passee_a_l_alerte(self):
+        # Une seule lecture du fichier commandes_envoyees_JJ_MM.txt pour les
+        # deux decisions (mail renouvele et alerte "anticipee et annulee").
+        self._traiter()
+
+        self.assertEqual(self.alertes[0][1]["commandes_envoyees"], self.envoyees)
 
 
 if __name__ == "__main__":
