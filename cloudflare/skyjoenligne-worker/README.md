@@ -21,6 +21,8 @@ URL une fois déployé : `https://skyjoenligne.controle-stocks.workers.dev`
    grille pour l'y placer, ou **poser la carte sur la défausse** (la pile
    affiche alors « Jeter ici ») puis toucher une carte encore face cachée pour
    la retourner.
+   Le bloc de chaque adversaire affiche ses points déjà retournés puis son
+   total de partie (`4 — total 0`), la même lecture que sa propre ligne.
 5. Trois cartes identiques visibles dans une colonne : la colonne est éliminée.
 6. Dès qu'un joueur a retourné ses douze cartes, les autres jouent un dernier
    tour, puis tout est révélé : l'écran de résultats montre les grilles

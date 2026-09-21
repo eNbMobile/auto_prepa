@@ -617,7 +617,8 @@ const CSS = `
   .adv{background:rgba(255,255,255,0.05); border-radius:12px; padding:7px;
     border-top:4px solid var(--accent); width:100%; max-width:var(--adv-larg);}
   .adv .nom{font-size:0.8rem; font-weight:600; display:flex; justify-content:space-between; gap:6px; margin-bottom:5px;}
-  .adv .nom .pts{color:var(--muted); font-weight:400;}
+  .adv .nom span{min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .adv .nom .pts{color:var(--muted); font-weight:400; flex:0 0 auto;}
   .adv .grille{--c:var(--carte-adv); --g:4px;}
   .adv .carte{border-width:1px;}
   .adv.actif{box-shadow:0 0 0 2px var(--or);}
@@ -1130,7 +1131,8 @@ const JS_TABLE = `
       bloc.style.setProperty('--accent', joueur.couleur);
       var nom = el('div', 'nom');
       nom.appendChild(el('span', null, joueur.nom + (joueur.absent ? ' (parti)' : '')));
-      nom.appendChild(el('span', 'pts', joueur.scoreTotal + ' pts'));
+      // Même lecture que ma propre ligne : les points retournés, puis le total.
+      nom.appendChild(el('span', 'pts', joueur.visible + ' — total ' + joueur.scoreTotal));
       bloc.appendChild(nom);
       bloc.appendChild(grilleEl(joueur, false));
       zone.appendChild(bloc);
