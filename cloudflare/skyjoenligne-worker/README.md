@@ -56,7 +56,10 @@ chacun restent visibles sans défiler (à deux joueurs sur un iPhone X, environ
 +40 % pendant la révélation et +25 % sur la grille adverse en cours de partie).
 La taille retenue est écrite dans `--carte-moi`, `--carte-adv` et
 `--carte-pile` ; le CSS en déduit les polices, les arrondis et la largeur des
-blocs. Si la partie compte trop de joueurs pour l'écran, on garde des cartes
+blocs. Sous 420 px de large ou 720 px de haut, les marges du corps, des cartes
+et des blocs adverses se resserrent pour rapprocher les cartes des bords : le
+calcul lit les marges et gouttières réellement appliquées, il n'a donc rien à
+savoir de ces seuils. Si la partie compte trop de joueurs pour l'écran, on garde des cartes
 lisibles et la page défile, comme avant.
 
 ## Déploiement

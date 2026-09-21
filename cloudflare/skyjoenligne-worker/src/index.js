@@ -636,6 +636,16 @@ const CSS = `
   .lien{background:none; color:var(--or); text-decoration:underline; padding:0 2px; font-size:0.78rem;}
   a{color:var(--or);}
 
+  /* Petits écrans : on rogne les marges pour rapprocher les cartes des bords. */
+  @media (max-width: 420px), (max-height: 720px){
+    body{padding:8px 5px 14px;}
+    .card{padding:7px 5px;}
+    .card > .grille{--g:5px;}
+    .adv{padding:5px 4px;}
+    .adv .grille{--g:3px;}
+    .entete{margin-bottom:6px;}
+  }
+
   /* Écrans courts : moins de bavardage, plus de place pour les cartes. */
   @media (max-height: 640px){
     .bandeau{padding:6px; margin-bottom:8px;}
@@ -1342,18 +1352,38 @@ const JS_TABLE = `
     return 0.5;
   }
 
-  function appliquerTailles(taille, ratio, largeur) {
-    var blocs = app.querySelectorAll('.adv').length || 1;
-    var colonnes = Math.max(1, Math.min(blocs, Math.floor(largeur / 150)));
-    var colonne = (largeur - 8 * (colonnes - 1)) / colonnes;
-    // 26 px : le cadre de l'adversaire (14) plus les trois gouttières (12).
-    var maxAdv = Math.floor((colonne - 26) / 4);
-    var adv = Math.max(ADV_MIN, Math.min(Math.round(taille * ratio), maxAdv));
+  /** Une longueur calculée du CSS, en pixels : marges et gouttières du moment. */
+  function mesure(noeud, propriete) {
+    var valeur = parseFloat(getComputedStyle(noeud)[propriete]);
+    return isNaN(valeur) ? 0 : valeur;
+  }
+
+  /** Ce qu'une grille de quatre cartes peut occuper dans cette largeur. */
+  function carteTenantDans(largeur, gouttiere) {
+    return Math.floor((largeur - 3 * gouttiere) / 4);
+  }
+
+  function appliquerTailles(taille, ratio) {
     var style = document.documentElement.style;
+    var adv = Math.round(taille * ratio);
+    var zone = app.querySelector('.adversaires');
+    if (zone) {
+      var bloc = zone.querySelector('.adv');
+      var grille = zone.querySelector('.grille');
+      var cadre = bloc ? mesure(bloc, 'paddingLeft') + mesure(bloc, 'paddingRight') : 14;
+      var gouttiere = grille ? mesure(grille, 'columnGap') : 4;
+      var nombre = zone.querySelectorAll('.adv').length || 1;
+      var colonnes = Math.max(1, Math.min(nombre, Math.floor(zone.clientWidth / 150)));
+      var entre = mesure(zone, 'columnGap') * (colonnes - 1);
+      var colonne = (zone.clientWidth - entre) / colonnes;
+      adv = Math.min(adv, carteTenantDans(colonne - cadre, gouttiere));
+      adv = Math.max(ADV_MIN, adv);
+      style.setProperty('--adv-larg', (adv * 4 + 3 * gouttiere + cadre) + 'px');
+    }
+    adv = Math.max(ADV_MIN, adv);
     style.setProperty('--carte-moi', taille + 'px');
     style.setProperty('--carte-adv', adv + 'px');
     style.setProperty('--carte-pile', Math.max(46, Math.min(86, Math.round(taille * 0.9))) + 'px');
-    style.setProperty('--adv-larg', (adv * 4 + 26) + 'px');
   }
 
   /** Position, depuis le haut de la page, du bas de la dernière grille. */
@@ -1380,13 +1410,15 @@ const JS_TABLE = `
    * de l'écran, pour que toutes les cartes restent visibles sans défiler.
    */
   function ajusterGrilles() {
-    var largeur = app.clientWidth;
-    if (!largeur || !app.querySelector('.grille')) return;
+    var maGrille = app.querySelector('.card > .grille');
+    if (!app.querySelector('.grille')) return;
     var ratio = ratioAdversaire();
-    // 38 px : le cadre de ma zone (20) plus les trois gouttières (18).
-    var depart = Math.min(CARTE_MAX, Math.floor((largeur - 38) / 4));
+    var depart = maGrille
+      ? Math.min(CARTE_MAX, carteTenantDans(maGrille.clientWidth, mesure(maGrille, 'columnGap')))
+      : CARTE_MAX;
+    if (depart < CARTE_MIN) depart = CARTE_MIN;
     var taille = depart;
-    appliquerTailles(taille, ratio, largeur);
+    appliquerTailles(taille, ratio);
     for (var i = 0; i < 12 && taille > CARTE_MIN; i++) {
       var debord = basDesGrilles() + 6 - window.innerHeight;
       if (debord <= 0) break;
@@ -1395,12 +1427,12 @@ const JS_TABLE = `
         ? Math.floor(taille * (ajustable - debord) / ajustable)
         : taille - 3;
       taille = Math.max(CARTE_MIN, Math.min(suivant, taille - 2));
-      appliquerTailles(taille, ratio, largeur);
+      appliquerTailles(taille, ratio);
     }
-    if (taille <= CARTE_MIN && basDesGrilles() > window.innerHeight + 24) {
+    if (taille <= CARTE_MIN && basDesGrilles() > window.innerHeight) {
       // Trop de joueurs pour la hauteur disponible : rapetisser encore ne
       // ferait pas tenir la table, autant garder des cartes lisibles.
-      appliquerTailles(Math.min(depart, 66), ratio, largeur);
+      appliquerTailles(Math.min(depart, 66), ratio);
     }
   }
 
