@@ -46,6 +46,19 @@ est publique, tout le monde l'a vue).
 Les salles inactives depuis plus de 48 h sont supprimées à la création d'une
 nouvelle salle.
 
+## Taille des cartes
+
+Les cartes ne sont plus dimensionnées en dur : à chaque rendu,
+`ajusterGrilles()` part de la plus grande carte que la largeur du téléphone
+autorise, puis rétrécit tant que la dernière grille dépasse du bas de l'écran.
+Résultat : des cartes aussi grandes que possible, mais les douze cartes de
+chacun restent visibles sans défiler (à deux joueurs sur un iPhone X, environ
++40 % pendant la révélation et +25 % sur la grille adverse en cours de partie).
+La taille retenue est écrite dans `--carte-moi`, `--carte-adv` et
+`--carte-pile` ; le CSS en déduit les polices, les arrondis et la largeur des
+blocs. Si la partie compte trop de joueurs pour l'écran, on garde des cartes
+lisibles et la page défile, comme avant.
+
 ## Déploiement
 
 ```bash

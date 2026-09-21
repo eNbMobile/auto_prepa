@@ -545,7 +545,10 @@ async function supprimerJoueurConnu(env, nom) {
 /* ---------------------------------------------------------------- styles */
 
 const CSS = `
-  :root{ --bg:#14213D; --panel:#FFF8EC; --ink:#14213D; --muted:#9AA5C4; --or:#FFD166; }
+  :root{ --bg:#14213D; --panel:#FFF8EC; --ink:#14213D; --muted:#9AA5C4; --or:#FFD166;
+    /* Tailles de secours : ajusterGrilles() les recalcule dès le premier rendu. */
+    --carte-moi:66px; --carte-adv:46px; --carte-pile:64px; --adv-larg:200px;
+    --c:var(--carte-moi); --g:5px; }
   *{box-sizing:border-box;}
   body{
     margin:0; min-height:100vh; background:var(--bg);
@@ -585,16 +588,19 @@ const CSS = `
   .bandeau.moi{background:var(--or); color:#14213D;}
   .bandeau.fin{background:#2A9D8F; color:#fff;}
 
-  .grille{display:grid; grid-template-columns:repeat(4, 1fr); gap:5px;}
-  .card > .grille{max-width:280px; margin:0 auto;}
+  .grille{display:grid; grid-template-columns:repeat(4, var(--c)); gap:var(--g);
+    justify-content:center;}
+  .card > .grille{--c:var(--carte-moi); --g:6px; margin:0 auto;}
   .carte{
-    aspect-ratio:1; border-radius:8px; display:flex; align-items:center; justify-content:center;
-    font-weight:700; font-size:1.15rem; color:#14213D; border:2px solid rgba(0,0,0,0.15);
-    padding:0; width:100%;
+    aspect-ratio:1; border-radius:calc(var(--c) * 0.13);
+    display:flex; align-items:center; justify-content:center;
+    font-weight:700; font-size:calc(var(--c) * 0.44); color:#14213D;
+    border:2px solid rgba(0,0,0,0.15); padding:0; width:100%;
   }
   .carte.dos{
     background:repeating-linear-gradient(45deg,#1D3461,#1D3461 4px,#26457C 4px,#26457C 8px);
-    color:rgba(255,255,255,0.4); font-size:0.9rem; border-color:rgba(255,255,255,0.25);
+    color:rgba(255,255,255,0.4); font-size:calc(var(--c) * 0.34);
+    border-color:rgba(255,255,255,0.25);
   }
   .carte.vide{background:transparent; border:2px dashed rgba(255,255,255,0.18); cursor:default;}
   .carte:disabled{opacity:1;}
@@ -602,19 +608,18 @@ const CSS = `
   .carte.cliquable:hover{transform:translateY(-2px);}
 
   .table{display:flex; gap:12px; justify-content:center; align-items:flex-start; margin-bottom:10px;}
-  .pile{text-align:center; width:64px;}
-  .pile .carte{font-size:1.1rem;}
+  .pile{text-align:center; --c:var(--carte-pile); width:var(--c);}
   .pile .etiquette{font-size:0.7rem; color:var(--muted); margin-top:4px; display:block;}
   .pile .etiquette.jetee{color:var(--or); font-weight:600;}
 
   .adversaires{display:grid; gap:8px; justify-items:center;
     grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));}
   .adv{background:rgba(255,255,255,0.05); border-radius:12px; padding:7px;
-    border-top:4px solid var(--accent); width:100%; max-width:190px;}
+    border-top:4px solid var(--accent); width:100%; max-width:var(--adv-larg);}
   .adv .nom{font-size:0.8rem; font-weight:600; display:flex; justify-content:space-between; gap:6px; margin-bottom:5px;}
   .adv .nom .pts{color:var(--muted); font-weight:400;}
-  .adv .grille{gap:3px;}
-  .adv .carte{font-size:0.72rem; border-width:1px; border-radius:5px;}
+  .adv .grille{--c:var(--carte-adv); --g:4px;}
+  .adv .carte{border-width:1px;}
   .adv.actif{box-shadow:0 0 0 2px var(--or);}
 
   table{width:100%; border-collapse:collapse; font-size:0.88rem;}
@@ -631,11 +636,8 @@ const CSS = `
   .lien{background:none; color:var(--or); text-decoration:underline; padding:0 2px; font-size:0.78rem;}
   a{color:var(--or);}
 
-  /* Écrans courts : on resserre encore pour garder l'adversaire sous les yeux. */
+  /* Écrans courts : moins de bavardage, plus de place pour les cartes. */
   @media (max-height: 640px){
-    .card > .grille{max-width:236px;}
-    .pile{width:56px;}
-    .adv{max-width:170px;}
     .bandeau{padding:6px; margin-bottom:8px;}
     .journal div:not(:last-child){display:none;}
   }
@@ -1324,12 +1326,94 @@ const JS_TABLE = `
     app.appendChild(vue);
   }
 
+  /* ------------------------------------------------- taille des grilles */
+
+  // Plancher plus bas côté adversaire : sa grille est informative, la mienne
+  // se touche, donc c'est elle qui garde la place quand l'écran est court.
+  var CARTE_MIN = 38, CARTE_MAX = 104, ADV_MIN = 26;
+
+  /** Part de la taille de ma carte laissée aux grilles adverses. */
+  function ratioAdversaire() {
+    // Fin de manche : toutes les grilles sont affichées au même format.
+    if (!app.querySelector('.card > .grille')) return 1;
+    var nb = ETAT && ETAT.joueurs ? ETAT.joueurs.length : 2;
+    if (nb <= 2) return 0.78;
+    if (nb === 3) return 0.62;
+    return 0.5;
+  }
+
+  function appliquerTailles(taille, ratio, largeur) {
+    var blocs = app.querySelectorAll('.adv').length || 1;
+    var colonnes = Math.max(1, Math.min(blocs, Math.floor(largeur / 150)));
+    var colonne = (largeur - 8 * (colonnes - 1)) / colonnes;
+    // 26 px : le cadre de l'adversaire (14) plus les trois gouttières (12).
+    var maxAdv = Math.floor((colonne - 26) / 4);
+    var adv = Math.max(ADV_MIN, Math.min(Math.round(taille * ratio), maxAdv));
+    var style = document.documentElement.style;
+    style.setProperty('--carte-moi', taille + 'px');
+    style.setProperty('--carte-adv', adv + 'px');
+    style.setProperty('--carte-pile', Math.max(46, Math.min(86, Math.round(taille * 0.9))) + 'px');
+    style.setProperty('--adv-larg', (adv * 4 + 26) + 'px');
+  }
+
+  /** Position, depuis le haut de la page, du bas de la dernière grille. */
+  function basDesGrilles() {
+    var grilles = app.querySelectorAll('.grille');
+    var bas = 0;
+    for (var i = 0; i < grilles.length; i++) {
+      bas = Math.max(bas, grilles[i].getBoundingClientRect().bottom + window.pageYOffset);
+    }
+    return bas;
+  }
+
+  /** Hauteur des blocs qui rétrécissent avec les cartes : grilles et piles. */
+  function hauteurAjustable() {
+    var noeuds = app.querySelectorAll('.grille, .table');
+    var total = 0;
+    for (var i = 0; i < noeuds.length; i++) total += noeuds[i].offsetHeight;
+    return total;
+  }
+
+  /**
+   * Des cartes aussi grandes que la place le permet : on part du maximum que
+   * la largeur autorise, puis on rétrécit tant qu'une grille dépasse du bas
+   * de l'écran, pour que toutes les cartes restent visibles sans défiler.
+   */
+  function ajusterGrilles() {
+    var largeur = app.clientWidth;
+    if (!largeur || !app.querySelector('.grille')) return;
+    var ratio = ratioAdversaire();
+    // 38 px : le cadre de ma zone (20) plus les trois gouttières (18).
+    var depart = Math.min(CARTE_MAX, Math.floor((largeur - 38) / 4));
+    var taille = depart;
+    appliquerTailles(taille, ratio, largeur);
+    for (var i = 0; i < 12 && taille > CARTE_MIN; i++) {
+      var debord = basDesGrilles() + 6 - window.innerHeight;
+      if (debord <= 0) break;
+      var ajustable = hauteurAjustable();
+      var suivant = ajustable > 0
+        ? Math.floor(taille * (ajustable - debord) / ajustable)
+        : taille - 3;
+      taille = Math.max(CARTE_MIN, Math.min(suivant, taille - 2));
+      appliquerTailles(taille, ratio, largeur);
+    }
+    if (taille <= CARTE_MIN && basDesGrilles() > window.innerHeight + 24) {
+      // Trop de joueurs pour la hauteur disponible : rapetisser encore ne
+      // ferait pas tenir la table, autant garder des cartes lisibles.
+      appliquerTailles(Math.min(depart, 66), ratio, largeur);
+    }
+  }
+
   function rendre() {
     if (!ETAT || !CODE) { ecranAccueil(); return; }
     if (ETAT.phase === 'attente') { ecranSalle(); return; }
-    if (ETAT.phase === 'fin_manche' || ETAT.phase === 'fin_partie') { ecranScores(); return; }
+    if (ETAT.phase === 'fin_manche' || ETAT.phase === 'fin_partie') { ecranScores(); ajusterGrilles(); return; }
     ecranJeu();
+    ajusterGrilles();
   }
+
+  // La barre du navigateur qui se replie ou l'écran qui pivote rend de la place.
+  window.addEventListener('resize', function () { if (ETAT) ajusterGrilles(); });
 
   /* ------------------------------------------------------------ démarrage */
 
