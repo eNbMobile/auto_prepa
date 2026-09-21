@@ -31,6 +31,13 @@ URL une fois déployé : `https://skyjoenligne.controle-stocks.workers.dev`
 7. La partie s'arrête quand un joueur atteint la limite (100 par défaut) : le
    plus petit total gagne.
 
+On peut partir à tout moment : le bouton « Quitter la partie » est en bas de
+l'écran de jeu. Le partant est marqué « (parti) », son tour est passé
+automatiquement et, s'il s'en va pendant la révélation, il ne retient plus le
+lancement de la manche. Il garde sa place et ses cartes s'il revient avec le
+code de la salle ; quand il ne reste plus personne à qui donner la main, la
+manche est comptée.
+
 ## Pourquoi D1 et pas le KV
 
 Le KV est en cohérence différée : une lecture juste après une écriture peut

@@ -178,6 +178,7 @@ function choisirPremierJoueur(salle) {
   let meilleureCarte = -Infinity;
 
   salle.joueurs.forEach((joueur, index) => {
+    if (joueur.absent) return;
     const visibles = joueur.grille.filter((c) => c.visible).map((c) => c.v);
     const somme = visibles.reduce((s, v) => s + v, 0);
     const plusHaute = Math.max(...visibles);
@@ -187,6 +188,7 @@ function choisirPremierJoueur(salle) {
       meilleureCarte = plusHaute;
     }
   });
+  if (meilleureSomme === -Infinity) meilleureSomme = 0;
 
   salle.tour = meilleur;
   salle.phase = 'jeu';
@@ -235,12 +237,24 @@ function finDeTour(salle) {
     noter(salle, joueur.nom + ' a retourné toutes ses cartes : dernier tour !');
   }
 
-  const suivant = (salle.tour + 1) % salle.joueurs.length;
-  if (salle.declencheur !== null && suivant === salle.declencheur) {
+  const suivant = prochainActif(salle);
+  if (suivant === null) {
     terminerManche(salle);
     return;
   }
   salle.tour = suivant;
+}
+
+/** Le prochain joueur encore là, ou null quand la manche doit s'arrêter. */
+function prochainActif(salle) {
+  const nombre = salle.joueurs.length;
+  let index = salle.tour;
+  for (let pas = 0; pas < nombre; pas++) {
+    index = (index + 1) % nombre;
+    if (salle.declencheur !== null && index === salle.declencheur) return null;
+    if (!salle.joueurs[index].absent) return index;
+  }
+  return null;
 }
 
 function terminerManche(salle) {
@@ -346,9 +360,22 @@ function appliquerAction(salle, jeton, action, index) {
     if (salle.phase === 'attente') {
       salle.joueurs.splice(moi, 1);
       noter(salle, joueur.nom + ' a quitté la salle.');
-    } else {
-      joueur.absent = true;
-      noter(salle, joueur.nom + ' s\'est déconnecté.');
+      return;
+    }
+
+    joueur.absent = true;
+    noter(salle, joueur.nom + ' a quitté la partie.');
+
+    // Sans ça, les autres resteraient à attendre le tour de quelqu'un de parti.
+    if (salle.phase === 'revelation') {
+      joueur.pret = true;
+      if (salle.joueurs.every((j) => j.pret)) choisirPremierJoueur(salle);
+    } else if (salle.phase === 'jeu' && salle.tour === moi) {
+      if (salle.carteEnMain) {
+        salle.defausse.push(salle.carteEnMain.v);
+        salle.carteEnMain = null;
+      }
+      finDeTour(salle);
     }
     return;
   }
@@ -594,7 +621,7 @@ const CSS = `
   .carte{
     aspect-ratio:1; border-radius:calc(var(--c) * 0.13);
     display:flex; align-items:center; justify-content:center;
-    font-weight:700; font-size:calc(var(--c) * 0.44); color:#14213D;
+    font-weight:700; font-size:calc(var(--c) * 0.39); color:#14213D;
     border:2px solid rgba(0,0,0,0.15); padding:0; width:100%;
   }
   .carte.dos{
@@ -1197,12 +1224,12 @@ const JS_TABLE = `
     return bloc;
   }
 
-  function boutonQuitter() {
-    var bouton = el('button', 'ghost', 'Quitter la salle');
+  function boutonQuitter(libelle, question) {
+    var bouton = el('button', 'ghost', libelle || 'Quitter la salle');
     bouton.style.marginTop = '12px';
     bouton.style.width = '100%';
     bouton.addEventListener('click', function () {
-      if (!confirm('Quitter la salle ?')) return;
+      if (!confirm(question || 'Quitter la salle ?')) return;
       agir('quitter').then(quitterLocal);
     });
     return bouton;
@@ -1299,6 +1326,8 @@ const JS_TABLE = `
 
     vue.appendChild(adversairesEl());
     vue.appendChild(journalEl(3));
+    vue.appendChild(boutonQuitter('Quitter la partie',
+      'Quitter la partie en cours ? Les autres joueurs continueront sans toi.'));
     app.textContent = '';
     app.appendChild(vue);
   }
