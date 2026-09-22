@@ -15,6 +15,9 @@ Ce module fournit aussi (utilisees par assembler_anticipation.py, qui fait le
 calcul reel a chaque commande, et par retirer_anticipation.py) le parsing de
 bon_anticipation_JJ_MM.txt, le regroupement par lettre d'anticipation, la
 generation du PDF (un rayon par page) et le retrait des commandes annulees.
+
+La generation du PDF (publier_pdf_jour) ajoute au passage a la page BVP les 4
+baguettes tradition du Drive, qui ne viennent d'aucune commande client.
 """
 
 import base64
@@ -64,6 +67,22 @@ _LETTRES_AVEC_POIDS_SYSTEMATIQUE = ("B", "D")
 # Doit rester un sous-ensemble de _LETTRES_AVEC_POIDS_SYSTEMATIQUE (le format
 # de ces lignes suppose la colonne Poids).
 _LETTRES_UNE_LIGNE_PAR_COMMANDE = ("B",)
+
+
+# Baguettes tradition du Drive : 4 pieces ajoutees d'office a la page BVP de
+# chaque anticipation du jour, sans etre liees a une vraie commande client
+# (commande "Drive", heure fixe 7h30 comme le reste de la page). Elles sont
+# injectees a la generation du PDF (cf. _ajouter_baguettes_drive), pas dans
+# bon_anticipation_JJ_MM.txt : le PDF etant regenere a chaque commande
+# assemblee comme a chaque annulation, les stocker dans le brouillon les
+# empilerait a chaque passage.
+_LETTRE_BAGUETTES_DRIVE = "C"
+_GENCOD_BAGUETTE_DRIVE  = "2000000286235"
+_LIBELLE_BAGUETTE_DRIVE = "Baguette tradition française à base de farine LABEL ROUGE, 1 pièce, 250g"
+_PRIX_BAGUETTE_DRIVE    = "1,05"
+_QTE_BAGUETTES_DRIVE    = 4
+_HEURE_BAGUETTES_DRIVE  = "07:30"
+_COMMANDE_BAGUETTES_DRIVE = "Drive"
 
 
 # Format des lignes de bon_anticipation.txt (16 champs separes par ';') :
@@ -913,10 +932,41 @@ def telecharger_texte_dossier(drive_svc, folder_id, filename):
     return _telecharger_texte(drive_svc, files[0]["id"]), files[0]["id"]
 
 
+def _ajouter_baguettes_drive(produits_pdf):
+    """Ajoute les 4 baguettes tradition du Drive a la page BVP du PDF : elles
+    ne viennent d'aucune commande client mais sont a preparer tous les jours
+    avec le reste de l'anticipation. Regroupees par gencod comme n'importe
+    quel produit (cf. _grouper_produits), elles s'additionnent donc a une
+    baguette identique reellement commandee au lieu de faire une ligne a part.
+
+    Ne fait rien si produits_pdf en contient deja (garde-fou : l'appelant
+    reconstruit produits_pdf a chaque generation, mais le PDF est regenere a
+    chaque commande assemblee et a chaque annulation)."""
+    lignes = produits_pdf.get(_LETTRE_BAGUETTES_DRIVE, [])
+    if any(p["commande"] == _COMMANDE_BAGUETTES_DRIVE
+           and p["gencod"] == _GENCOD_BAGUETTE_DRIVE for p in lignes):
+        return
+    produits_pdf.setdefault(_LETTRE_BAGUETTES_DRIVE, []).append({
+        "commande": _COMMANDE_BAGUETTES_DRIVE,
+        "gencod":   _GENCOD_BAGUETTE_DRIVE,
+        "libelle":  _LIBELLE_BAGUETTE_DRIVE,
+        "prix":     _PRIX_BAGUETTE_DRIVE,
+        "prix_kg":  "",
+        "qte":      str(_QTE_BAGUETTES_DRIVE),
+        "poids":    "",
+        "heure":    _HEURE_BAGUETTES_DRIVE,
+        "adresse":  "",
+        "lettre":   _LETTRE_BAGUETTES_DRIVE,
+    })
+    print(f"  Ajout automatique : {_QTE_BAGUETTES_DRIVE} baguettes tradition, "
+          f"commande {_COMMANDE_BAGUETTES_DRIVE}")
+
+
 def publier_pdf_jour(drive_svc, folder_id, contenu_jour, dossier_jj_mm, dossier_mm_aaaa):
     """Regenere anticipation_JJ_MM.pdf a partir du brouillon du jour, ou le met
-    a la corbeille s'il ne reste plus rien a anticiper. Retourne True si un PDF
-    a ete depose."""
+    a la corbeille s'il ne reste plus rien a anticiper. Des qu'un produit est a
+    anticiper, les 4 baguettes tradition du Drive sont ajoutees a la page BVP
+    (cf. _ajouter_baguettes_drive). Retourne True si un PDF a ete depose."""
     nom_pdf = f"anticipation_{dossier_jj_mm}.pdf"
     produits = _parser_lignes_anticipation_jour(contenu_jour or "")
     par_lettre = {}
@@ -933,6 +983,11 @@ def publier_pdf_jour(drive_svc, folder_id, contenu_jour, dossier_jj_mm, dossier_
             drive_svc.files().update(fileId=f["id"], body={"trashed": True}).execute()
             print(f"  {nom_pdf} mis a la corbeille (plus aucun produit anticipe ce jour).")
         return False
+
+    # Apres le court-circuit ci-dessus : les baguettes accompagnent
+    # l'anticipation du jour, elles ne justifient pas a elles seules un PDF
+    # (aucune commande anticipable ce jour => pas de PDF du tout).
+    _ajouter_baguettes_drive(produits_pdf)
 
     jj, mm = dossier_jj_mm.split("_")
     aaaa = dossier_mm_aaaa.split("_")[1]
