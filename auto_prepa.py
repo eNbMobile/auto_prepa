@@ -2004,6 +2004,37 @@ def _envoyer_email_km_manquant(gmail_svc, numero, nom, prenom, date_cde_str):
         print(f"    Envoi email km manquant {numero} echoue : {e}")
         return False
 
+def _envoyer_email_km_recupere(gmail_svc, numero, nom, prenom, km):
+    """Leve l'alerte "km Shopopop non renseigne" envoyee pour une commande
+    dont la distance a finalement ete recuperee par une retentative : la
+    saisie manuelle demandee n'a plus lieu d'etre, et le surlignage orange de
+    la cellule a ete retire. Appelee uniquement par
+    livraison_drive.signaler_km_manquants."""
+    from email.mime.text import MIMEText
+    destinataire = EMAIL_ANTICIPATION
+    if not destinataire:
+        return False
+    libelle_cde = numero or "(n° inconnu)"
+    corps = (
+        f"Bonjour,\n\n"
+        f"Finalement, le nombre de km a bien ete recupere sur Shopopop pour la "
+        f"commande {libelle_cde} ({nom} {prenom}) : {km} km.\n\n"
+        f"Rien a saisir a la main, l'alerte precedente est sans objet : la "
+        f"colonne km de LIVRAISON DRIVE 2026 est renseignee et le surlignage "
+        f"orange a ete retire.\n"
+    )
+    try:
+        msg = MIMEText(corps, "plain", "utf-8")
+        msg["to"] = destinataire
+        msg["subject"] = f"Commande {libelle_cde} - km Shopopop finalement recupere"
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
+        print(f"    Email km finalement recupere envoye pour cde {numero} => {destinataire}")
+        return True
+    except Exception as e:
+        print(f"    Envoi email km recupere {numero} echoue : {e}")
+        return False
+
 def extraire_articles_produits_pdf(texte):
     """Extrait (nb_articles, nb_produits) depuis les premieres lignes du PDF."""
     articles = produits = None
@@ -2625,13 +2656,14 @@ def _main():
     # reutilise plus bas si une nouvelle commande LIVRAISON est aussi
     # rencontree dans ce run (pas de 2e connexion).
     km_manquants = livraison_drive.lister_km_manquants(sheets_svc, LIVRAISON_SPREADSHEET_ID)
+    km_rattrapes = {}
     if livraison_drive.km_manquants_en_attente(
             sheets_svc, LIVRAISON_SPREADSHEET_ID, manquants=km_manquants):
         shopopop_token, shopopop_drive_id = livraison_drive.connecter_shopopop(drive_svc)
         shopopop_connecte = True
         km_manquants = livraison_drive.retenter_km_manquants(
             sheets_svc, LIVRAISON_SPREADSHEET_ID, shopopop_token, shopopop_drive_id,
-            manquants=km_manquants)
+            manquants=km_manquants, rattrapees=km_rattrapes)
 
     # Signalement des commandes inscrites sans km depuis plus de quelques
     # minutes : passe ce delai, Shopopop ne fournira probablement plus la
@@ -2639,12 +2671,17 @@ def _main():
     # premier echec serait premature (une commande tout juste passee n'est
     # souvent pas encore synchronisee cote Shopopop, la retentative ci-dessus
     # la rattrape); la liste utilisee est celle qui reste apres cette
-    # retentative. Aucune connexion Shopopop necessaire ici.
+    # retentative. Aucune connexion Shopopop necessaire ici. Le meme passage
+    # cloture les alertes devenues caduques : distance finalement arrivee
+    # (email de levee) ou saisie a la main (surlignage orange retire).
     livraison_drive.signaler_km_manquants(
         sheets_svc, drive_svc, LIVRAISON_SPREADSHEET_ID,
         lambda numero, nom, prenom, date_str: _envoyer_email_km_manquant(
             gmail_svc, numero, nom, prenom, date_str),
-        manquants=km_manquants)
+        manquants=km_manquants,
+        envoyer_levee=lambda numero, nom, prenom, km: _envoyer_email_km_recupere(
+            gmail_svc, numero, nom, prenom, km),
+        rattrapees=km_rattrapes)
 
     # Garde-fou : le workflow dedie "Livraison Drive - En attente" (declenche
     # a 14h pile) peut etre saute par GitHub Actions en cas de forte charge

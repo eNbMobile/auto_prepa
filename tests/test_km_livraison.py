@@ -80,7 +80,7 @@ class _FakeSpreadsheets:
                 cellule["range"]["sheetId"],
                 cellule["range"]["startRowIndex"] + 1,
                 cellule["range"]["startColumnIndex"],
-                cellule["cell"]["userEnteredFormat"]["backgroundColor"],
+                cellule["cell"]["userEnteredFormat"].get("backgroundColor"),
             ))
         return _Requete()
 
@@ -188,12 +188,15 @@ class _BaseKm(unittest.TestCase):
         _fake_download.drive = drive
         return drive
 
-    def _signaler(self, sheets, drive, envoye=True, manquants=None):
+    def _signaler(self, sheets, drive, envoye=True, manquants=None, levees=None,
+                  rattrapees=None):
         emails = []
         ld.signaler_km_manquants(
             sheets, drive, SPREADSHEET_ID,
             lambda *args: emails.append(args) or envoye,
-            maintenant=MAINTENANT, manquants=manquants)
+            maintenant=MAINTENANT, manquants=manquants,
+            envoyer_levee=(lambda *args: levees.append(args)) if levees is not None else None,
+            rattrapees=rattrapees)
         return emails
 
 
@@ -244,11 +247,16 @@ class TestRetentative(_BaseKm):
     def test_ecrit_le_km_recupere_et_le_retire_des_manquants(self):
         sheets = _FakeSheets(_classeur([["54924251", "15/09", "PAUMIER", "MARILYNE", ""]]))
         ld.shopopop.distance_km = lambda token, drive, cible, nom: 5.43
+        rattrapees = {}
         restants = ld.retenter_km_manquants(
-            sheets, SPREADSHEET_ID, "jeton", "14156", maintenant=MAINTENANT)
+            sheets, SPREADSHEET_ID, "jeton", "14156", maintenant=MAINTENANT,
+            rattrapees=rattrapees)
         self.assertEqual(sheets.spreadsheets().values().updates,
                          [("'SEPTEMBRE'!E2", [[5.43]])])
         self.assertEqual(restants, [], "la ligne rattrapee ne doit plus etre signalable")
+        self.assertEqual(rattrapees,
+                         {"54924251": ("SEPTEMBRE", 2, "PAUMIER", "MARILYNE", 5.43)},
+                         "l'alerte de cette commande pourra etre levee par email")
 
 
 class TestSignalement(_BaseKm):
@@ -275,7 +283,8 @@ class TestSignalement(_BaseKm):
         self.assertEqual(self._signaler(self._sheets(), drive), [])
 
     def test_pas_de_marquage_si_l_email_echoue(self):
-        sheets, drive = self._sheets(), self._drive(_etat(minutes=10))
+        sheets, drive = self._sheets(), self._drive(
+            _etat(minutes=ld._DELAI_SIGNALEMENT_KM_MINUTES))
         self.assertEqual(len(self._signaler(sheets, drive, envoye=False)), 1)
         self.assertEqual(sheets.spreadsheets().formats, [])
         self.assertFalse(drive.attente()["54924251"]["signale"],
@@ -301,9 +310,63 @@ class TestSignalement(_BaseKm):
 
     def test_signale_aussi_l_onglet_en_attente(self):
         sheets = _FakeSheets(_classeur([], [["DUPONT", "JEAN", "20/09", "54924252", ""]]))
-        drive = self._drive(_etat(numero="54924252", minutes=10))
+        drive = self._drive(
+            _etat(numero="54924252", minutes=ld._DELAI_SIGNALEMENT_KM_MINUTES))
         self.assertEqual(self._signaler(sheets, drive),
                          [("54924252", "DUPONT", "JEAN", "20/09/2026")])
+
+    def test_levee_quand_le_km_arrive_apres_le_signalement(self):
+        """Le km recupere par une retentative posterieure a l'email : la
+        cellule perd son orange et un second email annule la demande de
+        saisie manuelle."""
+        sheets = _FakeSheets(_classeur([["54924251", "15/09", "PAUMIER", "MARILYNE", "5,43"]]))
+        drive = self._drive(_etat(minutes=30, signale=True))
+        levees = []
+        self.assertEqual(
+            self._signaler(sheets, drive, levees=levees, rattrapees={"54924251": ("SEPTEMBRE", 2, "PAUMIER", "MARILYNE", "5,43")}), [])
+        self.assertEqual(levees, [("54924251", "PAUMIER", "MARILYNE", "5,43")])
+        self.assertEqual(sheets.spreadsheets().formats, [(0, 2, 4, None)],
+                         "le surlignage orange est retire")
+        self.assertEqual(drive.attente(), {})
+
+    def test_levee_dans_l_onglet_en_attente(self):
+        sheets = _FakeSheets(_classeur([], [["DUPONT", "JEAN", "20/09", "54924252", "4,64"]]))
+        drive = self._drive(_etat(numero="54924252", minutes=30, signale=True))
+        levees = []
+        self._signaler(sheets, drive, levees=levees, rattrapees={"54924252": (ld.ONGLET_EN_ATTENTE, 2, "DUPONT", "JEAN", "4,64")})
+        self.assertEqual(levees, [("54924252", "DUPONT", "JEAN", "4,64")])
+        self.assertEqual(sheets.spreadsheets().formats, [(1, 2, 4, None)])
+
+    def test_km_saisi_a_la_main_retire_l_orange_sans_email(self):
+        """Distance absente de `rattrapees` : elle vient d'etre saisie a la
+        main, inutile de l'annoncer a celui qui l'a saisie — mais le
+        surlignage, que l'email demandait d'effacer, part quand meme."""
+        sheets = _FakeSheets(_classeur([["54924251", "15/09", "PAUMIER", "MARILYNE", "4,7"]]))
+        drive = self._drive(_etat(minutes=30, signale=True))
+        levees = []
+        self._signaler(sheets, drive, levees=levees)
+        self.assertEqual(levees, [])
+        self.assertEqual(sheets.spreadsheets().formats, [(0, 2, 4, None)])
+        self.assertEqual(drive.attente(), {})
+
+    def test_pas_de_levee_si_la_commande_a_ete_annulee(self):
+        """Ligne disparue du classeur : il n'y a ni cellule a nettoyer ni
+        distance a annoncer."""
+        drive = self._drive(_etat(minutes=30, signale=True))
+        levees = []
+        self._signaler(_FakeSheets(_classeur([])), drive, levees=levees)
+        self.assertEqual(levees, [])
+        self.assertEqual(drive.attente(), {})
+
+    def test_pas_de_levee_pour_une_commande_jamais_signalee(self):
+        """Le km arrive avant l'email : rien n'a ete demande, donc rien a
+        lever (et aucune relecture du classeur)."""
+        sheets = _FakeSheets(_classeur([["54924251", "15/09", "PAUMIER", "MARILYNE", "5,43"]]))
+        drive = self._drive(_etat(minutes=2))
+        levees = []
+        self._signaler(sheets, drive, levees=levees, rattrapees={"54924251": ("SEPTEMBRE", 2, "PAUMIER", "MARILYNE", "5,43")})
+        self.assertEqual(levees, [])
+        self.assertEqual(sheets.spreadsheets().formats, [])
 
     def test_sans_fichier_d_attente_aucun_email(self):
         """Une ligne sans km jamais mise en attente (saisie a la main dans le
@@ -318,16 +381,22 @@ class TestCycleComplet(_BaseKm):
 
     def _run(self, sheets, drive, minutes, km_trouve=None):
         """Simule une execution d'auto_prepa.py `minutes` apres l'inscription :
-        retentative Shopopop puis signalement. Retourne les emails envoyes."""
+        retentative Shopopop puis signalement. Retourne les emails envoyes ;
+        les levees d'alerte sont empilees dans self.levees."""
         maintenant = MAINTENANT + timedelta(minutes=minutes)
         ld.shopopop.distance_km = lambda *a, **k: km_trouve
+        rattrapees = {}
         manquants = ld.retenter_km_manquants(
-            sheets, SPREADSHEET_ID, "jeton", "14156", maintenant=maintenant)
+            sheets, SPREADSHEET_ID, "jeton", "14156", maintenant=maintenant,
+            rattrapees=rattrapees)
         emails = []
+        self.levees = getattr(self, "levees", [])
         ld.signaler_km_manquants(
             sheets, drive, SPREADSHEET_ID,
             lambda *args: emails.append(args) or True,
-            maintenant=maintenant, manquants=manquants)
+            maintenant=maintenant, manquants=manquants,
+            envoyer_levee=lambda *args: self.levees.append(args),
+            rattrapees=rattrapees)
         return emails
 
     def test_email_au_bout_du_delai_si_shopopop_ne_repond_pas(self):
@@ -345,6 +414,32 @@ class TestCycleComplet(_BaseKm):
                          "commande signalee : plus de reveil du workflow")
         self.assertEqual(self._run(sheets, drive, minutes=20), [],
                          "pas de rappel a chaque execution suivante")
+
+    def test_alerte_levee_si_le_km_arrive_apres_l_email(self):
+        """Cas de la commande 55282166 : Shopopop a mis plus longtemps que le
+        delai a synchroniser la livraison. L'email de saisie manuelle est
+        parti, puis la distance est arrivee d'elle-meme — une levee doit
+        suivre, sinon la saisie reste demandee pour rien."""
+        sheets = _FakeSheets(_classeur([], [["BONVALLET", "GINETTE", "16/09",
+                                             "55282166", ""]]))
+        drive = self._drive()
+        ld.noter_km_en_attente(drive, "55282166", maintenant=MAINTENANT)
+
+        self.assertEqual(
+            self._run(sheets, drive, minutes=ld._DELAI_SIGNALEMENT_KM_MINUTES),
+            [("55282166", "BONVALLET", "GINETTE", "16/09/2026")])
+        self.assertEqual(self.levees, [])
+
+        # Run suivant : Shopopop finit par rendre la distance, que la
+        # retentative ecrit dans la colonne km.
+        self.assertEqual(
+            self._run(sheets, drive, minutes=ld._DELAI_SIGNALEMENT_KM_MINUTES + 5,
+                      km_trouve=4.64),
+            [], "pas de nouvelle demande de saisie")
+        self.assertEqual(self.levees, [("55282166", "BONVALLET", "GINETTE", 4.64)])
+        self.assertEqual(sheets.spreadsheets().formats[-1], (1, 2, 4, None),
+                         "la cellule km n'est plus surlignee")
+        self.assertEqual(drive.attente(), {})
 
     def test_pas_d_email_si_shopopop_repond_avant_le_delai(self):
         sheets = _FakeSheets(_classeur([["54924251", "15/09", "PAUMIER", "MARILYNE", ""]]))
