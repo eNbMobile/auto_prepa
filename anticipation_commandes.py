@@ -17,7 +17,10 @@ bon_anticipation_JJ_MM.txt, le regroupement par lettre d'anticipation, la
 generation du PDF (un rayon par page) et le retrait des commandes annulees.
 
 La generation du PDF (publier_pdf_jour) ajoute au passage a la page BVP les 4
-baguettes tradition du Drive, qui ne viennent d'aucune commande client.
+baguettes tradition du Drive, qui ne viennent d'aucune commande client — mais
+seulement quand le PDF est genere le jour meme de son anticipation : une
+anticipation lancee la veille pour le lendemain ne les contient pas, sans quoi
+elles seraient preparees une seconde fois avec l'anticipation du lendemain.
 """
 
 import base64
@@ -71,7 +74,10 @@ _LETTRES_UNE_LIGNE_PAR_COMMANDE = ("B",)
 
 # Baguettes tradition du Drive : 4 pieces ajoutees d'office a la page BVP de
 # chaque anticipation du jour, sans etre liees a une vraie commande client
-# (commande "Drive", heure fixe 7h30 comme le reste de la page). Elles sont
+# (commande "Drive", heure fixe 7h30 comme le reste de la page). Uniquement
+# l'anticipation du jour lancee ce meme jour (cf. _est_anticipation_du_jour) :
+# un envoi anticipe la veille (ex. a 12h55 pour les commandes du lendemain)
+# ne les porte pas, elles sont pour l'anticipation du lendemain. Elles sont
 # injectees a la generation du PDF (cf. _ajouter_baguettes_drive), pas dans
 # bon_anticipation_JJ_MM.txt : le PDF etant regenere a chaque commande
 # assemblee comme a chaque annulation, les stocker dans le brouillon les
@@ -932,6 +938,25 @@ def telecharger_texte_dossier(drive_svc, folder_id, filename):
     return _telecharger_texte(drive_svc, files[0]["id"]), files[0]["id"]
 
 
+def _aujourdhui():
+    """Date du jour a Paris (isolee pour les tests)."""
+    return datetime.now(_TZ).date()
+
+
+def _est_anticipation_du_jour(dossier_jj_mm, dossier_mm_aaaa):
+    """True si le dossier JJ_MM (mois MM_AAAA) est celui d'aujourd'hui : seule
+    l'anticipation du jour, generee ou envoyee ce meme jour, porte les
+    baguettes du Drive. Celle du lendemain, preparee ou lancee en amont la
+    veille, ne les porte pas (elles s'y retrouveraient une seconde fois le
+    lendemain)."""
+    try:
+        jj, mm = (int(x) for x in dossier_jj_mm.split("_"))
+        aaaa = int(dossier_mm_aaaa.split("_")[1])
+        return datetime(aaaa, mm, jj).date() == _aujourdhui()
+    except (ValueError, IndexError):
+        return False
+
+
 def _ajouter_baguettes_drive(produits_pdf):
     """Ajoute les 4 baguettes tradition du Drive a la page BVP du PDF : elles
     ne viennent d'aucune commande client mais sont a preparer tous les jours
@@ -966,7 +991,9 @@ def publier_pdf_jour(drive_svc, folder_id, contenu_jour, dossier_jj_mm, dossier_
     """Regenere anticipation_JJ_MM.pdf a partir du brouillon du jour, ou le met
     a la corbeille s'il ne reste plus rien a anticiper. Des qu'un produit est a
     anticiper, les 4 baguettes tradition du Drive sont ajoutees a la page BVP
-    (cf. _ajouter_baguettes_drive). Retourne True si un PDF a ete depose."""
+    (cf. _ajouter_baguettes_drive) — seulement si le PDF est genere le jour
+    meme de son anticipation (cf. _est_anticipation_du_jour). Retourne True si
+    un PDF a ete depose."""
     nom_pdf = f"anticipation_{dossier_jj_mm}.pdf"
     produits = _parser_lignes_anticipation_jour(contenu_jour or "")
     par_lettre = {}
@@ -986,8 +1013,11 @@ def publier_pdf_jour(drive_svc, folder_id, contenu_jour, dossier_jj_mm, dossier_
 
     # Apres le court-circuit ci-dessus : les baguettes accompagnent
     # l'anticipation du jour, elles ne justifient pas a elles seules un PDF
-    # (aucune commande anticipable ce jour => pas de PDF du tout).
-    _ajouter_baguettes_drive(produits_pdf)
+    # (aucune commande anticipable ce jour => pas de PDF du tout). Et
+    # uniquement le jour meme : un PDF du lendemain genere (ou envoye) la
+    # veille ne les porte pas, sinon elles partiraient deux fois.
+    if _est_anticipation_du_jour(dossier_jj_mm, dossier_mm_aaaa):
+        _ajouter_baguettes_drive(produits_pdf)
 
     jj, mm = dossier_jj_mm.split("_")
     aaaa = dossier_mm_aaaa.split("_")[1]
@@ -1189,12 +1219,21 @@ def main():
     # (ancien + nouveau numero en double apres une modification de commande).
     annulees_rattrapees = []
     if folder_id:
-        _, _, rattrape = appliquer_annulations_jour(
+        _, contenu_jour, rattrape = appliquer_annulations_jour(
             drive_svc, folder_id, dossier_mm_aaaa, dossier_jj_mm,
             retires_out=annulees_rattrapees)
         if rattrape:
             print(f"  ATTENTION : commande(s) annulee(s) encore presente(s) dans le "
                   f"brouillon, retiree(s) avant envoi : {', '.join(annulees_rattrapees)}")
+        elif contenu_jour.strip() and _est_anticipation_du_jour(dossier_jj_mm, dossier_mm_aaaa):
+            # Anticipation du jour envoyee le jour meme : le PDF a pu etre
+            # genere la veille (commandes toutes arrivees avant minuit), donc
+            # sans les baguettes du Drive. On le regenere pour les y mettre.
+            try:
+                publier_pdf_jour(drive_svc, folder_id, contenu_jour,
+                                 dossier_jj_mm, dossier_mm_aaaa)
+            except Exception as e:
+                print(f"  Regeneration du PDF avant envoi echouee (envoi du PDF existant) : {e}")
 
     nom_pdf = f"anticipation_{dossier_jj_mm}.pdf"
     chemin_pdf = None

@@ -2,8 +2,9 @@
 """
 Tests des 4 baguettes tradition du Drive ajoutees d'office a la page BVP de
 l'anticipation du jour : presence, non-empilement quand le PDF est regenere
-(a chaque commande assemblee comme a chaque annulation) et fusion avec une
-baguette identique reellement commandee par un client.
+(a chaque commande assemblee comme a chaque annulation), fusion avec une
+baguette identique reellement commandee par un client, et absence dans
+l'anticipation du lendemain generee ou lancee en amont la veille.
 
 Lancement : python3 -m unittest discover -s tests
 """
@@ -11,6 +12,7 @@ Lancement : python3 -m unittest discover -s tests
 import os
 import sys
 import unittest
+from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -83,6 +85,9 @@ class TestBaguettesDrivePDF(unittest.TestCase):
         _patch(ac, "_generer_pdf_rayons",
                lambda produits_pdf, jj, date, ordre: self.generations.append(produits_pdf))
         _patch(ap, "deposer_fichier_jour_anticipation", lambda *a, **k: None)
+        # Par defaut, le PDF du 10/09 est genere le 10/09 lui-meme.
+        self.aujourdhui = date(2026, 9, 10)
+        _patch(ac, "_aujourdhui", lambda: self.aujourdhui)
 
     def tearDown(self):
         for module, nom, valeur in reversed(self._patchs):
@@ -135,6 +140,47 @@ class TestBaguettesDrivePDF(unittest.TestCase):
         self.assertEqual(len(groupe), 1)
         self.assertEqual(ac._qte_totale(groupe[0]["lignes"]),
                          str(ac._QTE_BAGUETTES_DRIVE + 2))
+
+    def test_pas_de_baguettes_dans_lanticipation_lancee_la_veille(self):
+        # Le 09/09 a 12h55, l'anticipation du 10/09 est lancee en amont : les
+        # baguettes sont pour l'anticipation du 09/09, pas pour celle-ci
+        # (sinon elles repartiraient une seconde fois le 10/09).
+        self.aujourdhui = date(2026, 9, 9)
+        produits_pdf = self._publier(BROUILLON)
+        self.assertEqual(self._baguettes(produits_pdf), [])
+        self.assertEqual(len(produits_pdf["C"]), 1)
+
+    def test_pas_de_page_bvp_creee_la_veille_quand_seul_le_bazar_est_commande(self):
+        self.aujourdhui = date(2026, 9, 9)
+        produits_pdf = self._publier(f"#CDE:54770396\n{BON_BAZAR}\n")
+        self.assertNotIn("C", produits_pdf)
+
+    def test_baguettes_ajoutees_le_jour_meme_au_brouillon_prepare_la_veille(self):
+        self.aujourdhui = date(2026, 9, 9)
+        self.assertEqual(self._baguettes(self._publier(BROUILLON)), [])
+        self.aujourdhui = date(2026, 9, 10)
+        self.assertEqual(len(self._baguettes(self._publier(BROUILLON))), 1)
+
+
+class TestEstAnticipationDuJour(unittest.TestCase):
+    def setUp(self):
+        self._orig = ac._aujourdhui
+        ac._aujourdhui = lambda: date(2026, 9, 23)
+
+    def tearDown(self):
+        ac._aujourdhui = self._orig
+
+    def test_jour_meme(self):
+        self.assertTrue(ac._est_anticipation_du_jour("23_09", "09_2026"))
+
+    def test_lendemain(self):
+        self.assertFalse(ac._est_anticipation_du_jour("24_09", "09_2026"))
+
+    def test_meme_jour_autre_annee(self):
+        self.assertFalse(ac._est_anticipation_du_jour("23_09", "09_2025"))
+
+    def test_dossier_invalide(self):
+        self.assertFalse(ac._est_anticipation_du_jour("xx", "09_2026"))
 
 
 if __name__ == "__main__":
