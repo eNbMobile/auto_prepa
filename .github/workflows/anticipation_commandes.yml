@@ -31,7 +31,7 @@ jobs:
       - name: Installer les dépendances pip
         run: pip install -r requirements_anticipation.txt
 
-      - name: Récupérer, archiver et envoyer le PDF d'anticipation du jour
+      - name: Générer, archiver et envoyer le PDF d'anticipation du jour
         env:
           GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
           DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}

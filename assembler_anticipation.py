@@ -20,9 +20,9 @@ retrouvaient tous les deux dans l'anticipation du jour.
 Declenche en fire-and-forget par auto_prepa.py (repository_dispatch) : cet
 assemblage (telechargement/reupload Drive, generation PDF avec photos et
 codes-barres) tourne dans ce workflow separe pour ne jamais retarder le cron
-toutes les minutes d'aut_prep. Le WF Anticipation, lui, ne fait plus aucun
-calcul : il recupere directement ce brouillon deja a jour, l'archive et
-l'envoie par mail (cf. anticipation_commandes.py).
+toutes les minutes d'aut_prep. Le WF Anticipation, lui, relit ce brouillon
+deja a jour une seule fois, en genere le PDF, l'archive et l'envoie par mail
+(cf. anticipation_commandes.py).
 """
 
 import os
