@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-Recupere anticipation_JJ_MM.pdf, deja genere au fil de l'eau par
-assembler_anticipation.py sur Drive (GITHUB/Anticipation/MM_AAAA/JJ_MM), et
-l'archive + l'envoie par mail — sans aucun recalcul.
+Envoie par mail l'anticipation d'un jour : lit une seule fois le brouillon
+bon_anticipation_JJ_MM.txt tenu a jour au fil de l'eau par
+assembler_anticipation.py sur Drive (GITHUB/Anticipation/MM_AAAA/JJ_MM),
+genere le PDF a partir de cette lecture, l'archive et l'envoie. Le PDF
+brouillon deja present sur Drive n'est pas repris tel quel : l'assembleur
+pouvait le reecrire pendant l'envoi, et une commande assemblee a ce moment-la
+etait notee comme envoyee puis effacee sans etre partie dans le mail.
 
-Avant de recuperer ce PDF, applique une derniere fois les annulations en
+Avant de generer ce PDF, applique une derniere fois les annulations en
 attente sur le dossier du jour (appliquer_annulations_jour) : c'est la seule
 etape de la chaine qui ne depende d'aucun repository_dispatch, donc le filet
 qui garantit qu'une commande annulee ou remplacee ne parte jamais dans le PDF
@@ -695,6 +699,38 @@ def _envoyer_email_commandes_orphelines(gmail_svc, dossier_jj_mm, numeros):
         print(f"  Envoi email alerte commande(s) orpheline(s) echoue : {e}")
 
 
+def _envoyer_email_commandes_arrivees_pendant_envoi(gmail_svc, dossier_jj_mm, numeros):
+    """Alerte : une ou plusieurs commandes ont ete assemblees dans le brouillon
+    pendant l'envoi de l'anticipation du jour, trop tard pour figurer dans le
+    PDF envoye. Elles restent dans le brouillon (rien n'est perdu) : il suffit
+    de relancer l'anticipation de ce jour pour les envoyer."""
+    destinataire = ap.EMAIL_ANTICIPATION
+    if not destinataire or not numeros:
+        return
+    from email.mime.text import MIMEText
+
+    corps = (
+        f"Bonjour,\n\n"
+        f"La ou les commande(s) suivante(s) sont arrivees pendant l'envoi de "
+        f"l'anticipation du {dossier_jj_mm} et ne figurent PAS dans le PDF "
+        f"envoye : {', '.join(numeros)}.\n\n"
+        f"Elles sont conservees : relancer l'anticipation du {dossier_jj_mm} "
+        f"pour les envoyer.\n"
+    )
+    try:
+        msg = MIMEText(corps, "plain", "utf-8")
+        msg["To"] = destinataire
+        if ap.EMAIL_ANTICIPATION_2:
+            msg["Cc"] = ap.EMAIL_ANTICIPATION_2
+        msg["Subject"] = f"Anticipation {dossier_jj_mm} — commande(s) a relancer"
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
+        print(f"  Email alerte commande(s) arrivee(s) pendant l'envoi envoye => "
+              f"{destinataire} : {', '.join(numeros)}")
+    except Exception as e:
+        print(f"  Envoi email alerte commande(s) arrivee(s) pendant l'envoi echoue : {e}")
+
+
 def _envoyer_email_annulees_rattrapees(gmail_svc, dossier_jj_mm, numeros):
     """Alerte : une ou plusieurs commandes annulees etaient encore presentes
     dans le brouillon d'anticipation au moment de l'envoi, et n'ont ete
@@ -803,22 +839,6 @@ def _maj_fichier_commandes_envoyees(drive_svc, commandes, dossier_mm_aaaa, dossi
     couvrir les jours ou plusieurs anticipations sont envoyees (J, J+1, ...)."""
     _maj_fichier_numeros_archive(drive_svc, commandes, dossier_mm_aaaa, dossier_jj_mm,
                                  f"commandes_envoyées_{dossier_jj_mm}.txt")
-
-
-def _enregistrer_commandes_anticipation_envoyee(drive_svc, dossier_mm_aaaa, dossier_jj_mm):
-    """Apres un envoi reussi du PDF d'anticipation du jour, fige la liste des
-    commandes qu'il contenait dans commandes_envoyées_JJ_MM.txt : le brouillon
-    (commandes_anticipées_JJ_MM.txt) est a jour a cet instant — les commandes
-    annulees en ont ete retirees juste avant l'envoi par
-    appliquer_annulations_jour."""
-    commandes = ap._telecharger_numeros_archive_jour(
-        drive_svc, dossier_mm_aaaa, dossier_jj_mm,
-        f"commandes_anticipées_{dossier_jj_mm}.txt")
-    if not commandes:
-        print(f"  Aucune commande a noter comme envoyee pour le {dossier_jj_mm}.")
-        return
-    _maj_fichier_commandes_envoyees(
-        drive_svc, sorted(commandes, key=_cle_tri_commande), dossier_mm_aaaa, dossier_jj_mm)
 
 
 def _retirer_commandes_fichier_anticipees(drive_svc, numeros_a_retirer, dossier_mm_aaaa, dossier_jj_mm):
@@ -987,35 +1007,36 @@ def _ajouter_baguettes_drive(produits_pdf):
           f"commande {_COMMANDE_BAGUETTES_DRIVE}")
 
 
-def publier_pdf_jour(drive_svc, folder_id, contenu_jour, dossier_jj_mm, dossier_mm_aaaa):
-    """Regenere anticipation_JJ_MM.pdf a partir du brouillon du jour, ou le met
-    a la corbeille s'il ne reste plus rien a anticiper. Des qu'un produit est a
-    anticiper, les 4 baguettes tradition du Drive sont ajoutees a la page BVP
-    (cf. _ajouter_baguettes_drive) — seulement si le PDF est genere le jour
-    meme de son anticipation (cf. _est_anticipation_du_jour). Retourne True si
-    un PDF a ete depose."""
-    nom_pdf = f"anticipation_{dossier_jj_mm}.pdf"
-    produits = _parser_lignes_anticipation_jour(contenu_jour or "")
+def _produits_pdf_jour(contenu_jour):
+    """{lettre: [produits]} des rayons connus (RAYONS_LETTRE) du brouillon."""
     par_lettre = {}
-    for p in produits:
+    for p in _parser_lignes_anticipation_jour(contenu_jour or ""):
         par_lettre.setdefault(p["lettre"], []).append(p)
-    produits_pdf = {lettre: v for lettre, v in par_lettre.items() if lettre in RAYONS_LETTRE}
+    return {lettre: v for lettre, v in par_lettre.items() if lettre in RAYONS_LETTRE}
 
+
+def commandes_du_pdf(contenu_jour):
+    """Numeros des commandes ayant au moins un produit dans le PDF genere a
+    partir de ce contenu (meme regle que commandes_anticipées_JJ_MM.txt)."""
+    return sorted({p["commande"] for produits in _produits_pdf_jour(contenu_jour).values()
+                   for p in produits}, key=_cle_tri_commande)
+
+
+def generer_pdf_jour(drive_svc, contenu_jour, dossier_jj_mm, dossier_mm_aaaa):
+    """Genere en local anticipation_JJ_MM.pdf a partir du contenu du brouillon
+    fourni et retourne son chemin, ou None s'il n'y a rien a anticiper. Des
+    qu'un produit est a anticiper, les 4 baguettes tradition du Drive sont
+    ajoutees a la page BVP (cf. _ajouter_baguettes_drive) — seulement si le
+    PDF est genere le jour meme de son anticipation (cf.
+    _est_anticipation_du_jour)."""
+    produits_pdf = _produits_pdf_jour(contenu_jour)
     if not produits_pdf:
-        res = drive_svc.files().list(
-            q=f"name='{nom_pdf}' and '{folder_id}' in parents and trashed=false",
-            fields="files(id)",
-        ).execute()
-        for f in res.get("files", []):
-            drive_svc.files().update(fileId=f["id"], body={"trashed": True}).execute()
-            print(f"  {nom_pdf} mis a la corbeille (plus aucun produit anticipe ce jour).")
-        return False
+        return None
 
-    # Apres le court-circuit ci-dessus : les baguettes accompagnent
-    # l'anticipation du jour, elles ne justifient pas a elles seules un PDF
-    # (aucune commande anticipable ce jour => pas de PDF du tout). Et
-    # uniquement le jour meme : un PDF du lendemain genere (ou envoye) la
-    # veille ne les porte pas, sinon elles partiraient deux fois.
+    # Les baguettes accompagnent l'anticipation du jour, elles ne justifient
+    # pas a elles seules un PDF (aucune commande anticipable ce jour => pas de
+    # PDF du tout). Et uniquement le jour meme : un PDF du lendemain genere
+    # (ou envoye) la veille ne les porte pas, sinon elles partiraient deux fois.
     if _est_anticipation_du_jour(dossier_jj_mm, dossier_mm_aaaa):
         _ajouter_baguettes_drive(produits_pdf)
 
@@ -1023,7 +1044,30 @@ def publier_pdf_jour(drive_svc, folder_id, contenu_jour, dossier_jj_mm, dossier_
     aaaa = dossier_mm_aaaa.split("_")[1]
     date_complete = f"{jj}/{mm}/{aaaa}"
     ordre_chemin = _charger_ordre_chemin_prepa(drive_svc)
-    chemin_pdf = _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin)
+    return _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin)
+
+
+def _mettre_pdf_jour_a_la_corbeille(drive_svc, folder_id, dossier_jj_mm):
+    nom_pdf = f"anticipation_{dossier_jj_mm}.pdf"
+    res = drive_svc.files().list(
+        q=f"name='{nom_pdf}' and '{folder_id}' in parents and trashed=false",
+        fields="files(id)",
+    ).execute()
+    for f in res.get("files", []):
+        drive_svc.files().update(fileId=f["id"], body={"trashed": True}).execute()
+        print(f"  {nom_pdf} mis a la corbeille du dossier du jour.")
+
+
+def publier_pdf_jour(drive_svc, folder_id, contenu_jour, dossier_jj_mm, dossier_mm_aaaa):
+    """Regenere anticipation_JJ_MM.pdf a partir du brouillon du jour (cf.
+    generer_pdf_jour) et le depose dans le dossier du jour, ou le met a la
+    corbeille s'il ne reste plus rien a anticiper. Retourne True si un PDF a
+    ete depose."""
+    if not _produits_pdf_jour(contenu_jour):
+        _mettre_pdf_jour_a_la_corbeille(drive_svc, folder_id, dossier_jj_mm)
+        return False
+
+    chemin_pdf = generer_pdf_jour(drive_svc, contenu_jour, dossier_jj_mm, dossier_mm_aaaa)
     if not chemin_pdf:
         return False
     try:
@@ -1110,58 +1154,80 @@ def appliquer_annulations_jour(drive_svc, folder_id, dossier_mm_aaaa, dossier_jj
     return annules, contenu_restant, True
 
 
-def _supprimer_pdf_jour_anticipation(drive_svc, file_id, nom_pdf):
-    """Met a la corbeille anticipation_JJ_MM.pdf dans GITHUB/Anticipation/MM_AAAA/JJ_MM/
-    une fois archive + envoye par mail (trashed=True plutot que suppression
-    definitive, pour rester restaurable) — evite qu'un second lancement du
-    WF Anticipation ne retrouve ce brouillon et renvoie les memes produits."""
-    try:
-        drive_svc.files().update(fileId=file_id, body={"trashed": True}).execute()
-        print(f"  {nom_pdf} retire du dossier du jour (conserve dans archives/)")
-    except Exception as e:
-        print(f"  Suppression {nom_pdf} du dossier du jour echouee : {e}")
+def _reinitialiser_dossier_jour_anticipation(drive_svc, folder_id, dossier_jj_mm,
+                                              dossier_mm_aaaa, contenu_envoye):
+    """Une fois le PDF du jour archive + envoye par mail, retire de
+    GITHUB/Anticipation/MM_AAAA/JJ_MM/ tout ce qui est PARTI dans ce PDF
+    (contenu_envoye, le brouillon lu une seule fois avant de generer le PDF
+    envoye) : blocs '#CDE:' de bon_anticipation_JJ_MM.txt, bons
+    bon_anticipation_NUMERO.txt individuels et anticipation_JJ_MM.pdf —
+    sinon une commande anticipable arrivant ensuite ferait regenerer par
+    l'assembleur un PDF repartant de ce contenu deja envoye, et un lancement
+    suivant du WF Anticipation les renverrait en double.
 
+    Le brouillon est relu juste avant ce nettoyage : une commande assemblee
+    PENDANT l'envoi (assemblage lance a la meme seconde que le WF
+    Anticipation, cf. commande 55376672 du 24/09/2026 dont le roti de veau
+    n'est jamais parti) n'est pas dans le PDF envoye. Elle n'est donc ni
+    effacee ni comptee comme envoyee : elle reste seule dans le brouillon
+    (texte + PDF regeneres pour elle) et son numero est retourne pour que
+    l'appelant previenne qu'il faut relancer l'anticipation.
 
-def _reinitialiser_dossier_jour_anticipation(drive_svc, folder_id, dossier_jj_mm):
-    """Une fois le PDF du jour archive + envoye par mail, vide GITHUB/Anticipation/MM_AAAA/JJ_MM/
-    de bon_anticipation_JJ_MM.txt (l'assemblage accumule au fil des commandes par
-    assembler_anticipation.py) et des bon_anticipation_NUMERO.txt individuels deja
-    integres dans ce fichier — sinon une commande anticipable arrivant apres cet
-    envoi ferait regenerer par l'assembleur un nouveau PDF repartant de ce
-    contenu deja envoye (donc avec les memes produits en plus des nouveaux), et
-    un lancement suivant du WF Anticipation les renverrait en double.
-
-    Un bon_anticipation_NUMERO.txt dont le numero n'apparait PAS dans les
-    marqueurs '#CDE:' de bon_anticipation_JJ_MM.txt n'a jamais ete integre au
-    PDF envoye (dispatch d'assemblage perdu par le concurrency group, cf.
-    assembler_anticipation.py) : il est laisse intact sur Drive plutot que
-    jete avec les autres, et son numero est retourne pour que l'appelant
-    alerte par email au lieu de le perdre silencieusement (cf. incident
-    commande 54522243 du 04/09/2026, disparue de l'anticipation sans aucune
-    alerte). Une commande annulee n'est evidemment pas orpheline : elle est
-    exclue de cette alerte.
+    Un bon_anticipation_NUMERO.txt ni envoye ni dans le brouillon n'a jamais
+    ete integre (dispatch d'assemblage perdu par le concurrency group, cf.
+    assembler_anticipation.py) : il est laisse intact sur Drive et son numero
+    est retourne pour que l'appelant alerte par email au lieu de le perdre
+    silencieusement (cf. incident commande 54522243 du 04/09/2026). Une
+    commande annulee n'est evidemment pas orpheline.
 
     Les marqueurs annuler_anticipation_NUMERO.txt sont purges ici, et
     nulle part ailleurs : ils doivent survivre a tous les assemblages du jour
     (c'est par eux que l'assembleur sait ne pas reintegrer une commande
-    annulee) et ne deviennent inutiles qu'avec le dossier lui-meme."""
+    annulee) et ne deviennent inutiles qu'avec le dossier lui-meme.
+
+    Retourne (orphelins, arrivees_pendant_envoi)."""
     nom_jour = f"bon_anticipation_{dossier_jj_mm}.txt"
-    orphelins = []
+    envoyees = _commandes_deja_assemblees(contenu_envoye or "")
+    orphelins, arrivees = [], []
     try:
         res = drive_svc.files().list(
             q=f"name='{nom_jour}' and '{folder_id}' in parents and trashed=false",
             fields="files(id)",
         ).execute()
         fichiers_jour = res.get("files", [])
-        integrees = set()
+        contenu_actuel = ""
         for f in fichiers_jour:
-            integrees |= _commandes_deja_assemblees(_telecharger_texte(drive_svc, f["id"]))
-        for f in fichiers_jour:
-            drive_svc.files().update(fileId=f["id"], body={"trashed": True}).execute()
+            contenu_actuel += _telecharger_texte(drive_svc, f["id"]).rstrip("\n") + "\n"
 
         annules = numeros_annules(drive_svc, folder_id)
+        restant = retirer_blocs_commandes(contenu_actuel, envoyees | annules)
+        encore_au_brouillon = _commandes_deja_assemblees(restant)
+
+        if encore_au_brouillon:
+            arrivees = sorted(encore_au_brouillon, key=_cle_tri_commande)
+            for f in fichiers_jour[1:]:
+                drive_svc.files().update(fileId=f["id"], body={"trashed": True}).execute()
+            os.makedirs(ap.WORK_DIR, exist_ok=True)
+            chemin_local = os.path.join(ap.WORK_DIR, nom_jour)
+            with open(chemin_local, "w", encoding="utf-8") as f:
+                f.write(restant)
+            try:
+                ap.deposer_fichier_jour_anticipation(
+                    drive_svc, chemin_local, dossier_mm_aaaa, dossier_jj_mm)
+            finally:
+                os.remove(chemin_local)
+            publier_pdf_jour(drive_svc, folder_id, restant, dossier_jj_mm, dossier_mm_aaaa)
+            print(f"  ATTENTION : commande(s) assemblee(s) pendant l'envoi, absente(s) du "
+                  f"PDF envoye, laissee(s) dans le brouillon : {', '.join(arrivees)}")
+        else:
+            for f in fichiers_jour:
+                drive_svc.files().update(fileId=f["id"], body={"trashed": True}).execute()
+            _mettre_pdf_jour_a_la_corbeille(drive_svc, folder_id, dossier_jj_mm)
+
         for file_id, numero in _lister_bons_commande(drive_svc, folder_id):
-            if numero in integrees or numero in annules:
+            if numero in encore_au_brouillon:
+                continue
+            if numero in envoyees or numero in annules:
                 drive_svc.files().update(fileId=file_id, body={"trashed": True}).execute()
             else:
                 orphelins.append(numero)
@@ -1169,14 +1235,14 @@ def _reinitialiser_dossier_jour_anticipation(drive_svc, folder_id, dossier_jj_mm
         for file_id, _numero in lister_marqueurs_retrait(drive_svc, folder_id):
             drive_svc.files().update(fileId=file_id, body={"trashed": True}).execute()
 
-        print(f"  {nom_jour}, bon_anticipation_NUMERO.txt integres et marqueurs "
+        print(f"  {nom_jour}, bon_anticipation_NUMERO.txt envoyes et marqueurs "
               f"d'annulation du jour reinitialises (evite un doublon au prochain assemblage)")
         if orphelins:
             print(f"  ATTENTION : bon_anticipation_NUMERO.txt jamais integre(s), "
                   f"conserve(s) sur Drive : {', '.join(orphelins)}")
     except Exception as e:
         print(f"  Reinitialisation du dossier du jour echouee : {e}")
-    return orphelins
+    return orphelins, arrivees
 
 
 def main():
@@ -1203,54 +1269,39 @@ def main():
     dossier_mm_aaaa = jour_cible.strftime("%m_%Y")
     dossier_jj_mm = jour_cible.strftime("%d_%m")
 
-    # Aucun calcul ici : anticipation_JJ_MM.pdf est deja a jour, regenere a
-    # chaque commande par assembler_anticipation.py. On le recupere tel
-    # quel, on l'archive sous archives/ et on l'envoie par mail.
-    print(f"Recuperation du PDF d'anticipation du {dossier_jj_mm}/{dossier_mm_aaaa} "
-          f"sur Drive GITHUB/Anticipation...")
+    # Le PDF envoye est genere ici, a partir d'une SEULE lecture du
+    # brouillon (contenu_jour), et non telecharge tel quel depuis Drive :
+    # l'assembleur, qui tourne a chaque commande, peut reecrire le brouillon
+    # et son PDF a tout moment, y compris pendant cet envoi. Tout ce qui suit
+    # (commandes notees comme envoyees, nettoyage du dossier) se base sur ce
+    # meme contenu : une commande assemblee entre-temps n'est ni perdue ni
+    # comptee comme envoyee (cf. _reinitialiser_dossier_jour_anticipation).
+    print(f"Anticipation du {dossier_jj_mm}/{dossier_mm_aaaa} a partir du brouillon "
+          f"Drive GITHUB/Anticipation...")
     folder_id = ap._dossier_anticipation_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm, creer=False)
+    if not folder_id:
+        print("  Aucun dossier d'anticipation pour ce jour — rien a envoyer.")
+        return
 
     # Dernier filet avant l'envoi : si une commande annulee/remplacee est
     # encore dans le brouillon (retrait jamais execute, run annule par le
     # concurrency group partage, annulation arrivee avant la commande...),
-    # elle est retiree ici et le PDF regenere. C'est la seule etape de la
-    # chaine qui ne depende d'aucun repository_dispatch — donc la seule qui
-    # garantisse que le PDF envoye ne contienne jamais une commande annulee
-    # (ancien + nouveau numero en double apres une modification de commande).
+    # elle est retiree ici. C'est la seule etape de la chaine qui ne depende
+    # d'aucun repository_dispatch — donc la seule qui garantisse que le PDF
+    # envoye ne contienne jamais une commande annulee (ancien + nouveau numero
+    # en double apres une modification de commande).
     annulees_rattrapees = []
-    if folder_id:
-        _, contenu_jour, rattrape = appliquer_annulations_jour(
-            drive_svc, folder_id, dossier_mm_aaaa, dossier_jj_mm,
-            retires_out=annulees_rattrapees)
-        if rattrape:
-            print(f"  ATTENTION : commande(s) annulee(s) encore presente(s) dans le "
-                  f"brouillon, retiree(s) avant envoi : {', '.join(annulees_rattrapees)}")
-        elif contenu_jour.strip() and _est_anticipation_du_jour(dossier_jj_mm, dossier_mm_aaaa):
-            # Anticipation du jour envoyee le jour meme : le PDF a pu etre
-            # genere la veille (commandes toutes arrivees avant minuit), donc
-            # sans les baguettes du Drive. On le regenere pour les y mettre.
-            try:
-                publier_pdf_jour(drive_svc, folder_id, contenu_jour,
-                                 dossier_jj_mm, dossier_mm_aaaa)
-            except Exception as e:
-                print(f"  Regeneration du PDF avant envoi echouee (envoi du PDF existant) : {e}")
+    _, contenu_jour, rattrape = appliquer_annulations_jour(
+        drive_svc, folder_id, dossier_mm_aaaa, dossier_jj_mm,
+        retires_out=annulees_rattrapees)
+    if rattrape:
+        print(f"  ATTENTION : commande(s) annulee(s) encore presente(s) dans le "
+              f"brouillon, retiree(s) avant envoi : {', '.join(annulees_rattrapees)}")
 
     nom_pdf = f"anticipation_{dossier_jj_mm}.pdf"
-    chemin_pdf = None
-    pdf_file_id = None
-    if folder_id:
-        res = drive_svc.files().list(
-            q=f"name='{nom_pdf}' and '{folder_id}' in parents and trashed=false",
-            fields="files(id)",
-        ).execute()
-        fichiers_pdf = res.get("files", [])
-        if fichiers_pdf:
-            pdf_file_id = fichiers_pdf[0]["id"]
-            chemin_pdf = os.path.join(ap.WORK_DIR, nom_pdf)
-            ap.download_pdf(drive_svc, pdf_file_id, chemin_pdf)
-
+    chemin_pdf = generer_pdf_jour(drive_svc, contenu_jour, dossier_jj_mm, dossier_mm_aaaa)
     if not chemin_pdf or not os.path.exists(chemin_pdf):
-        print(f"  Aucun {nom_pdf} trouve pour ce jour — rien a envoyer.")
+        print("  Aucun produit a anticiper dans le brouillon du jour — rien a envoyer.")
         return
 
     try:
@@ -1260,13 +1311,12 @@ def main():
             print(f"\n{nom_pdf} => Drive Anticipation/archives OK")
             email_ok = _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf)
             if email_ok:
-                _enregistrer_commandes_anticipation_envoyee(
-                    drive_svc, dossier_mm_aaaa, dossier_jj_mm)
-            if email_ok and pdf_file_id:
-                _supprimer_pdf_jour_anticipation(drive_svc, pdf_file_id, nom_pdf)
-                orphelins = _reinitialiser_dossier_jour_anticipation(drive_svc, folder_id, dossier_jj_mm)
+                _maj_fichier_commandes_envoyees(
+                    drive_svc, commandes_du_pdf(contenu_jour), dossier_mm_aaaa, dossier_jj_mm)
+                orphelins, arrivees = _reinitialiser_dossier_jour_anticipation(
+                    drive_svc, folder_id, dossier_jj_mm, dossier_mm_aaaa, contenu_jour)
                 _envoyer_email_commandes_orphelines(gmail_svc, dossier_jj_mm, orphelins)
-            if email_ok:
+                _envoyer_email_commandes_arrivees_pendant_envoi(gmail_svc, dossier_jj_mm, arrivees)
                 _envoyer_email_annulees_rattrapees(gmail_svc, dossier_jj_mm, annulees_rattrapees)
     finally:
         if os.path.exists(chemin_pdf):
