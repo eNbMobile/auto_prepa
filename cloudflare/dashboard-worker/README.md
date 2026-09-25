@@ -30,6 +30,23 @@ quand on est lundi).
 
 ## Déploiement
 
+### Automatique (GitHub Actions)
+
+Le workflow `.github/workflows/deploy_tableau_de_bord.yml` déploie `wf` et
+`wf2` à chaque push sur `main` qui touche `cloudflare/dashboard-worker/` ou
+`cloudflare/dashboard2-worker/` (et à la demande, onglet Actions). Secrets du
+dépôt à créer une fois (Settings → Secrets and variables → Actions) :
+
+- `CLOUDFLARE_API_TOKEN` : token Cloudflare créé avec le modèle
+  « Edit Cloudflare Workers » (dash.cloudflare.com → My Profile → API Tokens) ;
+- `CLOUDFLARE_ACCOUNT_ID` : identifiant du compte (colonne de droite de la page
+  Workers & Pages) ;
+- `WF_GH_TOKEN` (facultatif) : s'il est défini, il est installé comme secret
+  `GH_TOKEN` des deux workers à chaque déploiement. Indispensable au premier
+  déploiement de `wf2`, sauf à le définir à la main (`wrangler secret put`).
+
+### À la main
+
 Prérequis : Node.js et `npx` disponibles en local.
 
 ```bash

@@ -207,7 +207,7 @@ const PAGE = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Tableau de bord auto_prepa</title>
+<title>Tableau de bord</title>
 <style>
   :root {
     color-scheme: light dark;
@@ -292,8 +292,7 @@ const PAGE = `<!doctype html>
 <body>
 <div class="wrap">
   <header>
-    <h1>Tableau de bord auto_prepa</h1>
-    <p>Lance les workflows GitHub Actions sans quitter cette page.</p>
+    <h1>Tableau de bord</h1>
   </header>
 
   <div class="cards">
@@ -423,11 +422,13 @@ const PAGE = `<!doctype html>
 <!--fin-cartes-->
   </div>
 
+  <!--pied-->
   <footer>
     <a href="https://github.com/${REPO_OWNER}/${REPO_NAME}/actions" target="_blank" rel="noopener">
       Voir tous les runs sur GitHub Actions
     </a>
   </footer>
+  <!--fin-pied-->
 </div>
 
 <script>
@@ -476,12 +477,19 @@ document.querySelectorAll('form[data-workflow]').forEach((form) => {
 </body>
 </html>`;
 
-/** Page sans les cartes des workflows masqués. */
-function renderPage(hidden) {
-  return PAGE.replace(
+/**
+ * Page sans les cartes des workflows masqués, et sans le lien "Voir tous les
+ * runs" si la variable SANS_LIEN_RUNS est définie (worker "wf2").
+ */
+function renderPage(hidden, env) {
+  let page = PAGE.replace(
     /[ ]*<!--carte:(\w+)-->([\s\S]*?)(?=[ ]*<!--carte:|<!--fin-cartes-->)/g,
     (bloc, cle) => (hidden.has(cle) ? '' : bloc)
   );
+  if (env && env.SANS_LIEN_RUNS) {
+    page = page.replace(/[ ]*<!--pied-->[\s\S]*?<!--fin-pied-->\n?/, '');
+  }
+  return page;
 }
 
 /* ------------------------------------------------------------------ fetch */
@@ -535,7 +543,7 @@ export default {
       return new Response('Not found', { status: 404 });
     }
 
-    return new Response(renderPage(hiddenWorkflows(env)), {
+    return new Response(renderPage(hiddenWorkflows(env), env), {
       headers: {
         'content-type': 'text/html; charset=utf-8',
         'cache-control': 'no-store',
