@@ -1301,6 +1301,14 @@ def main():
     nom_pdf = f"anticipation_{dossier_jj_mm}.pdf"
     chemin_pdf = generer_pdf_jour(drive_svc, contenu_jour, dossier_jj_mm, dossier_mm_aaaa)
     if not chemin_pdf or not os.path.exists(chemin_pdf):
+        if _produits_pdf_jour(contenu_jour):
+            # Des produits sont a anticiper mais le PDF n'a pas pu etre genere
+            # (ex. reportlab absent du runner) : le run doit echouer, sinon
+            # l'anticipation ne part pas sans que personne ne le voie. Le
+            # brouillon reste intact sur Drive, un nouveau run l'enverra.
+            print("  ERREUR : produits a anticiper dans le brouillon mais PDF "
+                  "impossible a generer — rien n'a ete envoye, brouillon conserve.")
+            sys.exit(1)
         print("  Aucun produit a anticiper dans le brouillon du jour — rien a envoyer.")
         return
 
