@@ -1,0 +1,11 @@
+name = "wf2"
+# Même code que le worker "wf" : seule la variable MASQUER change.
+main = "../dashboard-worker/src/index.js"
+compatibility_date = "2024-11-01"
+
+[vars]
+# Cartes / workflows retirés de cette page (clés de WORKFLOWS, séparées par des virgules).
+MASQUER = "generer_ventes"
+
+# Secret à définir après le déploiement (ne jamais le mettre ici en clair) :
+#   wrangler secret put GH_TOKEN
