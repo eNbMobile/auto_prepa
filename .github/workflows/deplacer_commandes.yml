@@ -1,0 +1,75 @@
+name: Deplacer commandes
+
+# Déplace un ou plusieurs BonDeCommande_NUMERO.pdf d'un jour à un autre dans
+# l'archive Drive BDC/MM_AAAA/JJ_MM (client qui n'est pas venu / commande
+# décalée), pour que les ventes et le contrôle de stock restent justes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      numeros:
+        description: "Numéro(s) de commande — plusieurs possibles, séparés par des espaces ou des virgules"
+        required: true
+        type: string
+      jour:
+        description: "Jour cible (ignoré si une date est saisie ci-dessous)"
+        required: true
+        default: "lendemain de la commande"
+        type: choice
+        options:
+          - "lendemain de la commande"
+          - "aujourd'hui"
+          - "demain"
+          - "après-demain"
+      date:
+        description: "Ou date cible précise (JJ/MM/AAAA ou JJ/MM) — prioritaire sur le choix ci-dessus"
+        required: false
+        type: string
+
+concurrency:
+  group: deplacer_commandes
+  cancel-in-progress: false
+
+jobs:
+  deplacer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python et dépendances
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer les dépendances pip
+        run: pip install -r requirements.txt
+
+      - name: Déplacer la ou les commandes
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          WORK_DIR: "v 4.0.0"
+          CDE_NUMEROS: ${{ inputs.numeros }}
+          CDE_JOUR:    ${{ inputs.jour }}
+          CDE_DATE:    ${{ inputs.date }}
+        run: |
+          python3 deplacer_commande.py \
+            --numeros "$CDE_NUMEROS" --jour "$CDE_JOUR" --date "$CDE_DATE"
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+            echo "Secret GOOGLE_TOKEN_JSON mis à jour."
+          fi
