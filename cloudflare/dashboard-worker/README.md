@@ -4,13 +4,17 @@ Page web unique (Cloudflare Worker) qui regroupe le lancement de plusieurs
 workflows GitHub Actions, au lieu d'avoir un worker et une URL par workflow
 (`ctrl` pour le contrôle des stocks, `anticip` pour l'anticipation).
 
-Les trois workflows disponibles sur la page :
+Les workflows disponibles sur la page :
 
 | Carte | Workflow | Choix proposés |
 | --- | --- | --- |
 | **Contrôle Stocks** | `controle_stocks.yml` | jours cumulés (1 à 7) + dernier jour de ventes (automatique, aujourd'hui, hier, avant-hier, ou date saisie) |
 | **Anticipation Commandes** | `anticipation_commandes.yml` | commandes du jour, de demain, ou date saisie |
 | **Générer Ventes** | `generer_ventes.yml` | aujourd'hui, hier, avant-hier, ou date saisie |
+| **Déplacer commandes** | `deplacer_commandes.yml` | n° de commande(s) + jour cible : lendemain de la commande, aujourd'hui, demain, après-demain, ou date saisie (`JJ/MM/AAAA` ou `JJ/MM`) |
+
+Une variante **`wf2`** (dossier `cloudflare/dashboard2-worker`) reprend exactement
+cette page, sans la carte « Générer Ventes » : voir son README.
 
 Chaque carte se lance indépendamment, sans recharger la page : le résultat
 (succès ou erreur) s'affiche sous le bouton, avec un lien vers le run
@@ -46,7 +50,7 @@ le dashboard Cloudflare.
 
 ## Secret `GH_TOKEN`
 
-Token GitHub avec le droit de déclencher les trois workflows :
+Token GitHub avec le droit de déclencher les workflows :
 
 - **Token classique** : scope `repo` (ou `public_repo` si dépôt public) + `workflow`.
 - **Token fine-grained** : accès au dépôt `eNbMobile/auto_prepa` avec la permission
@@ -60,7 +64,10 @@ C'est exactement le même token que celui déjà utilisé par `ctrl` et `anticip
    workflow, libellé, et fonction `buildInputs` qui valide les champs du
    formulaire et renvoie les `inputs` envoyés à GitHub).
 2. Ajouter la carte `<section class="card">` correspondante dans la constante
-   `PAGE`, avec `data-workflow="<clé>"` sur le `<form>`.
+   `PAGE`, précédée de `<!--carte:<clé>-->` et avec `data-workflow="<clé>"` sur
+   le `<form>`. Elle apparaît alors aussi sur `wf2`.
+3. Pour masquer une carte sur un déploiement, ajouter sa clé à la variable
+   `MASQUER` de son `wrangler.toml` (ex. `MASQUER = "generer_ventes"` pour `wf2`).
 
 Le JavaScript de la page est générique : tout `<select data-date-toggle>`
 affiche automatiquement le champ date quand l'option `date` est choisie, et

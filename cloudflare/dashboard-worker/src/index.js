@@ -115,7 +115,60 @@ const WORKFLOWS = {
       return { inputs: { date }, detail: `ventes du ${date}` };
     },
   },
+
+  deplacer_commandes: {
+    file: 'deplacer_commandes.yml',
+    label: 'Déplacer commandes',
+    buildInputs(params) {
+      const numeros = (String(params.numeros || '').match(/\d{6,}/g) || []).filter(
+        (n, i, tous) => tous.indexOf(n) === i
+      );
+      if (!numeros.length) {
+        throw new Error('Saisis au moins un numéro de commande (6 chiffres minimum).');
+      }
+      // Valeurs exactes des options du choix "jour" de deplacer_commandes.yml.
+      const JOURS = {
+        lendemain: 'lendemain de la commande',
+        jour: "aujourd'hui",
+        demain: 'demain',
+        apres_demain: 'après-demain',
+      };
+      const mode = params.mode || 'lendemain';
+      const inputs = { numeros: numeros.join(' '), jour: JOURS.lendemain, date: '' };
+      let cible;
+      if (mode === 'date') {
+        const texte = String(params.date || '').trim();
+        const complete = parseDDMMYYYY(texte);
+        const courte = /^(\d{2})\/(\d{2})$/.exec(texte);
+        if (!complete && !(courte && parseDDMMYYYY(`${texte}/2024`))) {
+          throw new Error('Date invalide (format attendu JJ/MM/AAAA ou JJ/MM).');
+        }
+        inputs.date = complete || texte;
+        cible = `le ${inputs.date}`;
+      } else if (JOURS[mode]) {
+        inputs.jour = JOURS[mode];
+        cible = mode === 'lendemain' ? 'le lendemain de chaque commande' : inputs.jour;
+      } else {
+        throw new Error('Choix de jour invalide.');
+      }
+      return { inputs, detail: `commande(s) ${inputs.numeros} vers ${cible}` };
+    },
+  },
 };
+
+/**
+ * Workflows masqués sur ce déploiement (variable MASQUER de wrangler.toml,
+ * clés de WORKFLOWS séparées par des virgules) : le worker "wf2" réutilise ce
+ * code sans la carte "Générer Ventes".
+ */
+function hiddenWorkflows(env) {
+  return new Set(
+    String((env && env.MASQUER) || '')
+      .split(',')
+      .map((k) => k.trim())
+      .filter(Boolean)
+  );
+}
 
 async function dispatchWorkflow(workflow, inputs, token) {
   const response = await fetch(
@@ -245,6 +298,7 @@ const PAGE = `<!doctype html>
 
   <div class="cards">
 
+    <!--carte:controle_stocks-->
     <section class="card">
       <h2>Contrôle Stocks</h2>
       <p class="hint">Télécharge les stocks et envoie le mail de contrôle.</p>
@@ -283,6 +337,7 @@ const PAGE = `<!doctype html>
       </form>
     </section>
 
+    <!--carte:anticipation-->
     <section class="card">
       <h2>Anticipation Commandes</h2>
       <p class="hint">Récupère, archive et envoie le PDF d'anticipation.</p>
@@ -307,6 +362,7 @@ const PAGE = `<!doctype html>
       </form>
     </section>
 
+    <!--carte:generer_ventes-->
     <section class="card">
       <h2>Générer Ventes</h2>
       <p class="hint">Génère le fichier des ventes de la journée choisie.</p>
@@ -332,6 +388,39 @@ const PAGE = `<!doctype html>
       </form>
     </section>
 
+    <!--carte:deplacer_commandes-->
+    <section class="card">
+      <h2>Déplacer commandes</h2>
+      <p class="hint">Client pas venu ou commande décalée : déplace le bon de commande
+        vers un autre jour pour garder les ventes et le contrôle de stock justes.</p>
+      <form data-workflow="deplacer_commandes">
+        <div class="fields">
+          <div class="field">
+            <label for="dc-numeros">N° de commande(s)</label>
+            <input type="text" id="dc-numeros" name="numeros" placeholder="54868421 54868422"
+                   inputmode="numeric" autocomplete="off" required>
+          </div>
+          <div class="field">
+            <label for="dc-mode">Vers</label>
+            <select id="dc-mode" name="mode" data-date-toggle>
+              <option value="lendemain" selected>Lendemain de la commande</option>
+              <option value="jour">Aujourd'hui</option>
+              <option value="demain">Demain</option>
+              <option value="apres_demain">Après-demain</option>
+              <option value="date">Saisir une date…</option>
+            </select>
+          </div>
+          <div class="field date-wrap" hidden>
+            <label for="dc-date">Date</label>
+            <input type="text" id="dc-date" name="date" placeholder="JJ/MM/AAAA ou JJ/MM"
+                   inputmode="numeric" autocomplete="off">
+          </div>
+          <button type="submit">Déplacer</button>
+        </div>
+        <p class="status" role="status"></p>
+      </form>
+    </section>
+<!--fin-cartes-->
   </div>
 
   <footer>
@@ -387,6 +476,14 @@ document.querySelectorAll('form[data-workflow]').forEach((form) => {
 </body>
 </html>`;
 
+/** Page sans les cartes des workflows masqués. */
+function renderPage(hidden) {
+  return PAGE.replace(
+    /[ ]*<!--carte:(\w+)-->([\s\S]*?)(?=[ ]*<!--carte:|<!--fin-cartes-->)/g,
+    (bloc, cle) => (hidden.has(cle) ? '' : bloc)
+  );
+}
+
 /* ------------------------------------------------------------------ fetch */
 
 export default {
@@ -401,7 +498,10 @@ export default {
         return json({ ok: false, message: 'Requête invalide.' }, 400);
       }
 
-      const workflow = WORKFLOWS[body && body.workflow];
+      const key = body && body.workflow;
+      const workflow = Object.hasOwn(WORKFLOWS, key) && !hiddenWorkflows(env).has(key)
+        ? WORKFLOWS[key]
+        : null;
       if (!workflow) {
         return json({ ok: false, message: 'Workflow inconnu.' }, 400);
       }
@@ -435,7 +535,7 @@ export default {
       return new Response('Not found', { status: 404 });
     }
 
-    return new Response(PAGE, {
+    return new Response(renderPage(hiddenWorkflows(env)), {
       headers: {
         'content-type': 'text/html; charset=utf-8',
         'cache-control': 'no-store',
