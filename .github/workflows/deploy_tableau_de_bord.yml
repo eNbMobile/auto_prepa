@@ -1,0 +1,70 @@
+name: Deployer tableau de bord Cloudflare
+
+# Déploie les workers Cloudflare "wf" et "wf2" (même code,
+# cloudflare/dashboard-worker/src/index.js) à chaque modification poussée sur
+# main, pour que les pages en ligne ne restent plus en retard sur le dépôt.
+#
+# Secrets du dépôt nécessaires :
+#   CLOUDFLARE_API_TOKEN   token Cloudflare, modèle « Edit Cloudflare Workers »
+#   CLOUDFLARE_ACCOUNT_ID  identifiant du compte Cloudflare
+# Facultatif :
+#   WF_GH_TOKEN            s'il est défini, (ré)installé comme secret GH_TOKEN
+#                          des deux workers (sinon celui déjà en place est gardé)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cloudflare/dashboard-worker/**'
+      - 'cloudflare/dashboard2-worker/**'
+      - '.github/workflows/deploy_tableau_de_bord.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy_tableau_de_bord
+  cancel-in-progress: false
+
+jobs:
+  deployer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AVEC_GH_TOKEN: ${{ secrets.WF_GH_TOKEN != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        dossier: [dashboard-worker, dashboard2-worker]
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Vérifier les secrets Cloudflare
+        env:
+          CF_TOKEN:   ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CF_TOKEN" ] || [ -z "$CF_ACCOUNT" ]; then
+            echo "::error::Secrets CLOUDFLARE_API_TOKEN et/ou CLOUDFLARE_ACCOUNT_ID absents du dépôt : déploiement impossible."
+            exit 1
+          fi
+
+      - name: Déployer (avec secret GH_TOKEN)
+        if: env.AVEC_GH_TOKEN == 'true'
+        uses: cloudflare/wrangler-action@v3
+        env:
+          GH_TOKEN: ${{ secrets.WF_GH_TOKEN }}
+        with:
+          apiToken:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/${{ matrix.dossier }}
+          secrets: |
+            GH_TOKEN
+
+      - name: Déployer
+        if: env.AVEC_GH_TOKEN != 'true'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/${{ matrix.dossier }}
