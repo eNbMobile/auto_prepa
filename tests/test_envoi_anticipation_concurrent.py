@@ -217,8 +217,21 @@ class TestEnvoiAnticipation(unittest.TestCase):
         self.assertEqual(self.alertes_arrivees, ["55376672"])
 
     def test_rien_a_envoyer_sans_produit(self):
+        self._patch(ac, "appliquer_annulations_jour",
+                    lambda *a, **k: (set(), "", False))
         self._patch(ac, "generer_pdf_jour", lambda *a: None)
         ac.main()
+        self.assertEqual(self.envoyees, [])
+        self.assertEqual(self.reinit, [])
+
+    def test_echec_si_pdf_impossible_avec_produits(self):
+        # Cas du 25/09 : reportlab absent du runner, le PDF n'etait pas genere
+        # et le run se terminait en succes sans rien envoyer. Il doit echouer,
+        # sans rien noter comme envoye ni toucher au brouillon.
+        self._patch(ac, "generer_pdf_jour", lambda *a: None)
+        with self.assertRaises(SystemExit) as ctx:
+            ac.main()
+        self.assertEqual(ctx.exception.code, 1)
         self.assertEqual(self.envoyees, [])
         self.assertEqual(self.reinit, [])
 
