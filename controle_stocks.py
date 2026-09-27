@@ -280,6 +280,105 @@ def charger_gencods_r1():
     return gencods
 
 
+def _charger_mapping_gencod_csv(nom_fichier):
+    """Lit un fichier config Drive au format 'gencod;valeur' (une ligne par
+    gencod, cf. gencod_adresses.csv et gencod_nomenclatures.csv). Retourne
+    {gencod: valeur} (valeur brute, non filtrée)."""
+    contenu = _lire_config_drive(nom_fichier)
+    if contenu is None:
+        chemin = os.path.join(WORK_DIR, nom_fichier)
+        if not os.path.exists(chemin):
+            print(f"  AVERTISSEMENT : {nom_fichier} introuvable.")
+            return {}
+        with open(chemin, encoding='utf-8-sig', errors='replace') as f:
+            contenu = f.read()
+    mapping = {}
+    for line in contenu.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(';', 1)
+        if len(parts) < 2:
+            continue
+        gencod, valeur = parts[0].strip(), parts[1].strip()
+        if gencod.isdigit():
+            gencod = gencod.lstrip('0').zfill(13)
+        if valeur:
+            mapping[gencod] = valeur
+    return mapping
+
+
+def charger_adresses_magasin():
+    """Charge gencod_adresses.csv. Retourne {gencod: adresse} en ne retenant
+    que les adresses du magasin (préfixe 'M1' ou 'M2') — la réserve ('R1') et
+    les autres emplacements ne font pas partie du chemin de préparation."""
+    mapping = _charger_mapping_gencod_csv("gencod_adresses.csv")
+    adresses = {g: a for g, a in mapping.items() if a.startswith(('M1', 'M2'))}
+    print(f"  {len(adresses)} adresses magasin (M1/M2) chargées depuis gencod_adresses.csv")
+    return adresses
+
+
+def charger_gencod_nomenclatures():
+    """Charge gencod_nomenclatures.csv. Retourne {gencod: gencod_nomenclature}
+    (le gencod de la nomenclature à laquelle le produit est rattaché, dont
+    l'adresse sert de repli quand le produit n'a pas d'adresse magasin
+    propre — même logique que le binaire prepa_drive_degrade)."""
+    mapping = _charger_mapping_gencod_csv("gencod_nomenclatures.csv")
+    nomenclatures = {}
+    for gencod, valeur in mapping.items():
+        if valeur.isdigit():
+            valeur = valeur.lstrip('0').zfill(13)
+        nomenclatures[gencod] = valeur
+    print(f"  {len(nomenclatures)} nomenclatures chargées depuis gencod_nomenclatures.csv")
+    return nomenclatures
+
+
+def charger_ordre_chemin_prepa():
+    """Charge chemin_prepa_ramasse.csv (config Drive) : une adresse magasin
+    par ligne, dans l'ordre du chemin de préparation. Retourne {adresse: index}."""
+    contenu = _lire_config_drive("chemin_prepa_ramasse.csv")
+    if contenu is None:
+        chemin = os.path.join(WORK_DIR, "chemin_prepa_ramasse.csv")
+        if not os.path.exists(chemin):
+            print("  chemin_prepa_ramasse.csv introuvable — tri par chemin de prépa ignoré.")
+            return {}
+        with open(chemin, encoding='utf-8-sig', errors='replace') as f:
+            contenu = f.read()
+    ordre = {}
+    for i, ligne in enumerate(contenu.splitlines()):
+        adresse = ligne.strip()
+        if adresse and adresse not in ordre:
+            ordre[adresse] = i
+    print(f"  {len(ordre)} adresses chargées depuis chemin_prepa_ramasse.csv")
+    return ordre
+
+
+def adresse_magasin_produit(gencod, adresses_magasin, nomenclatures):
+    """Adresse magasin (M1/M2) d'un gencod : directe si disponible, sinon
+    celle de sa nomenclature (même repli que prepa_drive_degrade). None si
+    ni l'une ni l'autre n'a d'adresse magasin connue."""
+    adresse = adresses_magasin.get(gencod)
+    if adresse:
+        return adresse
+    return adresses_magasin.get(nomenclatures.get(gencod, ''))
+
+
+def cle_tri_chemin_prepa(adresses_magasin, nomenclatures, ordre_chemin):
+    """Construit la clé de tri (index chemin de prépa, gencod) pour une ligne
+    de résultat (gencod, ...). Les produits sans adresse magasin résolue, ou
+    dont l'adresse n'apparaît pas dans chemin_prepa_ramasse.csv, sont placés
+    en fin de liste (départagés par gencod)."""
+    fin_chemin = len(ordre_chemin)
+
+    def cle(row):
+        gencod  = row[0]
+        adresse = adresse_magasin_produit(gencod, adresses_magasin, nomenclatures)
+        idx     = ordre_chemin.get(adresse, fin_chemin) if adresse else fin_chemin
+        return (idx, gencod)
+
+    return cle
+
+
 _RE_QTY    = re.compile(r'^\s{0,8}(\d{1,3})\s{10,}(.+)')
 _RE_GENCOD = re.compile(r'^\s{8,}(\d{8,13})(?!\d)')
 
@@ -1245,8 +1344,14 @@ def main():
     manquant  = sum(r[5] for r in compares if r[5] < 0)
     surplus   = sum(r[5] for r in compares if r[5] > 0)
 
-    stock_bas.sort(key=lambda r: (r[4], r[0]))
-    a_deloter.sort(key=lambda r: (r[4], r[0]))
+    if stock_bas or a_deloter:
+        print("\nChargement chemin de préparation (adresses/nomenclatures) …")
+        adresses_magasin = charger_adresses_magasin()
+        nomenclatures     = charger_gencod_nomenclatures()
+        ordre_chemin      = charger_ordre_chemin_prepa()
+        cle_chemin        = cle_tri_chemin_prepa(adresses_magasin, nomenclatures, ordre_chemin)
+        stock_bas.sort(key=cle_chemin)
+        a_deloter.sort(key=cle_chemin)
 
     print(f"\n── Résultats ──────────────────────────────────────")
     print(f"  Gencods appairés  : {len(compares)}")
