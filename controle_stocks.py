@@ -319,16 +319,10 @@ def charger_adresses_magasin():
 
 
 def charger_gencod_nomenclatures():
-    """Charge gencod_nomenclatures.csv. Retourne {gencod: gencod_nomenclature}
-    (le gencod de la nomenclature à laquelle le produit est rattaché, dont
-    l'adresse sert de repli quand le produit n'a pas d'adresse magasin
-    propre — même logique que le binaire prepa_drive_degrade)."""
-    mapping = _charger_mapping_gencod_csv("gencod_nomenclatures.csv")
-    nomenclatures = {}
-    for gencod, valeur in mapping.items():
-        if valeur.isdigit():
-            valeur = valeur.lstrip('0').zfill(13)
-        nomenclatures[gencod] = valeur
+    """Charge gencod_nomenclatures.csv. Retourne {gencod: code_nomenclature}
+    (code hiérarchique à 18 chiffres rattaché au produit — PAS un gencod : ses
+    zéros de tête sont significatifs et ne doivent pas être retirés)."""
+    nomenclatures = _charger_mapping_gencod_csv("gencod_nomenclatures.csv")
     print(f"  {len(nomenclatures)} nomenclatures chargées depuis gencod_nomenclatures.csv")
     return nomenclatures
 
@@ -355,17 +349,40 @@ def charger_ordre_chemin_prepa():
     return ordre
 
 
+def _longueur_prefixe_commun(a, b):
+    """Nombre de caractères identiques en tête de a et b."""
+    n = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        n += 1
+    return n
+
+
 def cle_tri_chemin_prepa(adresses_magasin, nomenclatures, ordre_chemin):
     """Construit la clé de tri (index chemin de prépa, gencod) pour une ligne
     de résultat (gencod, ...).
 
     L'adresse magasin (M1/M2) du gencod est cherchée en priorité dans le
     chemin ; si le produit n'en a pas, on retombe sur sa nomenclature
-    (gencod_nomenclatures.csv), elle-même une clé directement présente dans
-    chemin_prepa_ramasse.csv (même repli que le binaire prepa_drive_degrade).
-    Un produit sans adresse ni nomenclature résolue dans le chemin est placé
-    en fin de liste (départagé par gencod)."""
+    (gencod_nomenclatures.csv, code hiérarchique à 18 chiffres). Cette
+    nomenclature est rarement une clé exacte de chemin_prepa_ramasse.csv :
+    on y cherche alors, parmi ses clés numériques (les codes de
+    nomenclature/rayon, par opposition aux adresses M1/M2/R1), celle qui
+    partage le plus long préfixe avec elle — même correspondance
+    hiérarchique (rayon parent le plus proche) que le binaire
+    prepa_drive_degrade. Un produit sans adresse ni nomenclature apparentée
+    est placé en fin de liste (départagé par gencod)."""
     fin_chemin = len(ordre_chemin)
+    cles_nomenclature = [(cle, idx) for cle, idx in ordre_chemin.items() if cle.isdigit()]
+
+    def idx_nomenclature_proche(code_nomenclature):
+        meilleur_idx, meilleure_longueur = None, 0
+        for cle, idx in cles_nomenclature:
+            n = _longueur_prefixe_commun(code_nomenclature, cle)
+            if n > meilleure_longueur:
+                meilleur_idx, meilleure_longueur = idx, n
+        return meilleur_idx
 
     def cle(row):
         gencod  = row[0]
@@ -373,7 +390,12 @@ def cle_tri_chemin_prepa(adresses_magasin, nomenclatures, ordre_chemin):
         if adresse in ordre_chemin:
             idx = ordre_chemin[adresse]
         else:
-            idx = ordre_chemin.get(nomenclatures.get(gencod, ''), fin_chemin)
+            code_nomenclature = nomenclatures.get(gencod)
+            idx = None
+            if code_nomenclature:
+                idx = idx_nomenclature_proche(code_nomenclature)
+            if idx is None:
+                idx = fin_chemin
         return (idx, gencod)
 
     return cle
