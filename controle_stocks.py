@@ -334,8 +334,10 @@ def charger_gencod_nomenclatures():
 
 
 def charger_ordre_chemin_prepa():
-    """Charge chemin_prepa_ramasse.csv (config Drive) : une adresse magasin
-    par ligne, dans l'ordre du chemin de préparation. Retourne {adresse: index}."""
+    """Charge chemin_prepa_ramasse.csv (config Drive) : une clé par ligne
+    (adresse magasin M1/M2, adresse réserve R1, ou code de nomenclature —
+    'clé;libellé_rayon;lettre'), dans l'ordre du chemin de préparation.
+    Retourne {clé: index}."""
     contenu = _lire_config_drive("chemin_prepa_ramasse.csv")
     if contenu is None:
         chemin = os.path.join(WORK_DIR, "chemin_prepa_ramasse.csv")
@@ -346,34 +348,32 @@ def charger_ordre_chemin_prepa():
             contenu = f.read()
     ordre = {}
     for i, ligne in enumerate(contenu.splitlines()):
-        adresse = ligne.strip()
-        if adresse and adresse not in ordre:
-            ordre[adresse] = i
-    print(f"  {len(ordre)} adresses chargées depuis chemin_prepa_ramasse.csv")
+        cle = ligne.split(';', 1)[0].strip()
+        if cle and cle not in ordre:
+            ordre[cle] = i
+    print(f"  {len(ordre)} clés chargées depuis chemin_prepa_ramasse.csv")
     return ordre
-
-
-def adresse_magasin_produit(gencod, adresses_magasin, nomenclatures):
-    """Adresse magasin (M1/M2) d'un gencod : directe si disponible, sinon
-    celle de sa nomenclature (même repli que prepa_drive_degrade). None si
-    ni l'une ni l'autre n'a d'adresse magasin connue."""
-    adresse = adresses_magasin.get(gencod)
-    if adresse:
-        return adresse
-    return adresses_magasin.get(nomenclatures.get(gencod, ''))
 
 
 def cle_tri_chemin_prepa(adresses_magasin, nomenclatures, ordre_chemin):
     """Construit la clé de tri (index chemin de prépa, gencod) pour une ligne
-    de résultat (gencod, ...). Les produits sans adresse magasin résolue, ou
-    dont l'adresse n'apparaît pas dans chemin_prepa_ramasse.csv, sont placés
-    en fin de liste (départagés par gencod)."""
+    de résultat (gencod, ...).
+
+    L'adresse magasin (M1/M2) du gencod est cherchée en priorité dans le
+    chemin ; si le produit n'en a pas, on retombe sur sa nomenclature
+    (gencod_nomenclatures.csv), elle-même une clé directement présente dans
+    chemin_prepa_ramasse.csv (même repli que le binaire prepa_drive_degrade).
+    Un produit sans adresse ni nomenclature résolue dans le chemin est placé
+    en fin de liste (départagé par gencod)."""
     fin_chemin = len(ordre_chemin)
 
     def cle(row):
         gencod  = row[0]
-        adresse = adresse_magasin_produit(gencod, adresses_magasin, nomenclatures)
-        idx     = ordre_chemin.get(adresse, fin_chemin) if adresse else fin_chemin
+        adresse = adresses_magasin.get(gencod)
+        if adresse in ordre_chemin:
+            idx = ordre_chemin[adresse]
+        else:
+            idx = ordre_chemin.get(nomenclatures.get(gencod, ''), fin_chemin)
         return (idx, gencod)
 
     return cle
