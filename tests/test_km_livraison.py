@@ -49,7 +49,7 @@ class _FakeValues:
     def _onglet(plage):
         return plage.split('!')[0].strip("'")
 
-    def get(self, spreadsheetId=None, range=None):
+    def get(self, spreadsheetId=None, range=None, valueRenderOption=None):
         lignes = self._classeur.get(self._onglet(range), [])
         return _Requete({"values": [list(l) for l in lignes[1:]]})
 

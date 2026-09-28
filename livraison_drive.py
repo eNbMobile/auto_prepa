@@ -42,6 +42,7 @@ bon_prepa.txt). Le workflow "Livraison Drive - En attente" (déclenché à
 14h) appelle traiter_en_attente() pour renseigner les commandes de
 EN ATTENTE prévues pour le lendemain.
 """
+import re
 import sys
 import time
 import unicodedata
@@ -274,6 +275,51 @@ def _assurer_ligne(sheets_svc, spreadsheet_id, titre_onglet, ligne):
     print(f"    Onglet '{titre_onglet}' plein : {ligne - nb_lignes} ligne(s) ajoutee(s).")
 
 
+# Plage commencant a la ligne 2 (premiere ligne de donnees sous l'en-tete),
+# ex. E2:E134 ou $E$2:$E$134 dans =COUNTIFS(E2:E134,"<5") de la facture du
+# mois. Les references vers un autre onglet ('AOUT'!E2:E134) sont ignorees.
+_PLAGE_DONNEES = re.compile(r"(?<![A-Za-z0-9$!_])(\$?[A-Z]{1,3}\$?2:\$?[A-Z]{1,3}\$?)(\d+)(?![0-9A-Za-z_(])")
+
+
+def _colonne_a1(j):
+    """Lettre(s) de colonne A1 de l'index 0-based `j` (0 -> A, 26 -> AA)."""
+    lettres = ""
+    j += 1
+    while j:
+        j, r = divmod(j - 1, 26)
+        lettres = chr(65 + r) + lettres
+    return lettres
+
+
+def _etendre_plages(sheets_svc, spreadsheet_id, titre_onglet, ligne):
+    """Etend jusqu'a `ligne` les plages des formules de l'onglet qui partent
+    de la ligne 2 et s'arretent avant `ligne` (ex. la facture du mois :
+    =COUNTIFS(E2:E134,"<5") en I6:I9), pour qu'elles comptent aussi les
+    lignes ajoutees par _assurer_ligne — Sheets n'agrandit pas une plage
+    quand des lignes sont ajoutees apres sa derniere ligne. Rattrape aussi
+    les plages restees trop courtes lors d'un ajout precedent."""
+    res = sheets_svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id, range=f"'{titre_onglet}'",
+        valueRenderOption="FORMULA").execute()
+    maj = []
+    for i, row in enumerate(res.get("values", [])):
+        for j, v in enumerate(row):
+            if not (isinstance(v, str) and v.startswith("=")):
+                continue
+            nouvelle = _PLAGE_DONNEES.sub(
+                lambda m: m.group(1) + str(ligne) if int(m.group(2)) < ligne else m.group(0), v)
+            if nouvelle != v:
+                maj.append({"range": f"'{titre_onglet}'!{_colonne_a1(j)}{i + 1}",
+                            "values": [[nouvelle]]})
+    if not maj:
+        return
+    sheets_svc.spreadsheets().values().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={"valueInputOption": "USER_ENTERED", "data": maj}).execute()
+    print(f"    Onglet '{titre_onglet}' : plages de {len(maj)} formule(s) etendues "
+          f"jusqu'a la ligne {ligne} ({', '.join(d['range'].split('!')[1] for d in maj)}).")
+
+
 def _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom, prenom, numero_commande=None, km=None):
     """Renseigne (N° cde, Date, Nom, Prénom, Distance) sur la premiere ligne
     libre de l'onglet du mois de `cible` (colonne C = nom, sert de reference
@@ -297,6 +343,7 @@ def _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom, prenom, numero_co
     print(f"    LIVRAISON DRIVE 2026 / {onglet} L{ligne} : {numero_commande or ''} | "
           f"{cible.strftime('%d/%m')} | {nom} {prenom}"
           + (f" | {km} km" if km is not None else " | km non trouve"))
+    _etendre_plages(sheets_svc, spreadsheet_id, onglet, ligne)
     return True
 
 
