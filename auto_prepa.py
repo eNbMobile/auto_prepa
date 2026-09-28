@@ -1350,18 +1350,25 @@ def _phrases_comparaison_anticipation(contenu_ancien, contenu_nouveau):
     if not (contenu_ancien or "").strip():
         # Anticipation de l'ancienne commande introuvable (bon deja consomme et
         # archive absente) : sans elle, tous les produits de la nouvelle
-        # passeraient pour des ajouts du client. Mieux vaut ne rien affirmer.
-        return []
+        # passeraient pour des ajouts du client. Rien n'est affirme, mais le
+        # mail le dit : sans cette phrase, l'absence de detail se lisait comme
+        # "rien ne change".
+        return ["Le détail des produits anticipés de l'ancienne commande est "
+                "introuvable : vérifier à la main ce qui avait été sorti en rayon "
+                "pour elle."]
     retires, reduits, ajoutes, augmentes = _comparer_produits_anticipation(
         contenu_ancien, contenu_nouveau)
+    if not (retires or reduits or ajoutes or augmentes):
+        return ["La nouvelle commande reprend exactement les mêmes produits "
+                "anticipés : rien ne change pour les rayons."]
     phrases = []
     if retires:
         phrases.append(
-            f"Le produit {_enumerer(retires)} est à retourner en rayon, le client ne l'a "
-            f"pas commandé dans la nouvelle commande."
+            f"Le produit {_enumerer(retires)} n'est plus anticipé : le client ne l'a "
+            f"pas repris dans la nouvelle commande, il est à retourner en rayon."
             if len(retires) == 1 else
-            f"Les produits {_enumerer(retires)} sont à retourner en rayon, le client ne "
-            f"les a pas commandés dans la nouvelle commande.")
+            f"Les produits {_enumerer(retires)} ne sont plus anticipés : le client ne "
+            f"les a pas repris dans la nouvelle commande, ils sont à retourner en rayon.")
     if reduits:
         phrases.append(
             f"Le client a réduit sa quantité de {_enumerer(reduits)} : "
@@ -1383,11 +1390,10 @@ def _phrases_comparaison_anticipation(contenu_ancien, contenu_nouveau):
 _CIVILITES_LONGUES = {"M.": "Monsieur", "Mme": "Madame"}
 
 
-def _telecharger_numeros_archive_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm, nom_fichier):
-    """Telecharge et parse un fichier de numeros separes par des virgules depuis
-    GITHUB/Anticipation/archives/MM_AAAA/JJ_MM/ (ecrit par
-    anticipation_commandes.py). Retourne l'ensemble des numeros qu'il contient
-    (vide si le fichier ou un dossier parent n'existe pas encore)."""
+def _telecharger_texte_archive_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm, nom_fichier):
+    """Contenu texte d'un fichier de GITHUB/Anticipation/archives/MM_AAAA/JJ_MM/
+    (ecrit par anticipation_commandes.py), '' si le fichier ou un dossier
+    parent n'existe pas encore."""
     def _sous_dossier(parent_id, nom):
         if not parent_id:
             return None
@@ -1420,11 +1426,42 @@ def _telecharger_numeros_archive_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm,
         done = False
         while not done:
             _, done = dl.next_chunk()
-        contenu = buf.getvalue().decode("utf-8", errors="replace")
-        return {c.strip() for c in contenu.strip().split(',') if c.strip()}
+        return buf.getvalue().decode("utf-8", errors="replace")
     except Exception as e:
         print(f"    Lecture {nom_fichier} echouee : {e}")
-        return set()
+        return ""
+
+
+def _telecharger_numeros_archive_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm, nom_fichier):
+    """Ensemble des numeros d'un fichier de numeros separes par des virgules
+    de GITHUB/Anticipation/archives/MM_AAAA/JJ_MM/ (vide s'il n'existe pas)."""
+    contenu = _telecharger_texte_archive_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm, nom_fichier)
+    return {c.strip() for c in contenu.strip().split(',') if c.strip()}
+
+
+def _anticipation_envoyee_commande(drive_svc, numero, dossier_mm_aaaa, dossier_jj_mm):
+    """Lignes anticipees de la commande telles qu'elles sont PARTIES dans
+    l'anticipation du jour : bloc '#CDE:NUMERO' de
+    bon_anticipation_envoye_JJ_MM.txt (archive par anticipation_commandes.py
+    a chaque envoi). C'est la seule copie sure une fois l'anticipation
+    envoyee : le bon individuel bon_anticipation_NUMERO.txt est alors mis a
+    la corbeille (cf. _reinitialiser_dossier_jour_anticipation), ce qui
+    laissait l'alerte "anticipee et annulee" sans aucun detail des produits
+    (commande 55502542 du 28/09/2026, dont le filet mignon n'etait plus
+    anticipe dans la commande de remplacement 55517264). '' si absent."""
+    if not (numero and dossier_mm_aaaa and dossier_jj_mm):
+        return ""
+    contenu = _telecharger_texte_archive_jour(
+        drive_svc, dossier_mm_aaaa, dossier_jj_mm,
+        f"bon_anticipation_envoye_{dossier_jj_mm}.txt")
+    lignes, dans_bloc = [], False
+    for ligne in contenu.splitlines():
+        if ligne.startswith("#CDE:"):
+            dans_bloc = ligne[len("#CDE:"):].strip() == numero
+            continue
+        if dans_bloc and ligne.strip():
+            lignes.append(ligne)
+    return "\n".join(lignes) + "\n" if lignes else ""
 
 
 def _telecharger_commandes_anticipation_envoyee(drive_svc, dossier_mm_aaaa, dossier_jj_mm):
@@ -1448,8 +1485,8 @@ def _envoyer_email_anticipation_annulee(gmail_svc, civilite, nom, prenom, num_an
     phrases_comparaison : paragraphes issus de
     _phrases_comparaison_anticipation, qui disent aux rayons ce qu'ils doivent
     ranger et ce qu'ils doivent sortir en plus quand la commande de
-    remplacement n'anticipe pas exactement les memes produits. Vide quand
-    l'anticipation est identique : il n'y a alors rien a ajouter au mail.
+    remplacement n'anticipe pas exactement les memes produits (ou qui disent
+    que rien ne change, ou que le detail est introuvable).
 
     Envoye en HTML, un seul <p> par paragraphe : en text/plain, Gmail replie le
     corps a ~78 colonnes en inserant ses propres <br>, ce qui coupait les
@@ -1622,14 +1659,20 @@ def _telecharger_anticipation_archive_drive(drive_svc, numero):
     anticipee il y a plusieurs jours)."""
     nom = f"bon_anticipation_{numero}.txt"
     try:
-        res = drive_svc.files().list(
-            q=f"name='{nom}' and trashed=false",
-            fields="files(id,parents)",
-        ).execute()
-        for f in res.get("files", []):
-            if DRIVE_BONS_FOLDER_ID and DRIVE_BONS_FOLDER_ID in (f.get("parents") or []):
-                continue
-            return _telecharger_texte_drive(drive_svc, f["id"])
+        # Les copies a la corbeille comptent aussi, en dernier recours : une
+        # fois l'anticipation du jour envoyee, le bon individuel y est
+        # deplace (cf. _reinitialiser_dossier_jour_anticipation), et c'est
+        # souvent la seule trace de ce qui a ete sorti en rayon.
+        for trashed in ("false", "true"):
+            res = drive_svc.files().list(
+                q=f"name='{nom}' and trashed={trashed}",
+                fields="files(id,parents)",
+                orderBy="modifiedTime desc",
+            ).execute()
+            for f in res.get("files", []):
+                if DRIVE_BONS_FOLDER_ID and DRIVE_BONS_FOLDER_ID in (f.get("parents") or []):
+                    continue
+                return _telecharger_texte_drive(drive_svc, f["id"])
     except Exception as e:
         print(f"    Lecture de l'anticipation archivee {numero} echouee : {e}")
     return ""
@@ -1774,7 +1817,9 @@ def _alerter_si_commande_anticipee_annulee(drive_svc, gmail_svc, num_ancien, dos
     # nouvelle commande n'est traitee que quelques lignes (ou quelques runs)
     # plus tard. Dans ce cas l'alerte est mise en attente et partira
     # completee, depuis traiter_commande_pdf.
-    contenu_ancien = _anticipation_commande(drive_svc, num_ancien, contenu_ancien)
+    contenu_ancien = (_anticipation_commande(drive_svc, num_ancien, contenu_ancien)
+                      or _anticipation_envoyee_commande(
+                          drive_svc, num_ancien, dossier_mm_aaaa, dossier_jj_mm))
     contenu_nouveau = _anticipation_commande(drive_svc, num_nouveau)
     if contenu_nouveau or _commande_deja_traitee(drive_svc, num_nouveau):
         _envoyer_email_anticipation_annulee(

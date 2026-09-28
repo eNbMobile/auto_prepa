@@ -841,6 +841,59 @@ def _maj_fichier_commandes_envoyees(drive_svc, commandes, dossier_mm_aaaa, dossi
                                  f"commandes_envoyées_{dossier_jj_mm}.txt")
 
 
+def _archiver_contenu_envoye(drive_svc, contenu_envoye, dossier_mm_aaaa, dossier_jj_mm):
+    """Ajoute le brouillon qui vient de PARTIR par mail (blocs '#CDE:NUMERO'
+    + lignes de chaque commande) a GITHUB/Anticipation/archives/MM_AAAA/JJ_MM/
+    bon_anticipation_envoye_JJ_MM.txt, cumulatif sur la journee.
+
+    Les bons individuels bon_anticipation_NUMERO.txt sont mis a la corbeille
+    juste apres l'envoi (_reinitialiser_dossier_jour_anticipation) : sans
+    cette copie, auto_prepa.py ne savait plus quels produits avaient ete
+    sortis pour une commande annulee/remplacee ensuite, et son alerte
+    "anticipee et annulee" partait sans le detail des produits qui ne sont
+    plus anticipes (cf. _anticipation_envoyee_commande)."""
+    if not (contenu_envoye or "").strip():
+        return
+    nom_fichier = f"bon_anticipation_envoye_{dossier_jj_mm}.txt"
+    path = f"GITHUB/Anticipation/archives/{dossier_mm_aaaa}/{dossier_jj_mm}"
+    try:
+        github_id = ap._get_or_create_subfolder(drive_svc, "root", "GITHUB")
+        anticipation_id = ap._get_or_create_subfolder(drive_svc, github_id, "Anticipation")
+        archives_id = ap._get_or_create_subfolder(drive_svc, anticipation_id, "archives")
+        mois_id = ap._get_or_create_subfolder(drive_svc, archives_id, dossier_mm_aaaa)
+        subfolder_id = ap._get_or_create_subfolder(drive_svc, mois_id, dossier_jj_mm)
+
+        res = drive_svc.files().list(
+            q=f"name='{nom_fichier}' and '{subfolder_id}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        existing = res.get("files", [])
+        deja = _telecharger_texte(drive_svc, existing[0]["id"]) if existing else ""
+        if deja and not deja.endswith("\n"):
+            deja += "\n"
+        nouveau_contenu = deja + contenu_envoye.rstrip("\n") + "\n"
+
+        chemin_local = os.path.join(ap.WORK_DIR, nom_fichier)
+        os.makedirs(ap.WORK_DIR, exist_ok=True)
+        with open(chemin_local, "w", encoding="utf-8") as f:
+            f.write(nouveau_contenu)
+        try:
+            media = MediaFileUpload(chemin_local, mimetype="text/plain", resumable=False)
+            if existing:
+                drive_svc.files().update(fileId=existing[0]["id"], media_body=media).execute()
+            else:
+                drive_svc.files().create(
+                    body={"name": nom_fichier, "parents": [subfolder_id]},
+                    media_body=media,
+                    fields="id",
+                ).execute()
+        finally:
+            os.remove(chemin_local)
+        print(f"    {nom_fichier} => Drive {path}/ OK")
+    except Exception as e:
+        print(f"    Archivage {nom_fichier} echoue : {e}")
+
+
 def _retirer_commandes_fichier_anticipees(drive_svc, numeros_a_retirer, dossier_mm_aaaa, dossier_jj_mm):
     """Retire numeros_a_retirer de GITHUB/Anticipation/archives/MM_AAAA/JJ_MM/
     commandes_anticipées_JJ_MM.txt (symetrique de _maj_fichier_commandes_anticipees) :
@@ -1321,6 +1374,7 @@ def main():
             if email_ok:
                 _maj_fichier_commandes_envoyees(
                     drive_svc, commandes_du_pdf(contenu_jour), dossier_mm_aaaa, dossier_jj_mm)
+                _archiver_contenu_envoye(drive_svc, contenu_jour, dossier_mm_aaaa, dossier_jj_mm)
                 orphelins, arrivees = _reinitialiser_dossier_jour_anticipation(
                     drive_svc, folder_id, dossier_jj_mm, dossier_mm_aaaa, contenu_jour)
                 _envoyer_email_commandes_orphelines(gmail_svc, dossier_jj_mm, orphelins)
