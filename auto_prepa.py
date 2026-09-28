@@ -487,6 +487,23 @@ def _traiter_commande_potentiellement_anticipee(drive_svc, gmail_svc, numero, nu
     declencher_retrait_anticipation(numero, dossier_jj_mm, dossier_mm_aaaa)
 
 
+def _etape_annexe_annulation(numero, etape, *args):
+    """Execute une etape annexe du traitement d'une commande annulee/remplacee
+    (anticipation, livraison) sans laisser son echec bloquer la suite : le
+    retrait des bons de MobUDrive_Bons et le depot de annuler_NUMERO.txt, qui
+    font disparaitre la commande de l'app, doivent toujours avoir lieu. Sans
+    ce garde-fou, une exception dans l'anticipation (28/09/2026, cde 55527498
+    remplacee par 55548605) interrompait tout le traitement du mail, qui
+    replantait a chaque run : les deux commandes restaient sur l'app.
+    Retourne le resultat de l'etape, None si elle a echoue."""
+    try:
+        return etape(*args)
+    except Exception as e:
+        print(f"    Erreur {etape.__name__} (cde {numero}) : {e} "
+              f"- suite du traitement de l'annulation.")
+        return None
+
+
 def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc,
                                    shopopop_token=None, shopopop_drive_id=None, shopopop_connecte=False):
     """Lit les mails de modification de commande, supprime les anciens bons, archive les mails.
@@ -524,8 +541,11 @@ def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc,
             if match_modif:
                 num_ancien, num_nouveau = match_modif.group(1), match_modif.group(2)
                 print(f"  Modification : cde {num_ancien} => remplacee par {num_nouveau}")
-                _traiter_commande_potentiellement_anticipee(drive_svc, gmail_svc, num_ancien, num_nouveau)
-                resultat_livraison = _traiter_annulation_livraison(drive_svc, sheets_svc, num_ancien)
+                _etape_annexe_annulation(
+                    num_ancien, _traiter_commande_potentiellement_anticipee,
+                    drive_svc, gmail_svc, num_ancien, num_nouveau)
+                resultat_livraison = _etape_annexe_annulation(
+                    num_ancien, _traiter_annulation_livraison, drive_svc, sheets_svc, num_ancien)
                 if resultat_livraison:
                     nom_l, prenom_l, date_l = resultat_livraison
                     if not shopopop_connecte:
@@ -545,8 +565,11 @@ def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc,
             elif match_annul:
                 num_annule = match_annul.group(1)
                 print(f"  Annulation : cde {num_annule} supprimee")
-                _traiter_commande_potentiellement_anticipee(drive_svc, gmail_svc, num_annule)
-                _traiter_annulation_livraison(drive_svc, sheets_svc, num_annule)
+                _etape_annexe_annulation(
+                    num_annule, _traiter_commande_potentiellement_anticipee,
+                    drive_svc, gmail_svc, num_annule)
+                _etape_annexe_annulation(
+                    num_annule, _traiter_annulation_livraison, drive_svc, sheets_svc, num_annule)
                 _supprimer_bons_drive(drive_svc, num_annule)
                 _supprimer_anticipation_archive_drive(drive_svc, num_annule)
                 _supprimer_bdc_drive(drive_svc, num_annule)
@@ -1412,7 +1435,7 @@ def _telecharger_texte_archive_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm, n
         mois_id = _sous_dossier(archives_id, dossier_mm_aaaa)
         subfolder_id = _sous_dossier(mois_id, dossier_jj_mm)
         if not subfolder_id:
-            return set()
+            return ""
 
         res = drive_svc.files().list(
             q=f"name='{nom_fichier}' and '{subfolder_id}' in parents and trashed=false",
@@ -1420,7 +1443,7 @@ def _telecharger_texte_archive_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm, n
         ).execute()
         files = res.get("files", [])
         if not files:
-            return set()
+            return ""
         buf = io.BytesIO()
         dl = MediaIoBaseDownload(buf, drive_svc.files().get_media(fileId=files[0]["id"]))
         done = False
