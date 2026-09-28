@@ -95,19 +95,22 @@ class TestQuantitesAnticipation(unittest.TestCase):
 class TestComparaisonAnticipations(unittest.TestCase):
     def test_memes_produits_memes_quantites_rien_a_signaler(self):
         contenu = f"{LESSIVE}\n{JOUET}\n"
-        self.assertEqual(ap._phrases_comparaison_anticipation(contenu, contenu), [])
+        phrases = ap._phrases_comparaison_anticipation(contenu, contenu)
+        self.assertEqual(len(phrases), 1)
+        self.assertIn("mêmes produits anticipés : rien ne change", phrases[0])
 
     def test_produit_absent_de_la_nouvelle_commande(self):
         phrases = ap._phrases_comparaison_anticipation(f"{LESSIVE}\n{JOUET}\n", JOUET)
         self.assertEqual(len(phrases), 1)
-        self.assertIn("Le produit LESSIVE X4 est à retourner en rayon", phrases[0])
-        self.assertIn("ne l'a pas commandé dans la nouvelle commande", phrases[0])
+        self.assertIn("Le produit LESSIVE X4 n'est plus anticipé", phrases[0])
+        self.assertIn("ne l'a pas repris dans la nouvelle commande", phrases[0])
+        self.assertIn("à retourner en rayon", phrases[0])
 
     def test_plusieurs_produits_absents_sont_enumeres(self):
         phrases = ap._phrases_comparaison_anticipation(f"{LESSIVE}\n{JOUET}\n{CAFE}\n", CAFE)
-        self.assertIn("Les produits LESSIVE X4 et JOUET BOIS (x2) sont à retourner en rayon",
+        self.assertIn("Les produits LESSIVE X4 et JOUET BOIS (x2) ne sont plus anticipés",
                       phrases[0])
-        self.assertIn("ne les a pas commandés", phrases[0])
+        self.assertIn("ne les a pas repris", phrases[0])
 
     def test_produit_ajoute_dans_la_nouvelle_commande(self):
         phrases = ap._phrases_comparaison_anticipation(LESSIVE, f"{LESSIVE}\n{JOUET}\n")
@@ -129,7 +132,7 @@ class TestComparaisonAnticipations(unittest.TestCase):
         self.assertEqual(len(phrases), 1)
         self.assertIn("réduit sa quantité de PATES (2 sur 3)", phrases[0])
         self.assertIn("à retourner en rayon", phrases[0])
-        self.assertNotIn("ne l'a pas commandé", phrases[0])
+        self.assertNotIn("n'est plus anticipé", phrases[0])
 
     def test_quantite_en_hausse_precise_le_supplement(self):
         phrases = ap._phrases_comparaison_anticipation(_ligne("111", "PATES", 1),
@@ -146,8 +149,12 @@ class TestComparaisonAnticipations(unittest.TestCase):
 
     def test_ancienne_anticipation_introuvable_aucune_affirmation(self):
         # Sans le bon de l'ancienne commande, tous les produits de la nouvelle
-        # passeraient pour des ajouts du client : le mail n'affirme rien.
-        self.assertEqual(ap._phrases_comparaison_anticipation("", f"{LESSIVE}\n"), [])
+        # passeraient pour des ajouts du client : le mail n'affirme rien sur
+        # les produits, mais dit que le detail manque.
+        phrases = ap._phrases_comparaison_anticipation("", f"{LESSIVE}\n")
+        self.assertEqual(len(phrases), 1)
+        self.assertIn("introuvable", phrases[0])
+        self.assertNotIn("LESSIVE", phrases[0])
 
 
 class TestMailAnticipationAnnulee(unittest.TestCase):
@@ -265,6 +272,67 @@ class TestAlerteImmediateOuDifferee(unittest.TestCase):
 
         self.assertEqual(self.gmail.envoyes, [])
         self.assertEqual(self.en_attente, {})
+
+
+class TestAnticipationDejaEnvoyee(unittest.TestCase):
+    """Une fois l'anticipation du jour envoyee, le bon individuel de la
+    commande est a la corbeille : son detail doit etre relu dans
+    bon_anticipation_envoye_JJ_MM.txt (cas de la commande 55502542 du
+    28/09/2026, dont le filet mignon n'etait plus anticipe dans 55517264)."""
+
+    FILET = _ligne("2000000123456", "FILET MIGNON DE PORC", 1)
+    ENVOYE = (f"#CDE:55500001\n{LESSIVE}\n"
+              f"#CDE:55502542\n{FILET}\n{JOUET}\n"
+              f"#CDE:55500003\n{CAFE}\n")
+
+    def setUp(self):
+        self._destinataire = ap.EMAIL_ANTICIPATION
+        ap.EMAIL_ANTICIPATION = "prepa@exemple.fr"
+        self.gmail = _FakeGmail()
+        self.fichiers_lus = []
+        self._patchs = []
+
+        def _patch(nom, valeur):
+            self._patchs.append((nom, getattr(ap, nom)))
+            setattr(ap, nom, valeur)
+
+        def _texte(d, mm, jj, nom):
+            self.fichiers_lus.append((mm, jj, nom))
+            return self.ENVOYE if nom == f"bon_anticipation_envoye_{jj}.txt" else ""
+
+        _patch("_telecharger_texte_archive_jour", _texte)
+        _patch("_telecharger_commandes_anticipation_envoyee",
+               lambda d, mm, jj: {"55502542"})
+        _patch("_client_archive_bdc", lambda d, num: ("Mme", "UHL", "LAURA"))
+        _patch("_telecharger_anticipation_drive",
+               lambda d, num: JOUET if num == "55517264" else "")
+        _patch("_telecharger_anticipation_archive_drive", lambda d, num: "")
+        _patch("_commande_deja_traitee", lambda d, num: True)
+
+    def tearDown(self):
+        for nom, valeur in reversed(self._patchs):
+            setattr(ap, nom, valeur)
+        ap.EMAIL_ANTICIPATION = self._destinataire
+
+    def test_extrait_le_bloc_de_la_commande(self):
+        self.assertEqual(
+            ap._anticipation_envoyee_commande(None, "55502542", "09_2026", "28_09"),
+            f"{self.FILET}\n{JOUET}\n")
+        self.assertIn(("09_2026", "28_09", "bon_anticipation_envoye_28_09.txt"),
+                      self.fichiers_lus)
+
+    def test_commande_absente_de_l_envoi(self):
+        self.assertEqual(
+            ap._anticipation_envoyee_commande(None, "99999999", "09_2026", "28_09"), "")
+
+    def test_alerte_detaille_le_produit_qui_n_est_plus_anticipe(self):
+        ap._alerter_si_commande_anticipee_annulee(
+            None, self.gmail, "55502542", "28_09", "09_2026", "55517264")
+
+        corps = _corps(self.gmail.envoyes[0])
+        self.assertIn("remplacée par la commande n°55517264", corps)
+        self.assertIn("Le produit FILET MIGNON DE PORC n&#x27;est plus anticipé", corps)
+        self.assertNotIn("JOUET BOIS", corps)
 
 
 class TestAlerteEnAttente(unittest.TestCase):

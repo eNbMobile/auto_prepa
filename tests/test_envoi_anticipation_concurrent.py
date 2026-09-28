@@ -169,6 +169,7 @@ class TestEnvoiAnticipation(unittest.TestCase):
         self.pdf_generes = []
         self.envoyees = []
         self.reinit = []
+        self.archives = []
         self.alertes_arrivees = []
 
         def _patch(module, nom, valeur):
@@ -195,6 +196,8 @@ class TestEnvoiAnticipation(unittest.TestCase):
         _patch(ac, "_envoyer_email_resultat", lambda *a: True)
         _patch(ac, "_maj_fichier_commandes_envoyees",
                lambda d, commandes, mm, jj: self.envoyees.extend(commandes))
+        _patch(ac, "_archiver_contenu_envoye",
+               lambda d, contenu, mm, jj: self.archives.append(contenu))
         _patch(ac, "_reinitialiser_dossier_jour_anticipation",
                lambda d, f, jj, mm, contenu: (self.reinit.append(contenu)
                                               or ([], ["55376672"])))
@@ -213,6 +216,7 @@ class TestEnvoiAnticipation(unittest.TestCase):
 
         self.assertEqual(self.pdf_generes, [ENVOYE])
         self.assertEqual(self.envoyees, ["55370001", "55370002"])
+        self.assertEqual(self.archives, [ENVOYE])
         self.assertEqual(self.reinit, [ENVOYE])
         self.assertEqual(self.alertes_arrivees, ["55376672"])
 
