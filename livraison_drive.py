@@ -237,6 +237,43 @@ def _premiere_ligne_libre(sheets_svc, spreadsheet_id, titre_onglet, colonne):
     return 2 + _MAX_LIGNES
 
 
+def _assurer_ligne(sheets_svc, spreadsheet_id, titre_onglet, ligne):
+    """Agrandit l'onglet si la ligne `ligne` depasse sa grille (onglet plein :
+    l'API Sheets refuse d'ecrire au-dela de la derniere ligne, "exceeds grid
+    limits"). Les lignes ajoutees reprennent la mise en forme de la derniere
+    ligne existante, ainsi que ses formules (ex. colonne Frais de l'onglet du
+    mois), recopiees avec leurs references relatives ajustees."""
+    res = sheets_svc.spreadsheets().get(
+        spreadsheetId=spreadsheet_id,
+        fields="sheets.properties(sheetId,title,gridProperties.rowCount)").execute()
+    props = next((s["properties"] for s in res.get("sheets", [])
+                  if s["properties"].get("title") == titre_onglet), None)
+    nb_lignes = (props or {}).get("gridProperties", {}).get("rowCount")
+    if nb_lignes is None or ligne <= nb_lignes:
+        return
+    sheet_id = props["sheetId"]
+    requetes = [{"appendDimension": {"sheetId": sheet_id, "dimension": "ROWS",
+                                     "length": ligne - nb_lignes}}]
+    if nb_lignes >= 2:  # derniere ligne = une ligne de donnees, pas l'en-tete
+        source = {"sheetId": sheet_id, "startRowIndex": nb_lignes - 1, "endRowIndex": nb_lignes}
+        destination = {"sheetId": sheet_id, "startRowIndex": nb_lignes, "endRowIndex": ligne}
+        requetes.append({"copyPaste": {"source": source, "destination": destination,
+                                       "pasteType": "PASTE_FORMAT"}})
+        derniere = sheets_svc.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id, range=f"'{titre_onglet}'!{nb_lignes}:{nb_lignes}",
+            valueRenderOption="FORMULA").execute().get("values", [[]])
+        for j, v in enumerate(derniere[0] if derniere else []):
+            if isinstance(v, str) and v.startswith("="):
+                colonnes = {"startColumnIndex": j, "endColumnIndex": j + 1}
+                requetes.append({"copyPaste": {
+                    "source": {**source, **colonnes},
+                    "destination": {**destination, **colonnes},
+                    "pasteType": "PASTE_FORMULA"}})
+    sheets_svc.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id, body={"requests": requetes}).execute()
+    print(f"    Onglet '{titre_onglet}' plein : {ligne - nb_lignes} ligne(s) ajoutee(s).")
+
+
 def _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom, prenom, numero_commande=None, km=None):
     """Renseigne (N° cde, Date, Nom, Prénom, Distance) sur la premiere ligne
     libre de l'onglet du mois de `cible` (colonne C = nom, sert de reference
@@ -250,6 +287,7 @@ def _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom, prenom, numero_co
         print(f"    ERREUR : onglet '{mois}' introuvable dans LIVRAISON DRIVE 2026.")
         return False
     ligne = _premiere_ligne_libre(sheets_svc, spreadsheet_id, onglet, "C")
+    _assurer_ligne(sheets_svc, spreadsheet_id, onglet, ligne)
     sheets_svc.spreadsheets().values().update(
         spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A{ligne}:E{ligne}",
         valueInputOption="USER_ENTERED",
@@ -273,6 +311,7 @@ def _inscrire_en_attente(sheets_svc, spreadsheet_id, cible, nom, prenom, numero_
     if not onglet:
         onglet = _creer_onglet_en_attente(sheets_svc, spreadsheet_id)
     ligne = _premiere_ligne_libre(sheets_svc, spreadsheet_id, onglet, "A")
+    _assurer_ligne(sheets_svc, spreadsheet_id, onglet, ligne)
     sheets_svc.spreadsheets().values().update(
         spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A{ligne}:E{ligne}",
         valueInputOption="USER_ENTERED",
