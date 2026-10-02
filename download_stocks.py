@@ -144,7 +144,14 @@ def main():
             drive_download(access, file_id_j1, "j1.xlsx")
             print(f"  → j1.xlsx ({os.path.getsize('j1.xlsx'):,} octets)")
         else:
-            print("  j1.xlsx absent du dossier Drive — stock de départ non disponible.")
+            # Sans stock de départ, aucun gencod n'est appairé et le contrôle
+            # annoncerait faussement "0 écart" : on arrête avant l'envoi du mail.
+            print("ERREUR : stock de départ introuvable — contrôle impossible.")
+            print("  Ni j1.xlsx dans le dossier Drive du contrôle, ni "
+                  f"stock_{jour}_soir.xlsx / stock_{jour}_j.xlsx dans Archives/stocks/.")
+            print("  Déposer l'export de stock du soir du "
+                  f"{date_debut.strftime('%d/%m/%Y')} sous le nom j1.xlsx puis relancer.")
+            sys.exit(1)
 
     work_dir = os.environ.get("WORK_DIR", "v 4.0.0")
     os.makedirs(work_dir, exist_ok=True)
