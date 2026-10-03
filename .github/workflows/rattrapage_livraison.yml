@@ -9,7 +9,12 @@ on:
     inputs:
       dates:
         description: "Jours de livraison a rattraper (JJ/MM/AAAA, separes par des espaces)"
-        required: true
+        required: false
+        default: ""
+      ajouter:
+        description: "Lignes a ajouter telles quelles : NUMERO;JJ/MM/AAAA;NOM;PRENOM;KM (separees par |)"
+        required: false
+        default: ""
       simulation:
         description: "Simulation (affiche sans rien ecrire)"
         type: boolean
@@ -48,8 +53,9 @@ jobs:
           GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
           DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
           DATES:                  ${{ inputs.dates }}
+          AJOUTER:                ${{ inputs.ajouter }}
           SIMULATION:             ${{ inputs.simulation && '--simulation' || '' }}
-        run: python3 bootstrap.py rattrapage_livraison.py --dates "$DATES" $SIMULATION
+        run: python3 bootstrap.py rattrapage_livraison.py --dates "$DATES" --ajouter "$AJOUTER" $SIMULATION
 
       - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
         continue-on-error: true

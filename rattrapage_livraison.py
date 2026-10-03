@@ -28,6 +28,7 @@ Pour chaque commande LIVRAISON du jour :
 
 Usage :
   rattrapage_livraison.py --dates "02/10/2026 03/10/2026" [--simulation]
+  rattrapage_livraison.py --ajouter "55256662;22/09/2026;ROBERT;NADINE;4,74"
 """
 
 import argparse
@@ -214,15 +215,47 @@ def rattraper(sheets_svc, spreadsheet_id, gmail_svc, drive_svc, dates, simulatio
             print(f"  - {c}")
 
 
+def lire_ajouts(texte):
+    """Lignes a ajouter telles quelles, separees par des retours a la ligne
+    ou '|' : "NUMERO;JJ/MM/AAAA;NOM;PRENOM;KM" (KM facultatif). Retourne
+    [(numero, date, nom, prenom, km_ou_None), ...]."""
+    ajouts = []
+    for bloc in re.split(r"[|\n]", texte or ""):
+        champs = [c.strip() for c in bloc.split(";")]
+        if len(champs) < 4 or not champs[0]:
+            continue
+        km = champs[4].replace(",", ".") if len(champs) > 4 and champs[4] else None
+        ajouts.append((champs[0], datetime.strptime(champs[1], "%d/%m/%Y").date(),
+                       champs[2].upper(), champs[3].upper(), float(km) if km else None))
+    return ajouts
+
+
+def ajouter(sheets_svc, spreadsheet_id, ajouts, simulation=False):
+    """Inscrit dans l'onglet du mois des lignes donnees a la main (ex. une
+    livraison passee supprimee a tort), sauf si le n° y figure deja."""
+    for numero, cible, nom, prenom, km in ajouts:
+        onglet = ld._trouver_onglet(sheets_svc, spreadsheet_id, ld.MOIS_FR[cible.month - 1])
+        if numero in _numeros_onglet(sheets_svc, spreadsheet_id, onglet, 0):
+            print(f"  {numero} {nom} {prenom} : deja dans '{onglet}', rien a faire.")
+            continue
+        if simulation:
+            print(f"  {numero} {nom} {prenom} ({cible.strftime('%d/%m')}) : A AJOUTER [simulation]")
+            continue
+        ld._inscrire_commande(sheets_svc, spreadsheet_id, cible, nom, prenom, numero, km)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--dates", required=True, help="Jours de livraison JJ/MM/AAAA")
+    parser.add_argument("--dates", default="", help="Jours de livraison JJ/MM/AAAA")
+    parser.add_argument("--ajouter", default="",
+                        help="Lignes a ajouter : NUMERO;JJ/MM/AAAA;NOM;PRENOM;KM (separees par |)")
     parser.add_argument("--simulation", action="store_true",
                         help="Affiche ce qui serait fait, sans rien ecrire")
     args = parser.parse_args()
     dates = lire_dates(args.dates)
-    if not dates:
-        print("ERREUR : aucune date JJ/MM/AAAA reconnue.")
+    ajouts = lire_ajouts(args.ajouter)
+    if not dates and not ajouts:
+        print("ERREUR : ni date JJ/MM/AAAA ni ligne a ajouter.")
         sys.exit(1)
 
     creds = ap.get_credentials()
@@ -231,7 +264,10 @@ def main():
     sheets_svc = build("sheets", "v4", credentials=creds)
     ap._charger_gmail_filters(drive_svc)
     spreadsheet_id = ld._charger_config_livraison(drive_svc)
-    rattraper(sheets_svc, spreadsheet_id, gmail_svc, drive_svc, dates, args.simulation)
+    if ajouts:
+        ajouter(sheets_svc, spreadsheet_id, ajouts, args.simulation)
+    if dates:
+        rattraper(sheets_svc, spreadsheet_id, gmail_svc, drive_svc, dates, args.simulation)
 
 
 if __name__ == "__main__":
