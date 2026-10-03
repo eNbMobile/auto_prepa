@@ -29,6 +29,7 @@ Pour chaque commande LIVRAISON du jour :
 Usage :
   rattrapage_livraison.py --dates "02/10/2026 03/10/2026" [--simulation]
   rattrapage_livraison.py --ajouter "55256662;22/09/2026;ROBERT;NADINE;4,74"
+  rattrapage_livraison.py --km "02/10/2026 03/10/2026"
 """
 
 import argparse
@@ -244,18 +245,65 @@ def ajouter(sheets_svc, spreadsheet_id, ajouts, simulation=False):
         ld._inscrire_commande(sheets_svc, spreadsheet_id, cible, nom, prenom, numero, km)
 
 
+def completer_km(sheets_svc, spreadsheet_id, drive_svc, dates, simulation=False):
+    """Complete la colonne km (vide) des lignes de l'onglet du mois dont la
+    date est dans `dates`, a partir de Shopopop ("Programmees" puis
+    "Terminees"), et retire le surlignage orange des cellules completees."""
+    token, drive_id = ld.connecter_shopopop(drive_svc)
+    if not token:
+        print("ERREUR : connexion Shopopop impossible, km non completes.")
+        return
+    restants = []
+    for date_str in dates:
+        cible = datetime.strptime(date_str, "%d/%m/%Y").date()
+        onglet = ld._trouver_onglet(sheets_svc, spreadsheet_id, ld.MOIS_FR[cible.month - 1])
+        if not onglet:
+            continue
+        res = sheets_svc.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{onglet}'!A2:E{1 + ld._MAX_LIGNES}").execute()
+        jour = cible.strftime("%d/%m")
+        print(f"\nKm du {date_str} :")
+        for i, row in enumerate(res.get("values", [])):
+            row = row + [""] * (5 - len(row))
+            numero, date_val, nom, prenom, km_val = (c.strip() for c in row[:5])
+            if date_val != jour or not nom or km_val:
+                continue
+            ligne = 2 + i
+            km = ld.shopopop.distance_km(token, drive_id, cible, f"{nom} {prenom}")
+            if km is None:
+                restants.append(f"{numero} {nom} {prenom} ({jour})")
+                continue
+            if simulation:
+                print(f"  {onglet} L{ligne} {numero} {nom} {prenom} : {km} km [simulation]")
+                continue
+            sheets_svc.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id, range=f"'{onglet}'!E{ligne}",
+                valueInputOption="USER_ENTERED", body={"values": [[km]]}).execute()
+            ld._effacer_marquage_km(sheets_svc, spreadsheet_id, onglet, ligne)
+            print(f"  {onglet} L{ligne} {numero} {nom} {prenom} : {km} km, surlignage retire.")
+            time.sleep(_PAUSE_SHEETS_SECONDES / 2)
+    if restants:
+        print(f"\n{len(restants)} km toujours introuvable(s) sur Shopopop :")
+        for r in restants:
+            print(f"  - {r}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--dates", default="", help="Jours de livraison JJ/MM/AAAA")
     parser.add_argument("--ajouter", default="",
                         help="Lignes a ajouter : NUMERO;JJ/MM/AAAA;NOM;PRENOM;KM (separees par |)")
+    parser.add_argument("--km", default="",
+                        help="Jours JJ/MM/AAAA dont completer les km vides depuis Shopopop")
     parser.add_argument("--simulation", action="store_true",
                         help="Affiche ce qui serait fait, sans rien ecrire")
     args = parser.parse_args()
     dates = lire_dates(args.dates)
     ajouts = lire_ajouts(args.ajouter)
-    if not dates and not ajouts:
-        print("ERREUR : ni date JJ/MM/AAAA ni ligne a ajouter.")
+    dates_km = lire_dates(args.km)
+    if not dates and not ajouts and not dates_km:
+        print("ERREUR : ni date JJ/MM/AAAA, ni ligne a ajouter, ni km a completer.")
         sys.exit(1)
 
     creds = ap.get_credentials()
@@ -268,6 +316,8 @@ def main():
         ajouter(sheets_svc, spreadsheet_id, ajouts, args.simulation)
     if dates:
         rattraper(sheets_svc, spreadsheet_id, gmail_svc, drive_svc, dates, args.simulation)
+    if dates_km:
+        completer_km(sheets_svc, spreadsheet_id, drive_svc, dates_km, args.simulation)
 
 
 if __name__ == "__main__":
