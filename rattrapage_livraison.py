@@ -38,14 +38,39 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime
 
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 import auto_prepa as ap
 import livraison_drive as ld
 
 _RE_NUMERO = re.compile(r'N°\s*cde\s*[:\s]+(\d+)')
+
+# Pause entre deux lectures d'email : une journee compte ~200 confirmations,
+# lues d'affilee elles depassent le quota Gmail "Units per minute per user"
+# (HttpError 403 rateLimitExceeded, run du 03/10/2026).
+_PAUSE_GMAIL_SECONDES = 0.5
+_TENTATIVES_GMAIL = 6
+
+
+def _executer(requete):
+    """execute() avec retentatives (attente croissante) sur depassement de
+    quota Gmail (403 rateLimitExceeded / 429) et erreurs serveur."""
+    for tentative in range(_TENTATIVES_GMAIL):
+        try:
+            return requete.execute()
+        except HttpError as e:
+            statut = getattr(e.resp, "status", 0)
+            detail = (e.content or b"").decode("utf-8", errors="replace") + str(e)
+            quota = statut == 429 or (statut == 403 and "rateLimitExceeded" in detail)
+            if not (quota or statut >= 500) or tentative == _TENTATIVES_GMAIL - 1:
+                raise
+            attente = 2 ** (tentative + 2)
+            print(f"  Gmail {statut} (quota), nouvelle tentative dans {attente}s...")
+            time.sleep(attente)
 
 
 def lire_dates(texte):
@@ -85,8 +110,8 @@ def commandes_livraison_du_jour(gmail_svc, date_str):
     q = f'from:{ap.GMAIL_CONF_FROM} subject:"{ap.GMAIL_CONF_SUBJECT}" subject:"{date_str}"'
     messages, page = [], None
     while True:
-        res = gmail_svc.users().messages().list(
-            userId="me", q=q, maxResults=100, pageToken=page).execute()
+        res = _executer(gmail_svc.users().messages().list(
+            userId="me", q=q, maxResults=100, pageToken=page))
         messages += res.get("messages", [])
         page = res.get("nextPageToken")
         if not page:
@@ -94,7 +119,8 @@ def commandes_livraison_du_jour(gmail_svc, date_str):
 
     commandes, vus = [], set()
     for m in messages:
-        msg = gmail_svc.users().messages().get(userId="me", id=m["id"], format="full").execute()
+        time.sleep(_PAUSE_GMAIL_SECONDES)
+        msg = _executer(gmail_svc.users().messages().get(userId="me", id=m["id"], format="full"))
         headers = {h["name"]: h["value"] for h in msg["payload"].get("headers", [])}
         sujet = headers.get("Subject", "")
         match_num = _RE_NUMERO.search(sujet)
@@ -113,8 +139,8 @@ def commandes_livraison_du_jour(gmail_svc, date_str):
         if not attachment_id:
             print(f"  {numero} : pas de bon_encaissement.pdf, ignoree.")
             continue
-        att = gmail_svc.users().messages().attachments().get(
-            userId="me", messageId=m["id"], id=attachment_id).execute()
+        att = _executer(gmail_svc.users().messages().attachments().get(
+            userId="me", messageId=m["id"], id=attachment_id))
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             f.write(base64.urlsafe_b64decode(att["data"] + "=="))
             chemin = f.name
