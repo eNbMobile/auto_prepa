@@ -187,6 +187,28 @@ class TestRattrapage(unittest.TestCase):
         with self.assertRaises(ValueError):
             rl.lire_dates("31/02/2026")
 
+    def test_quota_gmail_retente(self):
+        from googleapiclient.errors import HttpError
+
+        class _Resp(dict):
+            status = 403
+            reason = "Forbidden"
+
+        class _Req:
+            def __init__(self):
+                self.n = 0
+
+            def execute(self):
+                self.n += 1
+                if self.n < 3:
+                    raise HttpError(_Resp(), b'{"error": {"errors": [{"reason": "rateLimitExceeded"}]}}')
+                return {"ok": True}
+
+        req = _Req()
+        with mock.patch.object(rl.time, "sleep"):
+            self.assertEqual(rl._executer(req), {"ok": True})
+        self.assertEqual(req.n, 3)
+
     def test_est_livraison(self):
         self.assertTrue(rl.est_livraison("mon mode de remise Je reçois mes courses\n chez moi"))
         self.assertFalse(rl.est_livraison("mon mode de remise Je récupère mes courses au drive"))
