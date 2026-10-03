@@ -1,0 +1,65 @@
+name: Rattrapage Livraison Drive
+
+# Reinscrit dans LIVRAISON DRIVE 2026 les commandes LIVRAISON des jours
+# indiques qui y manquent (cf. rattrapage_livraison.py), a partir des emails
+# de confirmation. Sans danger a relancer : une commande deja inscrite est
+# ignoree.
+on:
+  workflow_dispatch:
+    inputs:
+      dates:
+        description: "Jours de livraison a rattraper (JJ/MM/AAAA, separes par des espaces)"
+        required: true
+      simulation:
+        description: "Simulation (affiche sans rien ecrire)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: livraison_drive_en_attente
+  cancel-in-progress: false
+
+jobs:
+  rattrapage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer pdftotext (poppler-utils)
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: poppler-utils
+          version: 1.0
+
+      - name: Installer Python et dépendances
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer les dépendances pip
+        run: pip install -r requirements.txt
+
+      - name: Rattraper les commandes LIVRAISON
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          DATES:                  ${{ inputs.dates }}
+          SIMULATION:             ${{ inputs.simulation && '--simulation' || '' }}
+        run: python3 bootstrap.py rattrapage_livraison.py --dates "$DATES" $SIMULATION
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+            echo "Secret GOOGLE_TOKEN_JSON mis à jour."
+          fi
