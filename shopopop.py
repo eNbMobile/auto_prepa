@@ -253,14 +253,17 @@ def _chercher_destinataire(items, nom_complet):
 _STATUTS_TERMINEES = ("done", "finished", "delivered", "terminated", "completed",
                       "ended", "closed", "validated", "archived", "history")
 _statut_terminees = None
+# Passe a True quand aucun statut n'a ete accepte : inutile de reessayer toute
+# la liste pour chaque commande du meme run.
+_terminees_indisponible = False
 
 
 def _rechercher_livraison_terminee(access_token, drive_id, date_livraison, nom_complet):
     """Comme _rechercher_livraison_programmee, dans l'onglet "Terminees" :
     une livraison faite quitte "Programmees" mais y reste consultable, avec
     sa distance. Retourne l'item brut ou None."""
-    global _statut_terminees
-    if not access_token or not _tokens(nom_complet):
+    global _statut_terminees, _terminees_indisponible
+    if not access_token or not _tokens(nom_complet) or _terminees_indisponible:
         return None
     statuts = (_statut_terminees,) if _statut_terminees else _STATUTS_TERMINEES
     for statut in statuts:
@@ -268,7 +271,12 @@ def _rechercher_livraison_terminee(access_token, drive_id, date_livraison, nom_c
             items = _lister_livraisons(access_token, drive_id, date_livraison, statut)
         except urllib.error.HTTPError as e:
             if e.code in (400, 422) and not _statut_terminees:
-                print(f"    Shopopop : statut '{statut}' refuse (HTTP {e.code}).")
+                try:
+                    detail = e.read().decode("utf-8", errors="replace")[:600]
+                except Exception:
+                    detail = ""
+                # Le message d'erreur liste souvent les valeurs autorisees.
+                print(f"    Shopopop : statut '{statut}' refuse (HTTP {e.code}) : {detail}")
                 continue
             raise
         if not _statut_terminees:
@@ -279,6 +287,7 @@ def _rechercher_livraison_terminee(access_token, drive_id, date_livraison, nom_c
             print(f"    Shopopop : '{nom_complet}' absent des {len(noms_vus)} livraison(s) "
                   f"'{statut}' du {date_livraison.strftime('%d/%m/%Y')}.")
         return it
+    _terminees_indisponible = True
     print("    Shopopop : aucun statut 'Terminees' accepte par l'API "
           f"(essayes : {', '.join(_STATUTS_TERMINEES)}).")
     return None
