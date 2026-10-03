@@ -407,6 +407,15 @@ def _telecharger_bdc_archive_drive(drive_svc, numero):
         return None
 
 
+def _livraison_passee(date_cde, aujourdhui=None):
+    """True si `date_cde` (JJ/MM/AAAA) est anterieure a aujourd'hui."""
+    try:
+        jour = datetime.strptime(date_cde or "", "%d/%m/%Y").date()
+    except ValueError:
+        return False
+    return jour < (aujourdhui or datetime.now(_TZ).date())
+
+
 def _traiter_annulation_livraison(drive_svc, sheets_svc, numero):
     """Si la commande annulee ou remplacee etait une LIVRAISON, supprime sa
     ligne dans LIVRAISON DRIVE 2026. Nom/prenom/date sont extraits de
@@ -425,6 +434,14 @@ def _traiter_annulation_livraison(drive_svc, sheets_svc, numero):
             print(f"    ECHEC pdftotext sur l'archive BDC {numero}, annulation livraison ignoree.")
             return None
         civilite, nom, prenom, date_cde, creneau = extraire_client_creneau_pdf(pt.stdout)
+        if _livraison_passee(date_cde):
+            # Une livraison passee a eu lieu : sa ligne doit rester (facture
+            # du mois). Le 03/10/2026, la cliente de la cde 55256662 (livree
+            # le 22/09) a utilise "modifier ma commande" pour en passer une
+            # nouvelle (55792220) : sa ligne de septembre avait ete supprimee.
+            print(f"    Cde {numero} livree le {date_cde} (date passee) : "
+                  f"ligne LIVRAISON DRIVE 2026 conservee.")
+            return None
         if livraison_drive.annuler_commande_livraison(
                 sheets_svc, LIVRAISON_SPREADSHEET_ID, nom, prenom, date_cde, numero_commande=numero):
             return nom, prenom, date_cde

@@ -209,6 +209,17 @@ class TestRattrapage(unittest.TestCase):
             self.assertEqual(rl._executer(req), {"ok": True})
         self.assertEqual(req.n, 3)
 
+    def test_lire_ajouts(self):
+        self.assertEqual(rl.lire_ajouts("55256662;22/09/2026;Robert;Nadine;4,74"),
+                         [("55256662", date(2026, 9, 22), "ROBERT", "NADINE", 4.74)])
+        self.assertEqual(rl.lire_ajouts(""), [])
+
+    def test_livraison_passee_jamais_supprimee(self):
+        import auto_prepa as ap
+        self.assertTrue(ap._livraison_passee("22/09/2026", date(2026, 10, 3)))
+        self.assertFalse(ap._livraison_passee("03/10/2026", date(2026, 10, 3)))
+        self.assertFalse(ap._livraison_passee("", date(2026, 10, 3)))
+
     def test_est_livraison(self):
         self.assertTrue(rl.est_livraison("mon mode de remise Je reçois mes courses\n chez moi"))
         self.assertFalse(rl.est_livraison("mon mode de remise Je récupère mes courses au drive"))
