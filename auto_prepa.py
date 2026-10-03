@@ -413,9 +413,8 @@ def _traiter_annulation_livraison(drive_svc, sheets_svc, numero):
     l'archive BDC Drive, seule source encore disponible a ce stade (le mail
     d'annulation/remplacement ne contient que le numero de commande).
     Retourne (nom, prenom, date_cde) si une ligne a effectivement ete
-    supprimee (la commande etait bien une LIVRAISON) — utile a l'appelant
-    pour la reinscrire sous le nouveau numero en cas de remplacement — None
-    sinon (commande non-LIVRAISON, ou archive introuvable/illisible)."""
+    supprimee (la commande etait bien une LIVRAISON), None sinon (commande
+    non-LIVRAISON, ou archive introuvable/illisible)."""
     pdf_path = _telecharger_bdc_archive_drive(drive_svc, numero)
     if not pdf_path:
         return None
@@ -507,9 +506,9 @@ def _etape_annexe_annulation(numero, etape, *args):
 def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc,
                                    shopopop_token=None, shopopop_drive_id=None, shopopop_connecte=False):
     """Lit les mails de modification de commande, supprime les anciens bons, archive les mails.
-    Retourne (shopopop_token, shopopop_drive_id, shopopop_connecte), a jour si une
-    connexion Shopopop a ete etablie ici (reinscription d'un remplacement en
-    LIVRAISON), pour que l'appelant la reutilise sans se reconnecter."""
+    Retourne (shopopop_token, shopopop_drive_id, shopopop_connecte) tels que
+    recus : aucune connexion Shopopop n'est plus ouverte ici (la commande de
+    remplacement est inscrite par le traitement de son propre email)."""
     try:
         label_id = _get_or_create_gmail_label(gmail_svc, GMAIL_LABEL_NOM)
         messages = []
@@ -544,19 +543,15 @@ def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc,
                 _etape_annexe_annulation(
                     num_ancien, _traiter_commande_potentiellement_anticipee,
                     drive_svc, gmail_svc, num_ancien, num_nouveau)
-                resultat_livraison = _etape_annexe_annulation(
+                # La ligne LIVRAISON de l'ancienne commande est seulement
+                # retiree : la nouvelle est inscrite par le traitement de son
+                # propre email de confirmation, avec SA date de livraison. La
+                # reinscrire ici, sous la date de l'ancienne commande, la
+                # dupliquait (55440584 deux fois le 26/09/2026) et, quand le
+                # client avait change de jour, l'inscrivait au mauvais jour
+                # (55792220 notee au 22/09 au lieu du 03/10/2026).
+                _etape_annexe_annulation(
                     num_ancien, _traiter_annulation_livraison, drive_svc, sheets_svc, num_ancien)
-                if resultat_livraison:
-                    nom_l, prenom_l, date_l = resultat_livraison
-                    if not shopopop_connecte:
-                        shopopop_token, shopopop_drive_id = livraison_drive.connecter_shopopop(drive_svc)
-                        shopopop_connecte = True
-                    km_manquant = livraison_drive.traiter_commande_livraison(
-                        sheets_svc, LIVRAISON_SPREADSHEET_ID, nom_l, prenom_l, date_l,
-                        numero_commande=num_nouveau,
-                        shopopop_token=shopopop_token, shopopop_drive_id=shopopop_drive_id)
-                    if km_manquant:
-                        livraison_drive.noter_km_en_attente(drive_svc, num_nouveau)
                 _supprimer_bons_drive(drive_svc, num_ancien)
                 _supprimer_anticipation_archive_drive(drive_svc, num_ancien)
                 _supprimer_bdc_drive(drive_svc, num_ancien)

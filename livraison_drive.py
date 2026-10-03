@@ -224,6 +224,67 @@ def _creer_onglet_en_attente(sheets_svc, spreadsheet_id):
     return ONGLET_EN_ATTENTE
 
 
+def _creer_onglet_mois(sheets_svc, spreadsheet_id, cible):
+    """Cree l'onglet du mois de `cible` quand il n'existe pas encore (le
+    02/10/2026, l'onglet OCTOBRE manquait : chaque commande du mois etait
+    perdue sur "onglet introuvable", et les commandes EN ATTENTE promues a
+    14h aussi). L'onglet est une copie du mois precedent le plus recent
+    (en-tete, formule Frais, encadre de facture), place juste apres lui,
+    dont les donnees des colonnes A:E (N° cde, Date, Nom, Prenom, Distance)
+    et leur surlignage (vert livree, orange km) sont effaces. Sans mois
+    precedent, un onglet vierge avec le seul en-tete est cree.
+    Retourne le titre de l'onglet cree."""
+    mois = MOIS_FR[cible.month - 1]
+    res = sheets_svc.spreadsheets().get(
+        spreadsheetId=spreadsheet_id,
+        fields="sheets.properties(sheetId,title,index,gridProperties.rowCount)").execute()
+    proprietes = {_normaliser(s["properties"]["title"]): s["properties"]
+                  for s in res.get("sheets", [])}
+    source = None
+    for recul in range(1, 12):
+        source = proprietes.get(MOIS_FR[(cible.month - 1 - recul) % 12])
+        if source:
+            break
+
+    if not source:
+        sheets_svc.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"requests": [{"addSheet": {"properties": {"title": mois}}}]},
+        ).execute()
+        sheets_svc.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id, range=f"'{mois}'!A1:F1",
+            valueInputOption="USER_ENTERED",
+            body={"values": [["N° cde", "Date", "Nom", "Prénom", "Distance", "Frais"]]},
+        ).execute()
+        print(f"    Onglet '{mois}' cree (vierge) dans LIVRAISON DRIVE 2026.")
+        return mois
+
+    rep = sheets_svc.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={"requests": [{"duplicateSheet": {
+            "sourceSheetId": source["sheetId"],
+            "insertSheetIndex": source.get("index", 0) + 1,
+            "newSheetName": mois,
+        }}]},
+    ).execute()
+    nouveau_id = rep["replies"][0]["duplicateSheet"]["properties"]["sheetId"]
+    nb_lignes = source.get("gridProperties", {}).get("rowCount") or (1 + _MAX_LIGNES)
+    sheets_svc.spreadsheets().values().clear(
+        spreadsheetId=spreadsheet_id, range=f"'{mois}'!A2:E{nb_lignes}", body={}).execute()
+    sheets_svc.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={"requests": [{"repeatCell": {
+            "range": {"sheetId": nouveau_id, "startRowIndex": 1, "endRowIndex": nb_lignes,
+                      "startColumnIndex": 0, "endColumnIndex": 5},
+            "cell": {"userEnteredFormat": {}},
+            "fields": "userEnteredFormat.backgroundColor",
+        }}]},
+    ).execute()
+    print(f"    Onglet '{mois}' cree dans LIVRAISON DRIVE 2026 (copie de "
+          f"'{source['title']}', donnees effacees).")
+    return mois
+
+
 def _premiere_ligne_libre(sheets_svc, spreadsheet_id, titre_onglet, colonne):
     """Premiere ligne (>= 2) ou `colonne` est vide dans l'onglet, dans les
     _MAX_LIGNES lignes suivant l'en-tete."""
@@ -326,12 +387,12 @@ def _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom, prenom, numero_co
     pour trouver la ligne libre). `km` (distance magasin -> client, recuperee
     sur Shopopop) est laisse vide si absent/introuvable, a completer a la
     main. La colonne Frais n'est jamais ecrite ici : c'est une formule du
-    classeur."""
+    classeur. L'onglet du mois est cree s'il n'existe pas encore (cf.
+    _creer_onglet_mois). Retourne le numero de la ligne ecrite."""
     mois = MOIS_FR[cible.month - 1]
     onglet = _trouver_onglet(sheets_svc, spreadsheet_id, mois)
     if not onglet:
-        print(f"    ERREUR : onglet '{mois}' introuvable dans LIVRAISON DRIVE 2026.")
-        return False
+        onglet = _creer_onglet_mois(sheets_svc, spreadsheet_id, cible)
     ligne = _premiere_ligne_libre(sheets_svc, spreadsheet_id, onglet, "C")
     _assurer_ligne(sheets_svc, spreadsheet_id, onglet, ligne)
     sheets_svc.spreadsheets().values().update(
@@ -344,7 +405,7 @@ def _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom, prenom, numero_co
           f"{cible.strftime('%d/%m')} | {nom} {prenom}"
           + (f" | {km} km" if km is not None else " | km non trouve"))
     _etendre_plages(sheets_svc, spreadsheet_id, onglet, ligne)
-    return True
+    return ligne
 
 
 def _inscrire_en_attente(sheets_svc, spreadsheet_id, cible, nom, prenom, numero_commande=None, km=None):
@@ -430,13 +491,16 @@ def _supprimer_ligne(sheets_svc, spreadsheet_id, titre_onglet, ligne):
 
 def _chercher_et_supprimer(sheets_svc, spreadsheet_id, titre_onglet,
                             idx_nom, idx_date, nb_colonnes, tokens_cible, jour_str,
-                            idx_prenom=None):
+                            idx_prenom=None, idx_numero=None, numero_cible=None):
     """Cherche, dans les nb_colonnes premieres colonnes de `titre_onglet`, une
     ligne dont le nom (colonne idx_nom, complete de idx_prenom si fourni)
     correspond a `tokens_cible` (ensemble de mots, cf. _tokens_personne —
     insensible a la frontiere nom/prenom et a un trait d'union absent d'un
     cote) et la colonne idx_date = jour_str (JJ/MM) ; si trouvee, supprime la
-    ligne.
+    ligne. Si `idx_numero` et `numero_cible` sont fournis, une ligne portant
+    un AUTRE n° de commande n'est jamais supprimee : c'est une autre commande
+    du meme client le meme jour (typiquement la commande de remplacement,
+    deja inscrite, d'une commande modifiee).
     Retourne True si une ligne a ete trouvee et supprimee."""
     derniere_colonne = chr(ord('A') + nb_colonnes - 1)
     res = sheets_svc.spreadsheets().values().get(
@@ -444,6 +508,10 @@ def _chercher_et_supprimer(sheets_svc, spreadsheet_id, titre_onglet,
         range=f"'{titre_onglet}'!A2:{derniere_colonne}{1 + _MAX_LIGNES}").execute()
     lignes = res.get("values", [])
     for i, row in enumerate(lignes):
+        if idx_numero is not None and numero_cible:
+            numero_val = row[idx_numero].strip() if idx_numero < len(row) and row[idx_numero] else ""
+            if numero_val.isdigit() and numero_val != numero_cible:
+                continue
         nom_val = row[idx_nom].strip() if idx_nom < len(row) and row[idx_nom] else ""
         prenom_val = (row[idx_prenom].strip()
                       if idx_prenom is not None and idx_prenom < len(row) and row[idx_prenom] else "")
@@ -494,10 +562,11 @@ def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
     Localise la ligne correspondante dans LIVRAISON DRIVE 2026 — d'abord
     l'onglet du mois de la commande, puis EN ATTENTE si absente du mois — et
     la supprime.
-    Dans EN ATTENTE, le matching se fait en priorite sur `numero_commande`
+    Dans chaque onglet, le matching se fait en priorite sur `numero_commande`
     (identifiant fiable, contrairement au nom+jour qui peut correspondre a
     plusieurs commandes du meme client le meme jour), avec repli sur
-    nom+jour si le numero est absent ou introuvable.
+    nom+jour si le numero est absent ou introuvable — repli qui epargne
+    toute ligne portant un autre numero.
     Retourne True si une ligne a ete trouvee et supprimee, False sinon (rien
     a supprimer, ou Sheets/donnees indisponibles) — permet a l'appelant de
     savoir si la commande etait bien une LIVRAISON, notamment pour la
@@ -517,18 +586,23 @@ def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
     tokens_cible = _tokens_personne(nom, prenom)
     jour_str = date_cde.strftime("%d/%m")
 
+    numero_str = str(numero_commande).strip() if numero_commande else ""
     try:
         mois = MOIS_FR[date_cde.month - 1]
         onglet_mois = _trouver_onglet(sheets_svc, spreadsheet_id, mois)
+        if onglet_mois and numero_str and _chercher_et_supprimer_numero(
+                sheets_svc, spreadsheet_id, onglet_mois,
+                idx_numero=0, nb_colonnes=5, numero_cible=numero_str):
+            return True
         if onglet_mois and _chercher_et_supprimer(
                 sheets_svc, spreadsheet_id, onglet_mois,
                 idx_nom=2, idx_prenom=3, idx_date=1, nb_colonnes=5,
-                tokens_cible=tokens_cible, jour_str=jour_str):
+                tokens_cible=tokens_cible, jour_str=jour_str,
+                idx_numero=0, numero_cible=numero_str):
             return True
 
         onglet_attente = _trouver_onglet(sheets_svc, spreadsheet_id, ONGLET_EN_ATTENTE)
         if onglet_attente:
-            numero_str = str(numero_commande).strip() if numero_commande else ""
             if numero_str and _chercher_et_supprimer_numero(
                     sheets_svc, spreadsheet_id, onglet_attente,
                     idx_numero=3, nb_colonnes=5, numero_cible=numero_str):
@@ -536,7 +610,8 @@ def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
             if _chercher_et_supprimer(
                     sheets_svc, spreadsheet_id, onglet_attente,
                     idx_nom=0, idx_prenom=1, idx_date=2, nb_colonnes=5,
-                    tokens_cible=tokens_cible, jour_str=jour_str):
+                    tokens_cible=tokens_cible, jour_str=jour_str,
+                    idx_numero=3, numero_cible=numero_str):
                 return True
 
         print(f"    Aucune ligne LIVRAISON DRIVE 2026 trouvee pour {nom} {prenom} "
@@ -1104,9 +1179,13 @@ def traiter_en_attente(sheets_svc, spreadsheet_id, maintenant=None):
     print(f"  EN ATTENTE : {len(a_traiter)} commande(s) pour le {lendemain.strftime('%d/%m')}, "
           f"{len(a_garder)} conservee(s).")
 
+    # Une commande qui n'a pas pu etre inscrite reste dans EN ATTENTE (sinon
+    # l'effacement ci-dessous la perdrait) : elle sera retentee au prochain
+    # passage, le garde-fou d'auto_prepa.py la voyant toujours a promouvoir.
     for cible, nom, prenom, numero_commande, km in a_traiter:
-        _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom, prenom,
-                            numero_commande or None, km or None)
+        if not _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom, prenom,
+                                   numero_commande or None, km or None):
+            a_garder.append((nom, prenom, cible.strftime("%d/%m"), numero_commande, km))
 
     sheets_svc.spreadsheets().values().clear(
         spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A2:E{1 + _MAX_LIGNES}", body={}).execute()
