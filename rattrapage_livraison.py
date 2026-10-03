@@ -53,6 +53,11 @@ _RE_NUMERO = re.compile(r'N°\s*cde\s*[:\s]+(\d+)')
 # lues d'affilee elles depassent le quota Gmail "Units per minute per user"
 # (HttpError 403 rateLimitExceeded, run du 03/10/2026).
 _PAUSE_GMAIL_SECONDES = 0.5
+
+# Pause apres chaque commande inscrite : une inscription coute une dizaine de
+# lectures Sheets, et le quota est de 60 lectures/minute (HttpError 429 au
+# 9e enregistrement du run du 03/10/2026).
+_PAUSE_SHEETS_SECONDES = 12
 _TENTATIVES_GMAIL = 6
 
 
@@ -201,6 +206,7 @@ def rattraper(sheets_svc, spreadsheet_id, gmail_svc, drive_svc, dates, simulatio
                 ld._marquer_km_a_completer(sheets_svc, spreadsheet_id, onglet, ligne)
                 a_completer.append(f"{numero} {nom} {prenom} ({cible.strftime('%d/%m')})")
             deja.add(numero)
+            time.sleep(_PAUSE_SHEETS_SECONDES)
 
     if a_completer:
         print(f"\n{len(a_completer)} km a completer a la main (cellule en orange) :")
