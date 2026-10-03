@@ -45,9 +45,10 @@ def _faux_lister(par_statut):
 class TestTerminees(unittest.TestCase):
     def setUp(self):
         shopopop._statut_terminees = None
+        shopopop._terminees_indisponible = False
 
     def tearDown(self):
-        shopopop._statut_terminees = None
+        self.setUp()
 
     def test_programmee_trouvee_sans_chercher_terminees(self):
         lister, appels = _faux_lister({"schedule": [_item("Nadine", "Robert", 4740)]})
