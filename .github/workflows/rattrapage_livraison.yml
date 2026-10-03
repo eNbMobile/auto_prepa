@@ -15,6 +15,10 @@ on:
         description: "Lignes a ajouter telles quelles : NUMERO;JJ/MM/AAAA;NOM;PRENOM;KM (separees par |)"
         required: false
         default: ""
+      km:
+        description: "Jours dont completer les km vides depuis Shopopop (JJ/MM/AAAA)"
+        required: false
+        default: ""
       simulation:
         description: "Simulation (affiche sans rien ecrire)"
         type: boolean
@@ -54,8 +58,9 @@ jobs:
           DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
           DATES:                  ${{ inputs.dates }}
           AJOUTER:                ${{ inputs.ajouter }}
+          KM:                     ${{ inputs.km }}
           SIMULATION:             ${{ inputs.simulation && '--simulation' || '' }}
-        run: python3 bootstrap.py rattrapage_livraison.py --dates "$DATES" --ajouter "$AJOUTER" $SIMULATION
+        run: python3 bootstrap.py rattrapage_livraison.py --dates "$DATES" --ajouter "$AJOUTER" --km "$KM" $SIMULATION
 
       - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
         continue-on-error: true

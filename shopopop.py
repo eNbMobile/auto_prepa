@@ -6,8 +6,8 @@ DRIVE 2026) auprès du back office pro Shopopop (app.shopopop.com).
 Reproduit en HTTP pur (urllib, pas de navigateur) le flux OAuth2
 Authorization Code + PKCE que fait le navigateur contre Keycloak
 (auth-sso.shopopop.com), puis interroge l'API back-office
-(api-backoffice.shopopop.com) qui alimente l'onglet "Livraisons > Programmées"
-du site. Identifiants attendus dans config.json (clés "ID_Shopopop" et
+(api-backoffice.shopopop.com) qui alimente les onglets "Livraisons >
+Programmées" et "Terminées" du site. Identifiants attendus dans config.json (clés "ID_Shopopop" et
 "MDP_Shopopop"), chargés par livraison_drive.py.
 """
 import base64
@@ -203,9 +203,89 @@ def login(email, mot_de_passe):
         return None
 
 
+def _lister_livraisons(access_token, drive_id, date_livraison, statut):
+    """Livraisons (items bruts) du magasin `drive_id` prevues pour
+    `date_livraison` dans l'onglet de statut `statut` ("schedule" =
+    Programmees), toutes pages confondues. Leve urllib.error.HTTPError si
+    l'API refuse la requete (400 pour un statut inconnu)."""
+    debut_paris = datetime.combine(date_livraison, time.min, tzinfo=_TZ)
+    fin_paris = datetime.combine(date_livraison, time.max, tzinfo=_TZ)
+    debut_utc = debut_paris.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    fin_utc = fin_paris.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%S.999Z")
+
+    tous, page = [], 1
+    while True:
+        url = _API_BASE + "/deliveries?" + urllib.parse.urlencode({
+            "drive_id": drive_id, "order": "ASC", "page": page, "per_page": 50,
+            "status": statut,
+            "withdrawal_start_utc": debut_utc,
+            "withdrawal_end_utc": fin_utc,
+        })
+        req = urllib.request.Request(url, headers={
+            **_HEADERS_NAVIGATEUR,
+            "Authorization": f"Bearer {access_token}", "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        items = data.get("items", [])
+        tous += items
+        if len(items) < 50:
+            return tous
+        page += 1
+
+
+def _chercher_destinataire(items, nom_complet):
+    """(item dont le destinataire correspond a `nom_complet`, ou None ;
+    noms des destinataires rencontres)."""
+    cible = _tokens(nom_complet)
+    noms_vus = []
+    for it in items:
+        dest = it.get("recipient") or {}
+        nom_dest = f"{dest.get('first_name', '')} {dest.get('last_name', '')}"
+        if _tokens(nom_dest) == cible:
+            return it, noms_vus
+        noms_vus.append(nom_dest)
+    return None, noms_vus
+
+
+# Valeurs essayees pour le parametre "status" de l'onglet "Terminees" (le
+# code exact n'est pas documente ; l'API repond 400 a un statut inconnu). La
+# premiere acceptee est memorisee pour la suite de l'execution.
+_STATUTS_TERMINEES = ("done", "finished", "delivered", "terminated", "completed",
+                      "ended", "closed", "validated", "archived", "history")
+_statut_terminees = None
+
+
+def _rechercher_livraison_terminee(access_token, drive_id, date_livraison, nom_complet):
+    """Comme _rechercher_livraison_programmee, dans l'onglet "Terminees" :
+    une livraison faite quitte "Programmees" mais y reste consultable, avec
+    sa distance. Retourne l'item brut ou None."""
+    global _statut_terminees
+    if not access_token or not _tokens(nom_complet):
+        return None
+    statuts = (_statut_terminees,) if _statut_terminees else _STATUTS_TERMINEES
+    for statut in statuts:
+        try:
+            items = _lister_livraisons(access_token, drive_id, date_livraison, statut)
+        except urllib.error.HTTPError as e:
+            if e.code in (400, 422) and not _statut_terminees:
+                print(f"    Shopopop : statut '{statut}' refuse (HTTP {e.code}).")
+                continue
+            raise
+        if not _statut_terminees:
+            print(f"    Shopopop : statut '{statut}' accepte pour l'onglet 'Terminees'.")
+            _statut_terminees = statut
+        it, noms_vus = _chercher_destinataire(items, nom_complet)
+        if not it:
+            print(f"    Shopopop : '{nom_complet}' absent des {len(noms_vus)} livraison(s) "
+                  f"'{statut}' du {date_livraison.strftime('%d/%m/%Y')}.")
+        return it
+    print("    Shopopop : aucun statut 'Terminees' accepte par l'API "
+          f"(essayes : {', '.join(_STATUTS_TERMINEES)}).")
+    return None
+
+
 def _rechercher_livraison_programmee(access_token, drive_id, date_livraison, nom_complet):
-    """Cherche, parmi les livraisons "Programmées" (status="schedule" — seule
-    valeur de statut acceptée par l'API back-office pour ce paramètre ; une
+    """Cherche, parmi les livraisons "Programmées" (status="schedule" ; une
     requête sans "status" est refusée avec une erreur HTTP 400) du magasin
     `drive_id` prévues pour `date_livraison` (objet date), celle dont le
     destinataire correspond à `nom_complet` (comparaison par ensemble de mots
@@ -218,43 +298,12 @@ def _rechercher_livraison_programmee(access_token, drive_id, date_livraison, nom
     Peut lever une exception en cas d'erreur réseau/API — à la charge de
     l'appelant de la gérer, pour ne pas confondre un échec de vérification
     avec une absence confirmée (livraison sortie de "Programmées")."""
-    if not access_token:
+    if not access_token or not _tokens(nom_complet):
         return None
-    cible = _tokens(nom_complet)
-    if not cible:
-        return None
-
-    debut_paris = datetime.combine(date_livraison, time.min, tzinfo=_TZ)
-    fin_paris = datetime.combine(date_livraison, time.max, tzinfo=_TZ)
-    debut_utc = debut_paris.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-    fin_utc = fin_paris.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%S.999Z")
-
-    noms_vus = []
-    page = 1
-    while True:
-        url = _API_BASE + "/deliveries?" + urllib.parse.urlencode({
-            "drive_id": drive_id, "order": "ASC", "page": page, "per_page": 50,
-            "status": "schedule",
-            "withdrawal_start_utc": debut_utc,
-            "withdrawal_end_utc": fin_utc,
-        })
-        req = urllib.request.Request(url, headers={
-            **_HEADERS_NAVIGATEUR,
-            "Authorization": f"Bearer {access_token}", "Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-
-        items = data.get("items", [])
-        for it in items:
-            dest = it.get("recipient") or {}
-            nom_dest = f"{dest.get('first_name', '')} {dest.get('last_name', '')}"
-            if _tokens(nom_dest) == cible:
-                return it
-            noms_vus.append(nom_dest)
-
-        if len(items) < 50:
-            break
-        page += 1
+    it, noms_vus = _chercher_destinataire(
+        _lister_livraisons(access_token, drive_id, date_livraison, "schedule"), nom_complet)
+    if it:
+        return it
 
     if noms_vus:
         print(f"    Shopopop : '{nom_complet}' absent des {len(noms_vus)} livraison(s) "
@@ -270,11 +319,14 @@ def _rechercher_livraison_programmee(access_token, drive_id, date_livraison, nom
 
 def distance_km(access_token, drive_id, date_livraison, nom_complet):
     """Cherche, parmi les livraisons "Programmées" du magasin `drive_id`
-    prévues pour `date_livraison`, celle dont le destinataire correspond à
+    prévues pour `date_livraison` — puis, a defaut, parmi les "Terminées"
+    (livraison deja faite) — celle dont le destinataire correspond à
     `nom_complet`, et retourne sa distance en km (arrondie à 2 décimales),
     ou None si non trouvée/erreur."""
     try:
         it = _rechercher_livraison_programmee(access_token, drive_id, date_livraison, nom_complet)
+        if not it:
+            it = _rechercher_livraison_terminee(access_token, drive_id, date_livraison, nom_complet)
     except Exception as e:
         print(f"    Recherche distance Shopopop échouée ({nom_complet}) : {e}")
         return None
@@ -287,8 +339,7 @@ def distance_km(access_token, drive_id, date_livraison, nom_complet):
 def livraison_sortie_programmees(access_token, drive_id, date_livraison, nom_complet):
     """Vérifie si la livraison du destinataire `nom_complet` prévue pour
     `date_livraison` a quitté l'onglet "Programmées" de Shopopop (donc
-    vraisemblablement passée en "Livrées" — l'API ne permet pas d'interroger
-    un autre statut que "schedule", cf. _rechercher_livraison_programmee).
+    vraisemblablement passée en "Terminées").
     Retourne True si absente de "Programmées" (livrée), False si toujours
     "Programmées" (pas encore livrée), ou None si la vérification a échoué
     (connexion/API) — à distinguer d'un True, pour ne pas signaler à tort
