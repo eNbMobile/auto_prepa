@@ -1062,7 +1062,8 @@ def generer_pdf_a_deloter(a_deloter, date_courante, vms_map=None):
 
 def generer_pdf_lgv(a_commander, date_courante, vms_map, semaine_suivante):
     """Génère un PDF listant les produits du classeur DRIVE LGV dont le stock
-    est insuffisant au regard de leurs ventes (Stock UC < 2×VMS). Retourne le
+    est insuffisant au regard de leurs ventes (Stock UC < 2×VMS) ou en rupture
+    (Stock UC <= 0). Retourne le
     chemin ou None."""
     if not a_commander:
         return None
@@ -1140,7 +1141,7 @@ def envoyer_email_pdf(pdf_ecarts, pdf_stock_bas, pdf_a_deloter, date_j1, nb_ecar
 
 def envoyer_email_lgv(pdf_lgv, nb, semaine_suivante):
     """Envoie par email (au destinataire principal uniquement, sans copie) le
-    PDF des produits du classeur DRIVE LGV à commander (Stock UC < 2×VMS)."""
+    PDF des produits du classeur DRIVE LGV à commander (Stock UC < 2×VMS ou rupture)."""
     try:
         import base64
         from email.mime.multipart import MIMEMultipart
@@ -1157,7 +1158,7 @@ def envoyer_email_lgv(pdf_lgv, nb, semaine_suivante):
 
         corps = (f"LGV à commander pour la semaine S{semaine_suivante:02d}\n\n"
                  f"  {nb} produit{'s' if nb > 1 else ''} (classeur {CLASSEUR_LGV}, "
-                 f"Stock UC < 2×VMS)\n\n"
+                 f"Stock UC < 2×VMS ou rupture)\n\n"
                  f"Détail en pièce jointe.")
         msg.attach(MIMEText(corps, 'plain', 'utf-8'))
 
@@ -1413,7 +1414,9 @@ def main():
 
     # LGV à commander : tous les produits du classeur DRIVE LGV (pas
     # seulement ceux sous SEUIL_STOCK_BAS) dont le Stock UC est inférieur à
-    # 2× leur VMS (moyenne des 3 dernières semaines de ventes cumulées).
+    # 2× leur VMS (moyenne des 3 dernières semaines de ventes cumulées), ou
+    # en rupture (Stock UC <= 0) même sans vente : un produit jamais
+    # réapprovisionné ne se vend plus et sa VMS tombe à 0.
     # Email séparé, au destinataire principal uniquement. Ne se declenche que
     # le samedi, et seulement si j.xlsx a bien ete importe aujourd'hui (un
     # stock J perime rendrait l'alerte non fiable) — pas de garde-fou sur le
@@ -1430,7 +1433,7 @@ def main():
             a_commander_lgv = []
             for gencod in gencods_lgv:
                 stock_uc = stock_j.get(gencod, 0.0)
-                if stock_uc < 2 * vms_lgv.get(gencod, 0.0):
+                if stock_uc <= 0 or stock_uc < 2 * vms_lgv.get(gencod, 0.0):
                     lib = (libelles_dict.get(gencod)
                           or libelles_stock.get(gencod)
                           or libelles_extra.get(gencod, ''))
@@ -1441,7 +1444,7 @@ def main():
                                   + timedelta(weeks=1))
                 semaine_suivante = lundi_prochain.isocalendar()[1]
                 print(f"\nLGV à commander : {len(a_commander_lgv)} produit(s) "
-                      f"(classeur {CLASSEUR_LGV}, Stock UC < 2×VMS)")
+                      f"(classeur {CLASSEUR_LGV}, Stock UC < 2×VMS ou rupture)")
                 nom_pdf_lgv = generer_pdf_lgv(a_commander_lgv, date_courante, vms_lgv, semaine_suivante)
                 if nom_pdf_lgv:
                     print("Envoi email LGV …")
