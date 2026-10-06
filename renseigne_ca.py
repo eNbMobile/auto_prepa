@@ -259,15 +259,17 @@ def _id_classeur_ca(drive_svc):
 
 def id_classeur_ca(drive_svc, annee):
     """ID de « CA DRIVE <annee>.xlsx » : le classeur configuré s'il porte cette
-    année, sinon celui du même nom dans son dossier ; None si introuvable."""
+    année, sinon celui du même nom dans son dossier (ou, dossier invisible
+    pour un fichier partagé, n'importe où sur le Drive) ; None si introuvable."""
     defaut = _id_classeur_ca(drive_svc)
     meta = drive_svc.files().get(fileId=defaut, fields="name,parents",
                                  supportsAllDrives=True).execute()
     if str(annee) in meta.get("name", ""):
         return defaut
-    for dossier in meta.get("parents", []):
+    q = f"name='CA DRIVE {annee}.xlsx' and trashed=false"
+    for dossier in meta.get("parents") or [None]:
         res = drive_svc.files().list(
-            q=f"name='CA DRIVE {annee}.xlsx' and '{dossier}' in parents and trashed=false",
+            q=q + (f" and '{dossier}' in parents" if dossier else ""),
             fields="files(id)", supportsAllDrives=True, includeItemsFromAllDrives=True,
         ).execute().get("files", [])
         if res:
