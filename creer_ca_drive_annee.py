@@ -640,14 +640,13 @@ def _drive_creer(annee, remplacer):
         print(f"ERREUR : le classeur source s'appelle {meta['name']!r}, "
               f"pas « CA DRIVE {annee - 1} ».")
         sys.exit(1)
-    dossier = meta["parents"][0]
+    # Classeur partagé dont le dossier est invisible : racine du Drive.
+    dossier = (meta.get("parents") or [None])[0]
     nom = f"CA DRIVE {annee}.xlsx"
-    existants = drive.files().list(
-        q=f"name='{nom}' and '{dossier}' in parents and trashed=false",
-        fields="files(id)", supportsAllDrives=True, includeItemsFromAllDrives=True,
-    ).execute().get("files", [])
+    existant = rc.id_classeur_ca(drive, annee)
+    existants = [{"id": existant}] if existant else []
     if existants and not remplacer:
-        print(f"ERREUR : {nom} existe déjà dans le dossier (relancer avec --remplacer).")
+        print(f"ERREUR : {nom} existe déjà sur Drive (relancer avec --remplacer).")
         sys.exit(1)
 
     print(f"Source : {meta['name']} → {nom}")
@@ -657,8 +656,10 @@ def _drive_creer(annee, remplacer):
         f = drive.files().update(fileId=existants[0]["id"], media_body=media,
                                  supportsAllDrives=True).execute()
     else:
-        f = drive.files().create(body={"name": nom, "parents": [dossier], "mimeType": MIME_XLSX},
-                                 media_body=media, fields="id",
+        corps = {"name": nom, "mimeType": MIME_XLSX}
+        if dossier:
+            corps["parents"] = [dossier]
+        f = drive.files().create(body=corps, media_body=media, fields="id",
                                  supportsAllDrives=True).execute()
     print(f"{nom} {'remplacé' if existants else 'créé'} : "
           f"https://drive.google.com/file/d/{f['id']}/view")
