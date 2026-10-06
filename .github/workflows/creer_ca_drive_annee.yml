@@ -1,22 +1,28 @@
-name: RenseigneCA
+name: CreerCADriveAnnee
 
-# Renseigne le nombre de commandes et de produits Drive du jour dans
-# CA DRIVE <année> > RÉALISATION. Lancé par un cron-job externe (workflow_dispatch).
+# Crée le classeur « CA DRIVE <année> » sur Drive à partir de celui de l'année
+# précédente (mêmes onglets et formules, données réelles vidées), dans le même
+# dossier. Lancement manuel (workflow_dispatch).
 
 on:
   workflow_dispatch:
     inputs:
-      date:
-        description: "Date (JJ/MM/AAAA) — laisser vide pour aujourd'hui"
+      annee:
+        description: "Année à créer (AAAA) — vide : l'année prochaine"
         required: false
         type: string
+      remplacer:
+        description: "Écraser le classeur s'il existe déjà"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: renseigne_ca
   cancel-in-progress: false
 
 jobs:
-  renseigne:
+  creer:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -30,26 +36,21 @@ jobs:
           python-version: '3.11'
           cache: pip
 
-      - name: Installer poppler-utils avec cache
-        uses: awalsh128/cache-apt-pkgs-action@latest
-        with:
-          packages: poppler-utils
-          version: 1.0
-
       - name: Installer les dépendances pip
         run: pip install -r requirements.txt
 
-      - name: Renseigner commandes et produits du jour
+      - name: Créer le classeur
         env:
           GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
           DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
           WORK_DIR: "v 4.0.0"
+          ANNEE: ${{ inputs.annee }}
+          REMPLACER: ${{ inputs.remplacer }}
         run: |
-          DATE_ARG=""
-          if [ -n "${{ inputs.date }}" ]; then
-            DATE_ARG="--date ${{ inputs.date }}"
-          fi
-          python3 bootstrap.py renseigne_ca.py $DATE_ARG
+          ARGS=""
+          if [ -n "$ANNEE" ]; then ARGS="--annee $ANNEE"; fi
+          if [ "$REMPLACER" = "true" ]; then ARGS="$ARGS --remplacer"; fi
+          python3 bootstrap.py creer_ca_drive_annee.py $ARGS
 
       - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
         continue-on-error: true

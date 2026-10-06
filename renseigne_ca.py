@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Renseigne le nombre de commandes et le nombre de produits Drive du jour dans
-le classeur "CA DRIVE 2026", onglet "RÉALISATION".
+le classeur "CA DRIVE <année>", onglet "RÉALISATION" (année ISO du jour : le
+classeur configuré, ou celui du même nom dans son dossier).
 
 - Nombre de commandes : nombre de BonDeCommande_xxx.pdf du dossier Drive
   BDC/MM_AAAA/JJ_MM du jour (hors commandes annulées / remplacées, comme les
@@ -256,6 +257,24 @@ def _id_classeur_ca(drive_svc):
         return CA_SPREADSHEET_ID_DEFAUT
 
 
+def id_classeur_ca(drive_svc, annee):
+    """ID de « CA DRIVE <annee>.xlsx » : le classeur configuré s'il porte cette
+    année, sinon celui du même nom dans son dossier ; None si introuvable."""
+    defaut = _id_classeur_ca(drive_svc)
+    meta = drive_svc.files().get(fileId=defaut, fields="name,parents",
+                                 supportsAllDrives=True).execute()
+    if str(annee) in meta.get("name", ""):
+        return defaut
+    for dossier in meta.get("parents", []):
+        res = drive_svc.files().list(
+            q=f"name='CA DRIVE {annee}.xlsx' and '{dossier}' in parents and trashed=false",
+            fields="files(id)", supportsAllDrives=True, includeItemsFromAllDrives=True,
+        ).execute().get("files", [])
+        if res:
+            return res[0]["id"]
+    return None
+
+
 def _telecharger(drive_svc, file_id):
     from googleapiclient.http import MediaIoBaseDownload
     buf = io.BytesIO()
@@ -311,7 +330,13 @@ def main():
     if not drive_svc:
         print("ERREUR : Drive inaccessible.")
         sys.exit(1)
-    file_id = _id_classeur_ca(drive_svc)
+    # Année ISO : les premiers jours de janvier peuvent appartenir à la
+    # dernière semaine (S 53) du classeur de l'année précédente.
+    annee = jour.isocalendar()[0]
+    file_id = id_classeur_ca(drive_svc, annee)
+    if not file_id:
+        print(f"ERREUR : classeur « CA DRIVE {annee}.xlsx » introuvable sur Drive.")
+        sys.exit(1)
     try:
         contenu = renseigner_xlsx(_telecharger(drive_svc, file_id), jour, nb_commandes, nb_produits)
         _envoyer(drive_svc, file_id, contenu)
