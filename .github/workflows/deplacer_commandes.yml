@@ -1,8 +1,12 @@
 name: Deplacer commandes
 
-# Déplace un ou plusieurs BonDeCommande_NUMERO.pdf d'un jour à un autre dans
-# l'archive Drive BDC/MM_AAAA/JJ_MM (client qui n'est pas venu / commande
-# décalée), pour que les ventes et le contrôle de stock restent justes.
+# Inscrit la demande de déplacement d'un ou plusieurs BonDeCommande_NUMERO.pdf
+# d'un jour à un autre (client qui n'est pas venu / commande décalée). Par
+# défaut, le déplacement n'est pas fait tout de suite : il est effectué ce
+# soir à 22h par deplacer_commandes_attente.yml, une fois les ventes et le CA
+# du jour déjà calculés (sinon la commande déplacée disparaissait du CA
+# quotidien alors qu'elle avait bien été préparée). Cocher "forcer" pour
+# déplacer immédiatement (commande pas encore préparée).
 
 on:
   workflow_dispatch:
@@ -25,6 +29,10 @@ on:
         description: "Ou date cible précise (JJ/MM/AAAA ou JJ/MM) — prioritaire sur le choix ci-dessus"
         required: false
         type: string
+      forcer:
+        description: "Forcer : déplacer tout de suite au lieu d'attendre ce soir 22h (commande pas préparée)"
+        type: boolean
+        default: false
 
 concurrency:
   group: deplacer_commandes
@@ -56,9 +64,10 @@ jobs:
           CDE_NUMEROS: ${{ inputs.numeros }}
           CDE_JOUR:    ${{ inputs.jour }}
           CDE_DATE:    ${{ inputs.date }}
+          CDE_FORCER:  ${{ inputs.forcer && '--forcer' || '' }}
         run: |
           python3 deplacer_commande.py \
-            --numeros "$CDE_NUMEROS" --jour "$CDE_JOUR" --date "$CDE_DATE"
+            --numeros "$CDE_NUMEROS" --jour "$CDE_JOUR" --date "$CDE_DATE" $CDE_FORCER
 
       - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
         if: always()
