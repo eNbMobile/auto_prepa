@@ -151,7 +151,10 @@ const WORKFLOWS = {
       } else {
         throw new Error('Choix de jour invalide.');
       }
-      return { inputs, detail: `commande(s) ${inputs.numeros} vers ${cible}` };
+      const forcer = params.forcer === 'on' || params.forcer === 'true';
+      inputs.forcer = forcer ? 'true' : 'false';
+      const quand = forcer ? 'tout de suite' : 'ce soir (22h)';
+      return { inputs, detail: `commande(s) ${inputs.numeros} vers ${cible}, ${quand}` };
     },
   },
 };
@@ -266,6 +269,17 @@ const PAGE = `<!doctype html>
   }
   .field.jours select { min-width: 90px; }
   .date-wrap[hidden] { display: none; }
+  .field-checkbox { display: flex; flex-direction: column; }
+  .field-checkbox label.checkbox {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text);
+    font-size: 0.9rem;
+    margin: 0;
+    white-space: nowrap;
+  }
+  .field-checkbox input[type=checkbox] { width: 16px; height: 16px; }
   button {
     font: inherit;
     font-weight: 600;
@@ -413,6 +427,13 @@ const PAGE = `<!doctype html>
             <label for="dc-date">Date</label>
             <input type="text" id="dc-date" name="date" placeholder="JJ/MM/AAAA ou JJ/MM"
                    inputmode="numeric" autocomplete="off">
+          </div>
+          <div class="field field-checkbox">
+            <label for="dc-forcer">&nbsp;</label>
+            <label class="checkbox">
+              <input type="checkbox" id="dc-forcer" name="forcer">
+              Forcer (tout de suite, commande pas préparée)
+            </label>
           </div>
           <button type="submit">Déplacer</button>
         </div>

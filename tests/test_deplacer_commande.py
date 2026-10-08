@@ -9,6 +9,7 @@ Lancement : python3 -m unittest discover -s tests
 import os
 import re
 import sys
+import tempfile
 import unittest
 from datetime import date
 
@@ -61,14 +62,20 @@ class _FakeFiles:
     def get(self, fileId=None, fields=None):
         return _FakeRequete(dict(self._par_id(fileId)))
 
-    def create(self, body=None, fields=None, **kwargs):
+    def get_media(self, fileId=None):
+        return self._par_id(fileId).get("contenu", b"")
+
+    def create(self, body=None, fields=None, media_body=None, **kwargs):
         self._n += 1
         nouveau = {"id": f"cree{self._n}", "name": body["name"],
                    "mimeType": body.get("mimeType"), "parents": list(body["parents"])}
+        if media_body is not None:
+            nouveau["contenu"] = media_body.contenu
         self.store.append(nouveau)
         return _FakeRequete({"id": nouveau["id"]})
 
-    def update(self, fileId=None, body=None, addParents=None, removeParents=None, **kwargs):
+    def update(self, fileId=None, body=None, addParents=None, removeParents=None,
+               media_body=None, **kwargs):
         def _effet():
             f = self._par_id(fileId)
             if (body or {}).get("trashed"):
@@ -77,6 +84,8 @@ class _FakeFiles:
                 f["parents"] = [p for p in f["parents"] if p != removeParents]
             if addParents:
                 f["parents"].append(addParents)
+            if media_body is not None:
+                f["contenu"] = media_body.contenu
         return _FakeRequete(effet=_effet)
 
 
@@ -212,6 +221,93 @@ class TestDeplacer(unittest.TestCase):
         ok, msg = dc.deplacer(self.drive, "99999999", date(2026, 9, 26), aujourd_hui=AUJOURD_HUI)
         self.assertFalse(ok)
         self.assertIn("introuvable", msg)
+
+
+class _FakeMediaFileUpload:
+    def __init__(self, path, mimetype=None, resumable=False):
+        with open(path, "rb") as f:
+            self.contenu = f.read()
+
+
+class _FakeMediaIoBaseDownload:
+    def __init__(self, buf, contenu):
+        self._buf, self._contenu = buf, contenu
+
+    def next_chunk(self):
+        self._buf.write(self._contenu)
+        return None, True
+
+
+class TestFileAttente(unittest.TestCase):
+    """Mode par defaut (sans --forcer) : la demande n'est pas appliquee tout de
+    suite, elle est inscrite dans un marqueur Drive GITHUB/DeplacementsEnAttente/."""
+
+    def setUp(self):
+        self._bdc = ap.DRIVE_BDC_FOLDER_ID
+        ap.DRIVE_BDC_FOLDER_ID = BDC_ID
+        self.drive = _FakeDrive(_store())
+        self._upload = dc.MediaFileUpload
+        self._download = dc.MediaIoBaseDownload
+        dc.MediaFileUpload = _FakeMediaFileUpload
+        dc.MediaIoBaseDownload = _FakeMediaIoBaseDownload
+        self._tmp = tempfile.TemporaryDirectory()
+        self._work_dir = ap.WORK_DIR
+        ap.WORK_DIR = self._tmp.name
+
+    def tearDown(self):
+        ap.DRIVE_BDC_FOLDER_ID = self._bdc
+        dc.MediaFileUpload = self._upload
+        dc.MediaIoBaseDownload = self._download
+        ap.WORK_DIR = self._work_dir
+        self._tmp.cleanup()
+
+    def _marqueurs_store(self):
+        return [f for f in self.drive.files().store
+                if not f.get("trashed") and re.match(r"^deplacer_\d+\.txt$", f["name"])]
+
+    def test_mettre_en_attente_ne_deplace_rien(self):
+        ok, msg = dc.mettre_en_attente(self.drive, "54868421", None,
+                                        "lendemain de la commande", "", AUJOURD_HUI)
+        self.assertTrue(ok, msg)
+        self.assertIn("22h", msg)
+        self.assertEqual(_parents(self.drive, "f1"), ["j24"])  # pas deplace
+
+    def test_mettre_en_attente_depose_un_marqueur_lisible(self):
+        dc.mettre_en_attente(self.drive, "54868421", None,
+                             "lendemain de la commande", "", AUJOURD_HUI)
+        marqueurs = dc.lister_marqueurs_attente(self.drive)
+        self.assertEqual([(n, c) for _id, n, c in marqueurs],
+                         [("54868421", date(2026, 9, 25))])
+
+    def test_mettre_en_attente_introuvable(self):
+        ok, msg = dc.mettre_en_attente(self.drive, "99999999", date(2026, 9, 26),
+                                       aujourd_hui=AUJOURD_HUI)
+        self.assertFalse(ok)
+        self.assertIn("introuvable", msg)
+        self.assertEqual(self._marqueurs_store(), [])
+
+    def test_nouvelle_demande_remplace_le_marqueur(self):
+        dc.mettre_en_attente(self.drive, "54868421", date(2026, 9, 26), aujourd_hui=AUJOURD_HUI)
+        dc.mettre_en_attente(self.drive, "54868421", date(2026, 9, 28), aujourd_hui=AUJOURD_HUI)
+        marqueurs = dc.lister_marqueurs_attente(self.drive)
+        self.assertEqual([(n, c) for _id, n, c in marqueurs], [("54868421", date(2026, 9, 28))])
+        self.assertEqual(len(self._marqueurs_store()), 1)
+
+    def test_lister_vide_si_aucun_dossier(self):
+        self.assertEqual(dc.lister_marqueurs_attente(self.drive), [])
+
+    def test_traitement_du_soir_deplace_et_supprime_le_marqueur(self):
+        """Simule deplacer_commandes_attente.py : chaque marqueur en attente est
+        applique via dc.deplacer, puis mis a la corbeille."""
+        dc.mettre_en_attente(self.drive, "54868421", None,
+                             "lendemain de la commande", "", AUJOURD_HUI)
+        for file_id, numero, cible in dc.lister_marqueurs_attente(self.drive):
+            ok, msg = dc.deplacer(self.drive, numero, cible)
+            self.assertTrue(ok, msg)
+            self.drive.files().update(fileId=file_id, body={"trashed": True}).execute()
+
+        self.assertEqual(_parents(self.drive, "f1"), ["j25"])
+        self.assertEqual(dc.lister_marqueurs_attente(self.drive), [])
 
 
 if __name__ == "__main__":

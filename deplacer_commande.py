@@ -14,14 +14,26 @@ Le fichier Drive est deplace (meme identifiant, changement de parent) : rien
 n'est recree ni perdu. Si le jour cible contient deja ce bon, l'exemplaire du
 jour d'origine est mis a la corbeille (restaurable depuis Drive).
 
-Usage :
-  deplacer_commande.py --numeros "54868421 54868422" [--jour CHOIX] [--date JJ/MM[/AAAA]]
+Par defaut, ce script ne deplace PAS tout de suite : la demande est inscrite
+dans un marqueur Drive (GITHUB/DeplacementsEnAttente/deplacer_NUMERO.txt,
+contenant la date cible deja resolue) et c'est deplacer_commandes_attente.py,
+lance chaque soir a 22h par cron, qui effectue le deplacement physique. Raison
+du differe : les ventes du jour (generer_ventes, controle_stocks,
+cumul_ventes_semaine, renseigne_ca) tournent dans la journee, et un
+deplacement immediat d'un jour a l'autre leur faisait perdre une commande deja
+preparee. --forcer deplace immediatement, comme avant (a utiliser quand la
+commande n'a pas encore ete preparee).
 
-  --jour  : lendemain (defaut : lendemain du jour actuel de la commande),
-            aujourdhui, demain, apres-demain
-  --date  : date cible explicite, prioritaire sur --jour
+Usage :
+  deplacer_commande.py --numeros "54868421 54868422" [--jour CHOIX] [--date JJ/MM[/AAAA]] [--forcer]
+
+  --jour    : lendemain (defaut : lendemain du jour actuel de la commande),
+              aujourdhui, demain, apres-demain
+  --date    : date cible explicite, prioritaire sur --jour
+  --forcer  : deplace immediatement au lieu d'attendre le run du soir
 """
 
+import io
 import os
 import re
 import sys
@@ -29,6 +41,7 @@ import unicodedata
 from datetime import date, datetime, timedelta
 
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 import auto_prepa as ap
 
@@ -159,20 +172,19 @@ def localiser_bdc(drive_svc, numero):
     return trouves
 
 
-def deplacer(drive_svc, numero, cible, jour_choisi="", date_saisie="", aujourd_hui=None):
-    """Deplace BonDeCommande_NUMERO.pdf vers le dossier BDC du jour cible.
+def _localiser_et_resoudre_cible(drive_svc, numero, cible, jour_choisi, date_saisie, aujourd_hui):
+    """Localise BonDeCommande_NUMERO.pdf dans l'archive Drive et resout la date
+    cible (`cible` si deja calculee, sinon via date_cible()).
 
-    Retourne (ok, message). ok=False si la commande est introuvable, ambigue
-    ou si le deplacement a echoue. `cible` : date deja calculee, ou None pour
-    la deduire (date_cible) une fois le jour actuel de la commande connu."""
-    aujourd_hui = aujourd_hui or datetime.now(ap._TZ).date()
+    Retourne (ok, cible_ou_None, exemplaires_ou_None, jours_ou_None, message).
+    `message` est l'erreur si ok=False, sinon None."""
     nom = f"BonDeCommande_{numero}.pdf"
     try:
         exemplaires = localiser_bdc(drive_svc, numero)
     except Exception as e:
-        return False, f"{nom} : recherche sur Drive echouee ({e})"
+        return False, None, None, None, f"{nom} : recherche sur Drive echouee ({e})"
     if not exemplaires:
-        return False, f"{nom} : introuvable dans l'archive Drive BDC"
+        return False, None, None, None, f"{nom} : introuvable dans l'archive Drive BDC"
 
     jours = sorted({(e["mm_aaaa"], e["jj_mm"]) for e in exemplaires})
     liste = ", ".join(f"BDC/{m}/{j}" for m, j in jours)
@@ -183,9 +195,27 @@ def deplacer(drive_svc, numero, cible, jour_choisi="", date_saisie="", aujourd_h
             cible = date_cible(jour_choisi, date_saisie, jour_actuel, aujourd_hui)
         except ValueError as e:
             if len(jours) > 1:
-                return False, (f"{nom} : present dans plusieurs jours ({liste}) — "
+                return False, None, None, None, (f"{nom} : present dans plusieurs jours ({liste}) — "
                                f"saisir une date cible")
-            return False, f"{nom} : {e}"
+            return False, None, None, None, f"{nom} : {e}"
+
+    return True, cible, exemplaires, jours, None
+
+
+def deplacer(drive_svc, numero, cible, jour_choisi="", date_saisie="", aujourd_hui=None):
+    """Deplace BonDeCommande_NUMERO.pdf vers le dossier BDC du jour cible.
+
+    Retourne (ok, message). ok=False si la commande est introuvable, ambigue
+    ou si le deplacement a echoue. `cible` : date deja calculee, ou None pour
+    la deduire (date_cible) une fois le jour actuel de la commande connu."""
+    aujourd_hui = aujourd_hui or datetime.now(ap._TZ).date()
+    nom = f"BonDeCommande_{numero}.pdf"
+    ok, cible, exemplaires, jours, erreur = _localiser_et_resoudre_cible(
+        drive_svc, numero, cible, jour_choisi, date_saisie, aujourd_hui)
+    if not ok:
+        return False, erreur
+    liste = ", ".join(f"BDC/{m}/{j}" for m, j in jours)
+    jour_actuel = jour_du_dossier(jours[0][1], jours[0][0]) if len(jours) == 1 else None
 
     cible_jj_mm = cible.strftime("%d_%m")
     cible_mm_aaaa = cible.strftime("%m_%Y")
@@ -233,6 +263,108 @@ def deplacer(drive_svc, numero, cible, jour_choisi="", date_saisie="", aujourd_h
 
 
 # ─────────────────────────────────────────────────────────────────
+# File d'attente (marqueurs Drive GITHUB/DeplacementsEnAttente)
+# ─────────────────────────────────────────────────────────────────
+
+DOSSIER_ATTENTE_NOM = "DeplacementsEnAttente"
+_RE_MARQUEUR_ATTENTE = re.compile(r"^deplacer_(\d{6,})\.txt$")
+
+
+def _dossier_attente(drive_svc, creer=True):
+    """ID du dossier Drive GITHUB/DeplacementsEnAttente. None si absent et
+    creer=False."""
+    github_id = ap._get_or_create_subfolder(drive_svc, "root", "GITHUB")
+    if not creer:
+        res = drive_svc.files().list(
+            q=(f"name='{DOSSIER_ATTENTE_NOM}' and '{github_id}' in parents "
+               f"and mimeType='{MIME_DOSSIER}' and trashed=false"),
+            fields="files(id)",
+        ).execute()
+        fichiers = res.get("files", [])
+        return fichiers[0]["id"] if fichiers else None
+    return ap._get_or_create_subfolder(drive_svc, github_id, DOSSIER_ATTENTE_NOM)
+
+
+def deposer_marqueur_attente(drive_svc, numero, cible):
+    """Depose (ou met a jour) le marqueur deplacer_NUMERO.txt dans
+    GITHUB/DeplacementsEnAttente/, contenant la date cible deja resolue
+    (AAAA-MM-JJ). Une nouvelle demande sur le meme numero remplace la
+    precedente."""
+    folder_id = _dossier_attente(drive_svc)
+    nom_fichier = f"deplacer_{numero}.txt"
+    res = drive_svc.files().list(
+        q=f"name='{nom_fichier}' and '{folder_id}' in parents and trashed=false",
+        fields="files(id)",
+    ).execute()
+    existant = res.get("files", [])
+    tmp = os.path.join(ap.WORK_DIR, nom_fichier)
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(cible.isoformat() + "\n")
+    try:
+        media = MediaFileUpload(tmp, mimetype="text/plain", resumable=False)
+        if existant:
+            drive_svc.files().update(fileId=existant[0]["id"], media_body=media).execute()
+        else:
+            drive_svc.files().create(
+                body={"name": nom_fichier, "parents": [folder_id]},
+                media_body=media, fields="id",
+            ).execute()
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def lister_marqueurs_attente(drive_svc):
+    """Marqueurs de deplacement en attente : liste de (file_id, numero, cible).
+    Liste vide si le dossier n'existe pas encore (aucune demande a ce jour) ou
+    si un marqueur est illisible (ignore plutot que de faire echouer le run)."""
+    folder_id = _dossier_attente(drive_svc, creer=False)
+    if not folder_id:
+        return []
+    res = drive_svc.files().list(
+        q=f"'{folder_id}' in parents and trashed=false",
+        fields="files(id,name)",
+    ).execute()
+    resultats = []
+    for f in res.get("files", []):
+        m = _RE_MARQUEUR_ATTENTE.match(f.get("name", ""))
+        if not m:
+            continue
+        try:
+            buf = io.BytesIO()
+            dl = MediaIoBaseDownload(buf, drive_svc.files().get_media(fileId=f["id"]))
+            done = False
+            while not done:
+                _, done = dl.next_chunk()
+            cible = date.fromisoformat(buf.getvalue().decode("utf-8").strip())
+        except Exception as e:
+            print(f"    {f['name']} : lecture echouee, ignore ({e})")
+            continue
+        resultats.append((f["id"], m.group(1), cible))
+    return resultats
+
+
+def mettre_en_attente(drive_svc, numero, cible, jour_choisi="", date_saisie="", aujourd_hui=None):
+    """Inscrit la demande de deplacement de BonDeCommande_NUMERO.pdf dans la
+    file d'attente (marqueur Drive), pour un deplacement physique differe au
+    soir (deplacer_commandes_attente.py). Meme resolution de date cible que
+    deplacer(), mais aucun fichier BDC n'est touche ici.
+
+    Retourne (ok, message), comme deplacer()."""
+    aujourd_hui = aujourd_hui or datetime.now(ap._TZ).date()
+    nom = f"BonDeCommande_{numero}.pdf"
+    ok, cible, _exemplaires, _jours, erreur = _localiser_et_resoudre_cible(
+        drive_svc, numero, cible, jour_choisi, date_saisie, aujourd_hui)
+    if not ok:
+        return False, erreur
+
+    try:
+        deposer_marqueur_attente(drive_svc, numero, cible)
+    except Exception as e:
+        return False, f"{nom} : mise en attente echouee ({e})"
+    return True, (f"{nom} : deplacement vers le {libelle(cible)} enregistre, "
+                  f"sera effectue ce soir (22h)")
+
 
 def _parser_args(argv):
     valeurs = {"--numeros": "", "--jour": "", "--date": ""}
@@ -241,17 +373,19 @@ def _parser_args(argv):
             i = argv.index(nom)
             if i + 1 < len(argv):
                 valeurs[nom] = argv[i + 1]
-    return valeurs["--numeros"], valeurs["--jour"], valeurs["--date"]
+    forcer = "--forcer" in argv
+    return valeurs["--numeros"], valeurs["--jour"], valeurs["--date"], forcer
 
 
-def _resume(lignes):
+def _resume(lignes, forcer):
     """Recapitulatif visible sur la page du run GitHub Actions."""
     chemin = os.environ.get("GITHUB_STEP_SUMMARY")
     if not chemin:
         return
     try:
         with open(chemin, "a", encoding="utf-8") as f:
-            f.write("## Deplacer commandes\n\n")
+            titre = "Deplacer commandes" if forcer else "Deplacer commandes (mise en attente)"
+            f.write(f"## {titre}\n\n")
             for ok, message in lignes:
                 f.write(f"- {'✅' if ok else '❌'} {message}\n")
     except OSError:
@@ -259,7 +393,7 @@ def _resume(lignes):
 
 
 def main():
-    texte_numeros, jour_choisi, date_saisie = _parser_args(sys.argv[1:])
+    texte_numeros, jour_choisi, date_saisie, forcer = _parser_args(sys.argv[1:])
     numeros = extraire_numeros(texte_numeros)
     if not numeros:
         print(f"Aucun numero de commande reconnu dans {texte_numeros!r} "
@@ -281,17 +415,24 @@ def main():
     drive_svc = build("drive", "v3", credentials=creds)
     ap._charger_config(drive_svc)
 
-    print(f"\nDeplacement de {len(numeros)} commande(s) : {', '.join(numeros)}")
+    action = deplacer if forcer else mettre_en_attente
+    verbe = "Deplacement" if forcer else "Mise en attente du deplacement"
+    print(f"\n{verbe} de {len(numeros)} commande(s) : {', '.join(numeros)}")
     resultats = []
     for numero in numeros:
-        ok, message = deplacer(drive_svc, numero, cible, jour_choisi, date_saisie, aujourd_hui)
+        ok, message = action(drive_svc, numero, cible, jour_choisi, date_saisie, aujourd_hui)
         print(f"  {'OK ' if ok else 'ERREUR'} {message}")
         resultats.append((ok, message))
 
-    _resume(resultats)
-    print("\nSi les ventes / le CA d'un des jours concernes ont deja ete calcules, "
-          "relancer les workflows correspondants (generer_ventes, renseigne_ca, "
-          "controle_stocks) pour ces jours.")
+    _resume(resultats, forcer)
+    if forcer:
+        print("\nSi les ventes / le CA d'un des jours concernes ont deja ete calcules, "
+              "relancer les workflows correspondants (generer_ventes, renseigne_ca, "
+              "controle_stocks) pour ces jours.")
+    else:
+        print("\nLe deplacement physique aura lieu ce soir a 22h (workflow "
+              "'Deplacer commandes en attente'). Utiliser --forcer si la commande "
+              "n'est pas encore preparee et doit etre deplacee tout de suite.")
     if not all(ok for ok, _ in resultats):
         sys.exit(1)
 

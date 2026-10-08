@@ -1,0 +1,62 @@
+name: Deplacer commandes en attente
+
+# Deplace chaque soir les BonDeCommande dont le deplacement a ete demande dans
+# la journee (carte "Deplacer commandes" du tableau de bord, sans forcage) :
+# la demande n'est inscrite, sur le moment, qu'en marqueur Drive
+# GITHUB/DeplacementsEnAttente/ par deplacer_commande.py (mettre_en_attente),
+# et c'est ce workflow qui effectue le deplacement physique une fois les
+# ventes et le CA du jour deja calcules — sinon une commande deplacee d'un
+# jour a l'autre disparaissait du CA quotidien (renseigne_ca) alors qu'elle
+# avait bien ete preparee. Voir deplacer_commandes_attente.py.
+
+on:
+  schedule:
+    - cron: '7 20 * * *'  # 22h07 Paris (CEST = UTC+2) - decale de l'heure ronde
+                           # pour limiter le risque de declenchement 'schedule'
+                           # saute par GitHub Actions en cas de forte charge
+                           # (meme precaution que livraison_drive_en_attente.yml).
+                           # 21h07 Paris en heure d'hiver (CET = UTC+1).
+  workflow_dispatch:
+
+concurrency:
+  group: deplacer_commandes
+  cancel-in-progress: false
+
+jobs:
+  deplacer-en-attente:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python et dépendances
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer les dépendances pip
+        run: pip install -r requirements.txt
+
+      - name: Déplacer les commandes en attente
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          WORK_DIR: "v 4.0.0"
+        run: python3 deplacer_commandes_attente.py
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+            echo "Secret GOOGLE_TOKEN_JSON mis à jour."
+          fi
