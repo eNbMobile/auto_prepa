@@ -12,6 +12,7 @@ Les workflows disponibles sur la page :
 | **Anticipation Commandes** | `anticipation_commandes.yml` | commandes du jour, de demain, ou date saisie |
 | **Générer Ventes** | `generer_ventes.yml` | aujourd'hui, hier, avant-hier, ou date saisie |
 | **Déplacer commandes** | `deplacer_commandes.yml` | n° de commande(s) + jour cible : lendemain de la commande, aujourd'hui, demain, après-demain, ou date saisie (`JJ/MM/AAAA` ou `JJ/MM`) ; case **Forcer** pour déplacer tout de suite au lieu d'attendre le run du soir (22h, `deplacer_commandes_attente.yml`) |
+| **Cumul Contrôle Stocks** | `cumul_controle_stocks.yml` | date de début + date de fin (`JJ/MM/AAAA`) : additionne, gencod par gencod, les écarts du contrôle de stocks sur toute la période (hors stocks insuffisants et articles à déloter) |
 
 Une variante **`wf2`** (dossier `cloudflare/dashboard2-worker`) reprend exactement
 cette page, sans la carte « Générer Ventes » : voir son README.

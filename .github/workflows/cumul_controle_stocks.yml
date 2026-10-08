@@ -1,0 +1,66 @@
+# Regroupe les contrôles de stock envoyés sur une période choisie : reprend
+# jour par jour le même calcul que controle_stocks.py (stock soir J-1 +
+# ventes vs stock matin J) et additionne les écarts par gencod sur toute la
+# période (hors stocks insuffisants et articles à déloter).
+name: Cumul Contrôle Stocks
+
+on:
+  workflow_dispatch:
+    inputs:
+      date_debut:
+        description: "Premier jour de la période (JJ/MM/AAAA)"
+        required: true
+        type: string
+      date_fin:
+        description: "Dernier jour de la période (JJ/MM/AAAA)"
+        required: true
+        type: string
+
+concurrency:
+  group: cumul_controle_stocks
+  cancel-in-progress: false
+
+jobs:
+  cumul:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python et dépendances
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer poppler-utils avec cache
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: poppler-utils
+          version: 1.0
+
+      - name: Installer les dépendances pip
+        run: pip install -r requirements.txt
+
+      - name: Cumuler le contrôle de stocks sur la période
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          WORK_DIR: "v 4.0.0"
+        run: |
+          python3 bootstrap.py cumul_controle_stocks.py \
+            --date-debut "${{ inputs.date_debut }}" --date-fin "${{ inputs.date_fin }}"
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+            echo "Secret GOOGLE_TOKEN_JSON mis à jour."
+          fi
