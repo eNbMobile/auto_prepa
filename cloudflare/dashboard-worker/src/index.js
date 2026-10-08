@@ -116,6 +116,23 @@ const WORKFLOWS = {
     },
   },
 
+  cumul_controle_stocks: {
+    file: 'cumul_controle_stocks.yml',
+    label: 'Cumul Contrôle Stocks',
+    buildInputs(params) {
+      const debut = parseDDMMYYYY(params.date_debut);
+      if (!debut) throw new Error('Date de début invalide (format attendu JJ/MM/AAAA).');
+      const fin = parseDDMMYYYY(params.date_fin);
+      if (!fin) throw new Error('Date de fin invalide (format attendu JJ/MM/AAAA).');
+      const [dJ, dM, dA] = debut.split('/').map(Number);
+      const [fJ, fM, fA] = fin.split('/').map(Number);
+      if (Date.UTC(fA, fM - 1, fJ) < Date.UTC(dA, dM - 1, dJ)) {
+        throw new Error('La date de fin est antérieure à la date de début.');
+      }
+      return { inputs: { date_debut: debut, date_fin: fin }, detail: `du ${debut} au ${fin}` };
+    },
+  },
+
   deplacer_commandes: {
     file: 'deplacer_commandes.yml',
     label: 'Déplacer commandes',
@@ -396,6 +413,29 @@ const PAGE = `<!doctype html>
                    inputmode="numeric" autocomplete="off">
           </div>
           <button type="submit">Générer les ventes</button>
+        </div>
+        <p class="status" role="status"></p>
+      </form>
+    </section>
+
+    <!--carte:cumul_controle_stocks-->
+    <section class="card">
+      <h2>Cumul Contrôle Stocks</h2>
+      <p class="hint">Additionne, gencod par gencod, les écarts du contrôle de stocks
+        sur la période choisie (hors stocks insuffisants et articles à déloter).</p>
+      <form data-workflow="cumul_controle_stocks">
+        <div class="fields">
+          <div class="field">
+            <label for="ccs-debut">Du</label>
+            <input type="text" id="ccs-debut" name="date_debut" placeholder="JJ/MM/AAAA"
+                   inputmode="numeric" autocomplete="off" required>
+          </div>
+          <div class="field">
+            <label for="ccs-fin">Au</label>
+            <input type="text" id="ccs-fin" name="date_fin" placeholder="JJ/MM/AAAA"
+                   inputmode="numeric" autocomplete="off" required>
+          </div>
+          <button type="submit">Lancer le cumul</button>
         </div>
         <p class="status" role="status"></p>
       </form>
