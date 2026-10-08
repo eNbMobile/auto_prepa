@@ -1,7 +1,8 @@
-# Regroupe les contrôles de stock envoyés sur une période choisie : reprend
-# jour par jour le même calcul que controle_stocks.py (stock soir J-1 +
-# ventes vs stock matin J) et additionne les écarts par gencod sur toute la
-# période (hors stocks insuffisants et articles à déloter).
+# Regroupe les contrôles de stock envoyés sur une période choisie : relit les
+# PDF d'écarts réellement envoyés par email chaque jour (controle_stocks.py,
+# un seul retenu par jour en cas de relance) et additionne les écarts par
+# gencod sur toute la période (hors stocks insuffisants et articles à
+# déloter).
 name: Cumul Contrôle Stocks
 
 on:
