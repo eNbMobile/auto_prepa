@@ -3,12 +3,14 @@
 Cumul du contrôle de stocks sur une période (d'une date à une autre, bornes
 incluses).
 
-Reprend jour par jour le même calcul que controle_stocks.py (stock du soir
-J-1 + ventes du jour vs stock du matin du lendemain, même périmètre de
-gencods R1, mêmes exports archivés sur Drive) mais additionne les écarts
-« ECART » obtenus chaque jour pour les regrouper par gencod sur toute la
-période — uniquement le contrôle de stock proprement dit : ni les stocks
-insuffisants, ni les articles à déloter n'entrent dans ce cumul.
+Se base sur les PDF réellement envoyés par email chaque jour où le contrôle
+de stocks a tourné (sujet « Contrôle stocks … », cf. controle_stocks.py) —
+pas sur un recalcul depuis les archives de stocks : ce sont les écarts
+effectivement rapportés qui comptent. Si plusieurs emails concernent le même
+jour (relance manuelle), seul le dernier envoyé est retenu. Un jour sans
+email (ex. dimanche, pas de contrôle lancé) ou sans PDF d'écarts joint
+(aucun écart ce jour-là) ne contribue simplement pas au cumul — ni les
+stocks insuffisants, ni les articles à déloter n'en font partie.
 
 Un gencod dont les écarts cumulés s'annulent au final (ex. -3 un jour, +3 un
 autre) apparaît tout de même dans le résultat, puisqu'il a bien eu des
@@ -18,11 +20,20 @@ Usage :
   python3 cumul_controle_stocks.py --date-debut JJ/MM/AAAA --date-fin JJ/MM/AAAA
 """
 
+import base64
 import os
+import re
+import subprocess
 import sys
 from datetime import date, timedelta
 
 import controle_stocks as cs
+
+_RE_DATE_SUJET  = re.compile(r'(\d{2}/\d{2}/\d{4})')
+_RE_LIGNE_ECART = re.compile(r'^\s*(\S.*)\s+\d+\s+\d+\s+\d+\s+\d+\s+([+-]\d+)\s*$')
+_RE_GENCOD_SEUL = re.compile(r'^\s*(\d{8,13})\s*$')
+
+PREFIXE_SUJET = "Contrôle stocks "
 
 
 def _parser_date(texte, nom_option):
@@ -34,89 +45,176 @@ def _parser_date(texte, nom_option):
         sys.exit(1)
 
 
-def cumuler_periode(date_debut, date_fin, gencods_r1=None, libelles_dict=None):
-    """Additionne par gencod les écarts ECART du contrôle de stocks sur
-    [date_debut, date_fin] (bornes incluses).
+def _trouver_pj_ecarts(payload):
+    """Cherche récursivement la pièce jointe 'ecarts_*.pdf' dans le payload
+    Gmail d'un message. Retourne (nom_fichier, attachment_id) ou (None, None)."""
+    nom = payload.get('filename', '') or ''
+    if nom.startswith('ecarts_') and nom.endswith('.pdf'):
+        attachment_id = payload.get('body', {}).get('attachmentId')
+        if attachment_id:
+            return nom, attachment_id
+    for part in payload.get('parts', []) or []:
+        nom, attachment_id = _trouver_pj_ecarts(part)
+        if attachment_id:
+            return nom, attachment_id
+    return None, None
 
-    Pour chaque jour J de la période, reproduit le calcul de
-    controle_stocks.py : stock du soir de J + ventes de J comparés au stock
-    du matin de J+1. Un jour dont l'une des deux archives de stock est
-    introuvable sur Drive est ignoré (compté séparément).
 
-    Retourne (lignes, jours_ok, jours_ignores) :
+def lister_emails_controle(date_debut, date_fin):
+    """Cherche, parmi les emails « Contrôle stocks … » envoyés, celui (le
+    plus récent en cas de doublon) correspondant à chaque jour de
+    [date_debut, date_fin] — le jour étant la dernière date mentionnée dans
+    le sujet (le dernier jour de ventes du contrôle quotidien).
+
+    Retourne {jour (date): (message_id, nom_pj, attachment_id) | None} —
+    None si aucun email « Contrôle stocks » n'a été trouvé pour ce jour.
+    attachment_id est None si l'email trouvé n'a pas de PDF d'écarts joint
+    (aucun écart ce jour-là).
+    """
+    svc = cs._get_gmail_service()
+    if not svc:
+        print("  Gmail inaccessible.")
+        return {}
+
+    apres  = (date_debut - timedelta(days=1)).strftime('%Y/%m/%d')
+    avant  = (date.today() + timedelta(days=1)).strftime('%Y/%m/%d')
+    query  = f'in:sent "Contrôle stocks" after:{apres} before:{avant}'
+
+    messages = []
+    page_token = None
+    while True:
+        params = {'userId': 'me', 'q': query, 'maxResults': 100}
+        if page_token:
+            params['pageToken'] = page_token
+        res = svc.users().messages().list(**params).execute()
+        messages.extend(res.get('messages', []))
+        page_token = res.get('nextPageToken')
+        if not page_token:
+            break
+
+    print(f"  {len(messages)} email(s) candidat(s) trouvé(s) sur Gmail.")
+
+    retenu_par_jour = {}  # jour -> (internalDate, message_id, nom_pj, attachment_id)
+    for m in messages:
+        detail = svc.users().messages().get(userId='me', id=m['id'], format='full').execute()
+        headers = detail.get('payload', {}).get('headers', [])
+        sujet = next((h['value'] for h in headers if h['name'] == 'Subject'), '')
+        if not sujet.startswith(PREFIXE_SUJET):
+            continue
+
+        dates_sujet = _RE_DATE_SUJET.findall(sujet)
+        if not dates_sujet:
+            continue
+        try:
+            j, mo, a = dates_sujet[-1].split('/')
+            jour = date(int(a), int(mo), int(j))
+        except Exception:
+            continue
+        if jour < date_debut or jour > date_fin:
+            continue
+
+        internal_date = int(detail.get('internalDate', '0'))
+        nom_pj, attachment_id = _trouver_pj_ecarts(detail.get('payload', {}))
+
+        actuel = retenu_par_jour.get(jour)
+        if actuel is None or internal_date > actuel[0]:
+            retenu_par_jour[jour] = (internal_date, m['id'], nom_pj, attachment_id)
+
+    resultat = {}
+    jour = date_debut
+    while jour <= date_fin:
+        entree = retenu_par_jour.get(jour)
+        resultat[jour] = (entree[1], entree[2], entree[3]) if entree else None
+        jour += timedelta(days=1)
+    return resultat
+
+
+def telecharger_piece_jointe(message_id, attachment_id, dest):
+    """Télécharge une pièce jointe Gmail (par id de message + d'attachment)
+    vers dest. Retourne dest."""
+    svc = cs._get_gmail_service()
+    pj = svc.users().messages().attachments().get(
+        userId='me', messageId=message_id, id=attachment_id).execute()
+    data = base64.urlsafe_b64decode(pj['data'])
+    with open(dest, 'wb') as f:
+        f.write(data)
+    return dest
+
+
+def parser_pdf_ecarts(chemin_pdf):
+    """Extrait [(gencod, libelle, ecart), ...] du PDF 'écarts' tel qu'envoyé
+    par email (format complet de controle_stocks.py : Code-barres / Libellé /
+    J-1 / Ventes / Théo / J / Écart — le gencod est imprimé en texte sous le
+    code-barres, sur la ligne suivante)."""
+    pt = subprocess.run(["pdftotext", "-layout", chemin_pdf, "-"],
+                        capture_output=True, text=True)
+    resultats = []
+    pending = None
+    for ligne in pt.stdout.splitlines():
+        m_gencod = _RE_GENCOD_SEUL.match(ligne)
+        if m_gencod and pending is not None:
+            resultats.append((m_gencod.group(1).zfill(13), pending[0].strip(), pending[1]))
+            pending = None
+            continue
+        m_ecart = _RE_LIGNE_ECART.match(ligne)
+        if m_ecart:
+            pending = (m_ecart.group(1), int(m_ecart.group(2)))
+    return resultats
+
+
+def cumuler_periode(date_debut, date_fin):
+    """Additionne par gencod les écarts des PDF « Contrôle stocks » réellement
+    envoyés par email sur [date_debut, date_fin] (bornes incluses) — le
+    dernier email envoyé pour un jour donné si plusieurs s'y rapportent.
+
+    Retourne (lignes, jours_avec_ecarts, jours_sans_ecarts, jours_sans_email) :
       - lignes : [(gencod, nb_jours_ecart, ecart_cumule, libelle), ...] triée
         par |écart cumulé| décroissant ;
-      - jours_ok : nombre de jours effectivement comparés ;
-      - jours_ignores : liste des dates (date) sans archive disponible.
+      - jours_avec_ecarts : jours dont le PDF d'écarts a été trouvé et lu ;
+      - jours_sans_ecarts : jours avec un email « Contrôle stocks » envoyé
+        mais sans PDF d'écarts joint (aucun écart ce jour-là) ;
+      - jours_sans_email : jours sans aucun email « Contrôle stocks » trouvé
+        (contrôle non lancé, ou non envoyé — ex. dimanche sans ventes).
     """
-    if gencods_r1 is None:
-        gencods_r1 = cs.charger_gencods_r1()
-    if libelles_dict is None:
-        libelles_dict = cs.charger_libelles_dict()
+    emails_par_jour = lister_emails_controle(date_debut, date_fin)
 
     cumul          = {}
     nb_jours_ecart = {}
     libelles       = {}
-    jours_ok       = 0
-    jours_ignores  = []
+    jours_avec_ecarts = []
+    jours_sans_ecarts = []
+    jours_sans_email  = []
 
     jour = date_debut
     while jour <= date_fin:
-        lendemain = jour + timedelta(days=1)
-        print(f"\n── {jour.strftime('%d/%m/%Y')} "
-              f"(stock soir → stock matin du {lendemain.strftime('%d/%m/%Y')}) ──")
-
-        chemin_soir  = f"_cumul_soir_{jour.strftime('%Y%m%d')}.xlsx"
-        chemin_matin = f"_cumul_matin_{lendemain.strftime('%Y%m%d')}.xlsx"
-
-        ok_soir = cs.telecharger_fichier_archive(
-            "stocks", cs.nom_archive_stock(jour, "soir"), chemin_soir,
-            root_id=cs.DRIVE_CONFIG_FOLDER_ID)
-        ok_matin = cs.telecharger_fichier_archive(
-            "stocks", cs.nom_archive_stock(lendemain, "matin"), chemin_matin,
-            root_id=cs.DRIVE_CONFIG_FOLDER_ID)
-
-        if not ok_soir or not ok_matin:
-            print(f"  Archive(s) de stock manquante(s) — jour ignoré.")
-            jours_ignores.append(jour)
+        entree = emails_par_jour.get(jour)
+        if entree is None:
+            jours_sans_email.append(jour)
             jour += timedelta(days=1)
             continue
 
+        message_id, nom_pj, attachment_id = entree
+        if not attachment_id:
+            jours_sans_ecarts.append(jour)
+            jour += timedelta(days=1)
+            continue
+
+        chemin_pdf = f"_cumul_ecarts_{jour.strftime('%Y%m%d')}.pdf"
+        telecharger_piece_jointe(message_id, attachment_id, chemin_pdf)
         try:
-            stock_j1, lib_j1, _ = cs.lire_stock(chemin_soir, classeur_requis=False)
-            stock_j,  lib_j,  _ = cs.lire_stock(chemin_matin, classeur_requis=False)
+            lignes_jour = parser_pdf_ecarts(chemin_pdf)
         finally:
-            for chemin in (chemin_soir, chemin_matin):
-                if os.path.exists(chemin):
-                    os.remove(chemin)
+            if os.path.exists(chemin_pdf):
+                os.remove(chemin_pdf)
 
-        ventes, lib_ventes = cs.generer_ventes(jour)
-
-        tous = gencods_r1 if gencods_r1 is not None else (set(stock_j1) | set(stock_j))
-
-        nb_ecarts_jour = 0
-        for gencod in tous:
-            if gencod not in stock_j1 or gencod not in stock_j:
-                continue
-            s_j1   = stock_j1.get(gencod, 0.0)
-            v      = ventes.get(gencod, 0.0)
-            s_theo = max(0.0, s_j1 - v)
-            s_j    = stock_j.get(gencod, 0.0)
-            ecart  = s_j - s_theo
-            if abs(ecart) < 0.001:
-                continue
-
-            cumul[gencod]          = cumul.get(gencod, 0.0) + ecart
+        print(f"  {jour.strftime('%d/%m/%Y')} : {nom_pj} → {len(lignes_jour)} écart(s)")
+        jours_avec_ecarts.append(jour)
+        for gencod, lib, ecart in lignes_jour:
+            cumul[gencod]          = cumul.get(gencod, 0) + ecart
             nb_jours_ecart[gencod] = nb_jours_ecart.get(gencod, 0) + 1
-            nb_ecarts_jour += 1
-            if gencod not in libelles:
-                lib = (libelles_dict.get(gencod) or lib_j.get(gencod)
-                       or lib_j1.get(gencod) or lib_ventes.get(gencod, ''))
-                if lib:
-                    libelles[gencod] = lib
+            if lib and gencod not in libelles:
+                libelles[gencod] = lib
 
-        print(f"  → {nb_ecarts_jour} écart(s) ce jour-là")
-        jours_ok += 1
         jour += timedelta(days=1)
 
     lignes = [
@@ -124,7 +222,7 @@ def cumuler_periode(date_debut, date_fin, gencods_r1=None, libelles_dict=None):
         for gencod, ecart in cumul.items()
     ]
     lignes.sort(key=lambda r: abs(r[2]), reverse=True)
-    return lignes, jours_ok, jours_ignores
+    return lignes, jours_avec_ecarts, jours_sans_ecarts, jours_sans_email
 
 
 def _construire_pdf_cumul(lignes, date_debut, date_fin, nom_pdf):
@@ -222,10 +320,10 @@ def _construire_pdf_cumul(lignes, date_debut, date_fin, nom_pdf):
     return nom_pdf
 
 
-def envoyer_email_cumul(pdf, date_debut, date_fin, nb, manquant, surplus, jours_ok, jours_ignores):
+def envoyer_email_cumul(pdf, date_debut, date_fin, nb, manquant, surplus,
+                        jours_avec_ecarts, jours_sans_ecarts, jours_sans_email):
     """Envoie par email (Gmail API) le PDF du cumul des écarts."""
     try:
-        import base64
         from email.mime.multipart import MIMEMultipart
         from email.mime.text import MIMEText
         from email.mime.application import MIMEApplication
@@ -238,16 +336,19 @@ def envoyer_email_cumul(pdf, date_debut, date_fin, nb, manquant, surplus, jours_
         msg = MIMEMultipart()
         msg['To']      = cs.EMAIL_DESTINATAIRE
         msg['Cc']      = cs.EMAIL_COPIE_STOCK
-        msg['Subject'] = f"Cumul contrôle stocks {label} — {nb} écart{'s' if nb > 1 else ''} cumulé{'s' if nb > 1 else ''}"
+        msg['Subject'] = (f"Cumul contrôle stocks {label} — "
+                          f"{nb} écart{'s' if nb > 1 else ''} cumulé{'s' if nb > 1 else ''}")
 
         corps = (f"Cumul du contrôle de stocks {label}\n\n"
-                 f"  Gencods en écart : {nb}\n"
-                 f"  Jours comparés   : {jours_ok}\n")
-        if jours_ignores:
-            dates_ignorees = ", ".join(d.strftime('%d/%m/%Y') for d in jours_ignores)
-            corps += f"  Jours ignorés    : {len(jours_ignores)} (archive(s) manquante(s) : {dates_ignorees})\n"
-        corps += (f"  Total manquant   : {manquant:.0f} unités\n"
-                  f"  Total surplus    : +{surplus:.0f} unités\n\n"
+                 f"  Gencods en écart     : {nb}\n"
+                 f"  Jours avec écarts    : {len(jours_avec_ecarts)}\n"
+                 f"  Jours sans écart     : {len(jours_sans_ecarts)}\n")
+        if jours_sans_email:
+            dates_manquantes = ", ".join(d.strftime('%d/%m/%Y') for d in jours_sans_email)
+            corps += (f"  Jours sans contrôle envoyé : {len(jours_sans_email)} "
+                      f"({dates_manquantes})\n")
+        corps += (f"  Total manquant       : {manquant:.0f} unités\n"
+                  f"  Total surplus        : +{surplus:.0f} unités\n\n"
                   f"Détail en pièce jointe.")
         msg.attach(MIMEText(corps, 'plain', 'utf-8'))
 
@@ -290,18 +391,20 @@ def main():
     cs._charger_config()
 
     print(f"Cumul du contrôle de stocks du {date_debut.strftime('%d/%m/%Y')} "
-          f"au {date_fin.strftime('%d/%m/%Y')} …")
+          f"au {date_fin.strftime('%d/%m/%Y')} (d'après les emails envoyés) …")
 
-    lignes, jours_ok, jours_ignores = cumuler_periode(date_debut, date_fin)
+    lignes, jours_avec_ecarts, jours_sans_ecarts, jours_sans_email = cumuler_periode(
+        date_debut, date_fin)
 
     manquant = sum(r[2] for r in lignes if r[2] < 0)
     surplus  = sum(r[2] for r in lignes if r[2] > 0)
 
     print(f"\n── Résultats ──────────────────────────────────────")
-    print(f"  Jours comparés    : {jours_ok}")
-    if jours_ignores:
-        print(f"  Jours ignorés     : {len(jours_ignores)} "
-              f"({', '.join(d.strftime('%d/%m/%Y') for d in jours_ignores)})")
+    print(f"  Jours avec écarts envoyés : {len(jours_avec_ecarts)}")
+    print(f"  Jours sans écart          : {len(jours_sans_ecarts)}")
+    if jours_sans_email:
+        print(f"  Jours sans contrôle envoyé : {len(jours_sans_email)} "
+              f"({', '.join(d.strftime('%d/%m/%Y') for d in jours_sans_email)})")
     print(f"  Gencods en écart  : {len(lignes)}")
     print(f"  Total manquant    : {manquant:.0f} unités")
     print(f"  Total surplus     : +{surplus:.0f} unités")
@@ -320,7 +423,7 @@ def main():
     if pdf:
         print("\nEnvoi email …")
         envoyer_email_cumul(pdf, date_debut, date_fin, len(lignes), manquant, surplus,
-                            jours_ok, jours_ignores)
+                            jours_avec_ecarts, jours_sans_ecarts, jours_sans_email)
 
 
 if __name__ == "__main__":
