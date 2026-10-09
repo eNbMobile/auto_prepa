@@ -5,6 +5,9 @@ deplacement a ete demande dans la journee via le workflow "Deplacer
 commandes" (sans --forcer) : cette demande n'a fait, sur le moment,
 qu'inscrire un marqueur Drive GITHUB/DeplacementsEnAttente/deplacer_NUMERO.txt
 (date cible deja resolue), depose par deplacer_commande.mettre_en_attente.
+Traite aussi les demandes de suppression sans forcage (marqueur contenant
+SUPPRIMER, depose par deplacer_commande.mettre_en_attente_suppression) : les
+exemplaires archives de la commande sont alors mis a la corbeille Drive.
 
 Pourquoi differe : les ventes du jour (generer_ventes, controle_stocks,
 cumul_ventes_semaine, renseigne_ca) tournent dans la journee a partir des
@@ -60,7 +63,7 @@ def main():
     resultats = []
     echecs = False
     for file_id, numero, cible in marqueurs:
-        ok, message = dc.deplacer(drive_svc, numero, cible)
+        ok, message = dc.traiter_marqueur(drive_svc, numero, cible)
         print(f"  {'OK ' if ok else 'ERREUR'} {message}")
         resultats.append((ok, message))
         if ok:
