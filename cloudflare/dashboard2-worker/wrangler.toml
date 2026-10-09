@@ -5,7 +5,7 @@ compatibility_date = "2024-11-01"
 
 [vars]
 # Cartes / workflows retirés de cette page (clés de WORKFLOWS, séparées par des virgules).
-MASQUER = "generer_ventes"
+MASQUER = "generer_ventes,auto_prepa"
 # Pas de lien "Voir tous les runs sur GitHub Actions" en bas de page.
 SANS_LIEN_RUNS = "1"
 

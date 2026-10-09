@@ -8,6 +8,7 @@ Les workflows disponibles sur la page :
 
 | Carte | Workflow | Choix proposés |
 | --- | --- | --- |
+| **aut_prep** | `auto_prepa.yml` | case **Forcer** : traite tout de suite, en ignorant la fenêtre horaire du workflow (sinon le run ne fait rien hors de sa fenêtre) |
 | **Contrôle Stocks** | `controle_stocks.yml` | jours cumulés (1 à 7) + dernier jour de ventes (automatique, aujourd'hui, hier, avant-hier, ou date saisie) |
 | **Anticipation Commandes** | `anticipation_commandes.yml` | commandes du jour, de demain, ou date saisie |
 | **Générer Ventes** | `generer_ventes.yml` | aujourd'hui, hier, avant-hier, ou date saisie |
@@ -15,7 +16,7 @@ Les workflows disponibles sur la page :
 | **Cumul Contrôle Stocks** | `cumul_controle_stocks.yml` | date de début + date de fin (`JJ/MM/AAAA`) : additionne, gencod par gencod, les écarts du contrôle de stocks sur toute la période (hors stocks insuffisants et articles à déloter) |
 
 Une variante **`wf2`** (dossier `cloudflare/dashboard2-worker`) reprend exactement
-cette page, sans la carte « Générer Ventes » : voir son README.
+cette page, sans les cartes « Générer Ventes » et « aut_prep » : voir son README.
 
 Chaque carte se lance indépendamment, sans recharger la page : le résultat
 (succès ou erreur) s'affiche sous le bouton, avec un lien vers le run

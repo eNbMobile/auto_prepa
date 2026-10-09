@@ -1,16 +1,17 @@
 # Worker "wf2" — tableau de bord sans « Générer Ventes » ni lien vers les runs
 
 Même page que le worker [`wf`](../dashboard-worker/README.md) (Contrôle
-Stocks, Anticipation Commandes, Déplacer commandes), **sans la carte
-« Générer Ventes »**. Le workflow `generer_ventes.yml` est aussi refusé côté
-worker : il ne peut pas être lancé depuis cette URL, même en appelant
+Stocks, Anticipation Commandes, Déplacer commandes), **sans les cartes
+« Générer Ventes » et « aut_prep »**. Les workflows `generer_ventes.yml` et
+`auto_prepa.yml` sont aussi refusés côté worker : ils ne peuvent pas être
+lancés depuis cette URL, même en appelant
 `/dispatch` directement.
 
 Le lien « Voir tous les runs sur GitHub Actions » du bas de page est aussi
 retiré (le lien « Voir le run » affiché après un lancement reste).
 
 Il n'y a pas de code propre à `wf2` : `wrangler.toml` pointe sur
-`../dashboard-worker/src/index.js` et définit `MASQUER = "generer_ventes"` et
+`../dashboard-worker/src/index.js` et définit `MASQUER = "generer_ventes,auto_prepa"` et
 `SANS_LIEN_RUNS = "1"`.
 Toute évolution de `wf` (nouvelle carte, correction) profite donc à `wf2` au
 prochain déploiement.
