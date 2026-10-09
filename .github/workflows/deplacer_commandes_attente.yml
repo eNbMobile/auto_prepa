@@ -7,7 +7,8 @@ name: Deplacer commandes en attente
 # et c'est ce workflow qui effectue le deplacement physique une fois les
 # ventes et le CA du jour deja calcules — sinon une commande deplacee d'un
 # jour a l'autre disparaissait du CA quotidien (renseigne_ca) alors qu'elle
-# avait bien ete preparee. Voir deplacer_commandes_attente.py.
+# avait bien ete preparee. Traite aussi les suppressions demandees sans
+# forcage (marqueur SUPPRIMER). Voir deplacer_commandes_attente.py.
 
 on:
   schedule:

@@ -309,6 +309,73 @@ class TestFileAttente(unittest.TestCase):
         self.assertEqual(_parents(self.drive, "f1"), ["j25"])
         self.assertEqual(dc.lister_marqueurs_attente(self.drive), [])
 
+    def test_suppression_en_attente_ne_supprime_rien(self):
+        ok, msg = dc.mettre_en_attente_suppression(self.drive, "54868421")
+        self.assertTrue(ok, msg)
+        self.assertIn("22h", msg)
+        self.assertFalse(self.drive.files()._par_id("f1").get("trashed"))
+        self.assertEqual([(n, c) for _id, n, c in dc.lister_marqueurs_attente(self.drive)],
+                         [("54868421", dc.SUPPRIMER)])
+
+    def test_suppression_en_attente_introuvable(self):
+        ok, msg = dc.mettre_en_attente_suppression(self.drive, "99999999")
+        self.assertFalse(ok)
+        self.assertIn("introuvable", msg)
+        self.assertEqual(self._marqueurs_store(), [])
+
+    def test_suppression_remplace_un_deplacement_en_attente(self):
+        dc.mettre_en_attente(self.drive, "54868421", date(2026, 9, 26), aujourd_hui=AUJOURD_HUI)
+        dc.mettre_en_attente_suppression(self.drive, "54868421")
+        self.assertEqual([(n, c) for _id, n, c in dc.lister_marqueurs_attente(self.drive)],
+                         [("54868421", dc.SUPPRIMER)])
+        self.assertEqual(len(self._marqueurs_store()), 1)
+
+    def test_traitement_du_soir_supprime(self):
+        dc.mettre_en_attente_suppression(self.drive, "54868421")
+        dc.mettre_en_attente(self.drive, "54868422", date(2026, 9, 26), aujourd_hui=AUJOURD_HUI)
+        for _file_id, numero, cible in dc.lister_marqueurs_attente(self.drive):
+            ok, msg = dc.traiter_marqueur(self.drive, numero, cible)
+            self.assertTrue(ok, msg)
+        self.assertTrue(self.drive.files()._par_id("f1").get("trashed"))
+        self.assertEqual(_parents(self.drive, "f2"), [next(
+            f["id"] for f in self.drive.files().store if f["name"] == "26_09")])
+
+
+class TestSupprimer(unittest.TestCase):
+    """--supprimer --forcer : suppression immediate (corbeille Drive)."""
+
+    def setUp(self):
+        self._bdc = ap.DRIVE_BDC_FOLDER_ID
+        ap.DRIVE_BDC_FOLDER_ID = BDC_ID
+        self.drive = _FakeDrive(_store())
+
+    def tearDown(self):
+        ap.DRIVE_BDC_FOLDER_ID = self._bdc
+
+    def test_supprime_tous_les_exemplaires(self):
+        self.drive.files().store.append(_bdc("f1bis", "54868421", "j25"))
+        ok, msg = dc.supprimer(self.drive, "54868421", None, "lendemain", "", AUJOURD_HUI)
+        self.assertTrue(ok, msg)
+        self.assertTrue(self.drive.files()._par_id("f1").get("trashed"))
+        self.assertTrue(self.drive.files()._par_id("f1bis").get("trashed"))
+        self.assertFalse(self.drive.files()._par_id("f2").get("trashed"))
+
+    def test_depot_manuel_non_supprime(self):
+        self.drive.files().store.append(_bdc("fm", "54868421", "manuel"))
+        dc.supprimer(self.drive, "54868421")
+        self.assertFalse(self.drive.files()._par_id("fm").get("trashed"))
+
+    def test_introuvable(self):
+        ok, msg = dc.supprimer(self.drive, "99999999")
+        self.assertFalse(ok)
+        self.assertIn("introuvable", msg)
+
+    def test_parser_args(self):
+        self.assertEqual(dc._parser_args(["--numeros", "54868421", "--supprimer"]),
+                         ("54868421", "", "", False, True))
+        self.assertEqual(dc._parser_args(["--numeros", "54868421", "--forcer", "--supprimer"]),
+                         ("54868421", "", "", True, True))
+
 
 if __name__ == "__main__":
     unittest.main()

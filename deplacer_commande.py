@@ -24,13 +24,20 @@ deplacement immediat d'un jour a l'autre leur faisait perdre une commande deja
 preparee. --forcer deplace immediatement, comme avant (a utiliser quand la
 commande n'a pas encore ete preparee).
 
+--supprimer ne deplace pas la commande : tous ses exemplaires archives dans
+BDC sont mis a la corbeille Drive (restaurables). Seul, --supprimer suit la
+meme logique de differe (marqueur contenant SUPPRIMER, traite le soir a 22h) ;
+avec --forcer, la suppression est immediate. Le jour / la date cible sont
+alors ignores.
+
 Usage :
-  deplacer_commande.py --numeros "54868421 54868422" [--jour CHOIX] [--date JJ/MM[/AAAA]] [--forcer]
+  deplacer_commande.py --numeros "54868421 54868422" [--jour CHOIX] [--date JJ/MM[/AAAA]] [--forcer] [--supprimer]
 
   --jour    : lendemain (defaut : lendemain du jour actuel de la commande),
               aujourdhui, demain, apres-demain
   --date    : date cible explicite, prioritaire sur --jour
   --forcer  : deplace immediatement au lieu d'attendre le run du soir
+  --supprimer : supprime la commande (corbeille Drive) au lieu de la deplacer
 """
 
 import io
@@ -262,11 +269,36 @@ def deplacer(drive_svc, numero, cible, jour_choisi="", date_saisie="", aujourd_h
     return True, f"{nom} : deplace du {de} au {libelle(cible)} ({chemin_source} -> {chemin_cible})"
 
 
+def supprimer(drive_svc, numero, *_ignores, **_ignores_nommes):
+    """Met a la corbeille Drive (restaurable) tous les exemplaires de
+    BonDeCommande_NUMERO.pdf archives dans BDC/MM_AAAA/JJ_MM. Les parametres
+    de date cible (meme signature que deplacer()) sont ignores.
+
+    Retourne (ok, message), comme deplacer()."""
+    nom = f"BonDeCommande_{numero}.pdf"
+    try:
+        exemplaires = localiser_bdc(drive_svc, numero)
+    except Exception as e:
+        return False, f"{nom} : recherche sur Drive echouee ({e})"
+    if not exemplaires:
+        return False, f"{nom} : introuvable dans l'archive Drive BDC"
+    chemins = ", ".join(sorted({f"BDC/{e['mm_aaaa']}/{e['jj_mm']}" for e in exemplaires}))
+    try:
+        for e in exemplaires:
+            drive_svc.files().update(fileId=e["file_id"], body={"trashed": True}).execute()
+    except Exception as e:
+        return False, f"{nom} : suppression ({chemins}) echouee ({e})"
+    return True, f"{nom} : supprime ({chemins}, mis a la corbeille Drive)"
+
+
 # ─────────────────────────────────────────────────────────────────
 # File d'attente (marqueurs Drive GITHUB/DeplacementsEnAttente)
 # ─────────────────────────────────────────────────────────────────
 
 DOSSIER_ATTENTE_NOM = "DeplacementsEnAttente"
+# Contenu d'un marqueur demandant une suppression plutot qu'un deplacement (a
+# la place de la date cible AAAA-MM-JJ).
+SUPPRIMER = "SUPPRIMER"
 _RE_MARQUEUR_ATTENTE = re.compile(r"^deplacer_(\d{6,})\.txt$")
 
 
@@ -288,8 +320,8 @@ def _dossier_attente(drive_svc, creer=True):
 def deposer_marqueur_attente(drive_svc, numero, cible):
     """Depose (ou met a jour) le marqueur deplacer_NUMERO.txt dans
     GITHUB/DeplacementsEnAttente/, contenant la date cible deja resolue
-    (AAAA-MM-JJ). Une nouvelle demande sur le meme numero remplace la
-    precedente."""
+    (AAAA-MM-JJ), ou SUPPRIMER pour une suppression. Une nouvelle demande sur
+    le meme numero remplace la precedente."""
     folder_id = _dossier_attente(drive_svc)
     nom_fichier = f"deplacer_{numero}.txt"
     res = drive_svc.files().list(
@@ -299,7 +331,7 @@ def deposer_marqueur_attente(drive_svc, numero, cible):
     existant = res.get("files", [])
     tmp = os.path.join(ap.WORK_DIR, nom_fichier)
     with open(tmp, "w", encoding="utf-8") as f:
-        f.write(cible.isoformat() + "\n")
+        f.write((SUPPRIMER if cible == SUPPRIMER else cible.isoformat()) + "\n")
     try:
         media = MediaFileUpload(tmp, mimetype="text/plain", resumable=False)
         if existant:
@@ -315,7 +347,8 @@ def deposer_marqueur_attente(drive_svc, numero, cible):
 
 
 def lister_marqueurs_attente(drive_svc):
-    """Marqueurs de deplacement en attente : liste de (file_id, numero, cible).
+    """Marqueurs de deplacement en attente : liste de (file_id, numero, cible),
+    cible etant une date, ou SUPPRIMER pour une suppression.
     Liste vide si le dossier n'existe pas encore (aucune demande a ce jour) ou
     si un marqueur est illisible (ignore plutot que de faire echouer le run)."""
     folder_id = _dossier_attente(drive_svc, creer=False)
@@ -336,7 +369,8 @@ def lister_marqueurs_attente(drive_svc):
             done = False
             while not done:
                 _, done = dl.next_chunk()
-            cible = date.fromisoformat(buf.getvalue().decode("utf-8").strip())
+            contenu = buf.getvalue().decode("utf-8").strip()
+            cible = SUPPRIMER if contenu.upper() == SUPPRIMER else date.fromisoformat(contenu)
         except Exception as e:
             print(f"    {f['name']} : lecture echouee, ignore ({e})")
             continue
@@ -366,6 +400,34 @@ def mettre_en_attente(drive_svc, numero, cible, jour_choisi="", date_saisie="", 
                   f"sera effectue ce soir (22h)")
 
 
+def mettre_en_attente_suppression(drive_svc, numero, *_ignores, **_ignores_nommes):
+    """Inscrit la demande de suppression de BonDeCommande_NUMERO.pdf dans la
+    file d'attente (marqueur SUPPRIMER), pour une suppression differee au soir
+    (deplacer_commandes_attente.py). Rien n'est supprime ici.
+
+    Retourne (ok, message), comme deplacer()."""
+    nom = f"BonDeCommande_{numero}.pdf"
+    try:
+        exemplaires = localiser_bdc(drive_svc, numero)
+    except Exception as e:
+        return False, f"{nom} : recherche sur Drive echouee ({e})"
+    if not exemplaires:
+        return False, f"{nom} : introuvable dans l'archive Drive BDC"
+    try:
+        deposer_marqueur_attente(drive_svc, numero, SUPPRIMER)
+    except Exception as e:
+        return False, f"{nom} : mise en attente echouee ({e})"
+    return True, f"{nom} : suppression enregistree, sera effectuee ce soir (22h)"
+
+
+def traiter_marqueur(drive_svc, numero, cible):
+    """Applique une demande en attente : suppression si cible vaut SUPPRIMER,
+    deplacement vers la date cible sinon. Retourne (ok, message)."""
+    if cible == SUPPRIMER:
+        return supprimer(drive_svc, numero)
+    return deplacer(drive_svc, numero, cible)
+
+
 def _parser_args(argv):
     valeurs = {"--numeros": "", "--jour": "", "--date": ""}
     for nom in valeurs:
@@ -374,17 +436,20 @@ def _parser_args(argv):
             if i + 1 < len(argv):
                 valeurs[nom] = argv[i + 1]
     forcer = "--forcer" in argv
-    return valeurs["--numeros"], valeurs["--jour"], valeurs["--date"], forcer
+    suppr = "--supprimer" in argv
+    return valeurs["--numeros"], valeurs["--jour"], valeurs["--date"], forcer, suppr
 
 
-def _resume(lignes, forcer):
+def _resume(lignes, forcer, suppr=False):
     """Recapitulatif visible sur la page du run GitHub Actions."""
     chemin = os.environ.get("GITHUB_STEP_SUMMARY")
     if not chemin:
         return
     try:
         with open(chemin, "a", encoding="utf-8") as f:
-            titre = "Deplacer commandes" if forcer else "Deplacer commandes (mise en attente)"
+            titre = "Supprimer commandes" if suppr else "Deplacer commandes"
+            if not forcer:
+                titre += " (mise en attente)"
             f.write(f"## {titre}\n\n")
             for ok, message in lignes:
                 f.write(f"- {'✅' if ok else '❌'} {message}\n")
@@ -393,7 +458,7 @@ def _resume(lignes, forcer):
 
 
 def main():
-    texte_numeros, jour_choisi, date_saisie, forcer = _parser_args(sys.argv[1:])
+    texte_numeros, jour_choisi, date_saisie, forcer, suppr = _parser_args(sys.argv[1:])
     numeros = extraire_numeros(texte_numeros)
     if not numeros:
         print(f"Aucun numero de commande reconnu dans {texte_numeros!r} "
@@ -404,7 +469,7 @@ def main():
     # Date saisie verifiee avant tout acces Drive : une faute de frappe ne
     # doit rien deplacer.
     cible = None
-    if date_saisie.strip():
+    if date_saisie.strip() and not suppr:
         cible = lire_date(date_saisie, aujourd_hui)
         if cible is None:
             print(f"Date cible invalide : {date_saisie!r} (attendu JJ/MM/AAAA ou JJ/MM).")
@@ -415,8 +480,12 @@ def main():
     drive_svc = build("drive", "v3", credentials=creds)
     ap._charger_config(drive_svc)
 
-    action = deplacer if forcer else mettre_en_attente
-    verbe = "Deplacement" if forcer else "Mise en attente du deplacement"
+    if suppr:
+        action = supprimer if forcer else mettre_en_attente_suppression
+        verbe = "Suppression" if forcer else "Mise en attente de la suppression"
+    else:
+        action = deplacer if forcer else mettre_en_attente
+        verbe = "Deplacement" if forcer else "Mise en attente du deplacement"
     print(f"\n{verbe} de {len(numeros)} commande(s) : {', '.join(numeros)}")
     resultats = []
     for numero in numeros:
@@ -424,8 +493,15 @@ def main():
         print(f"  {'OK ' if ok else 'ERREUR'} {message}")
         resultats.append((ok, message))
 
-    _resume(resultats, forcer)
-    if forcer:
+    _resume(resultats, forcer, suppr)
+    if suppr and forcer:
+        print("\nBons mis a la corbeille Drive (restaurables). Si les ventes / le CA "
+              "du jour concerne ont deja ete calcules, relancer les workflows "
+              "correspondants (generer_ventes, renseigne_ca, controle_stocks).")
+    elif suppr:
+        print("\nLa suppression aura lieu ce soir a 22h (workflow 'Deplacer commandes "
+              "en attente'). Cocher aussi --forcer pour supprimer tout de suite.")
+    elif forcer:
         print("\nSi les ventes / le CA d'un des jours concernes ont deja ete calcules, "
               "relancer les workflows correspondants (generer_ventes, renseigne_ca, "
               "controle_stocks) pour ces jours.")

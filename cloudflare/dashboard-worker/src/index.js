@@ -152,6 +152,15 @@ const WORKFLOWS = {
       };
       const mode = params.mode || 'lendemain';
       const inputs = { numeros: numeros.join(' '), jour: JOURS.lendemain, date: '' };
+      const forcer = params.forcer === 'on' || params.forcer === 'true';
+      const supprimer = params.supprimer === 'on' || params.supprimer === 'true';
+      inputs.forcer = forcer ? 'true' : 'false';
+      inputs.supprimer = supprimer ? 'true' : 'false';
+      const quand = forcer ? 'tout de suite' : 'ce soir (22h)';
+      if (supprimer) {
+        // Suppression : jour / date cible ignorés.
+        return { inputs, detail: `suppression de la/des commande(s) ${inputs.numeros}, ${quand}` };
+      }
       let cible;
       if (mode === 'date') {
         const texte = String(params.date || '').trim();
@@ -168,9 +177,6 @@ const WORKFLOWS = {
       } else {
         throw new Error('Choix de jour invalide.');
       }
-      const forcer = params.forcer === 'on' || params.forcer === 'true';
-      inputs.forcer = forcer ? 'true' : 'false';
-      const quand = forcer ? 'tout de suite' : 'ce soir (22h)';
       return { inputs, detail: `commande(s) ${inputs.numeros} vers ${cible}, ${quand}` };
     },
   },
@@ -473,6 +479,10 @@ const PAGE = `<!doctype html>
             <label class="checkbox">
               <input type="checkbox" id="dc-forcer" name="forcer">
               Forcer (tout de suite, commande pas préparée)
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" id="dc-supprimer" name="supprimer">
+              Supprimer (au lieu de déplacer)
             </label>
           </div>
           <button type="submit">Déplacer</button>
