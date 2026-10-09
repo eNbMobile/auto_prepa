@@ -72,6 +72,18 @@ function resolveDate(mode, customDate, allowedModes) {
 /* -------------------------------------------------------------- workflows */
 
 const WORKFLOWS = {
+  auto_prepa: {
+    file: 'auto_prepa.yml',
+    label: 'aut_prep',
+    buildInputs(params) {
+      const force = params.force === 'on' || params.force === 'true';
+      return {
+        inputs: { force: force ? 'true' : 'false' },
+        detail: force ? 'forcé (fenêtre horaire ignorée)' : 'selon la fenêtre horaire habituelle',
+      };
+    },
+  },
+
   controle_stocks: {
     file: 'controle_stocks.yml',
     label: 'Contrôle Stocks',
@@ -333,6 +345,25 @@ const PAGE = `<!doctype html>
   </header>
 
   <div class="cards">
+
+    <!--carte:auto_prepa-->
+    <section class="card">
+      <h2>aut_prep</h2>
+      <p class="hint">Traite les nouvelles commandes (emails de confirmation et de
+        modification, bons déposés en traitement manuel).</p>
+      <form data-workflow="auto_prepa">
+        <div class="fields">
+          <div class="field field-checkbox">
+            <label class="checkbox">
+              <input type="checkbox" id="ap-force" name="force">
+              Forcer (ignore la fenêtre horaire)
+            </label>
+          </div>
+          <button type="submit">Lancer aut_prep</button>
+        </div>
+        <p class="status" role="status"></p>
+      </form>
+    </section>
 
     <!--carte:controle_stocks-->
     <section class="card">
