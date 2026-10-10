@@ -58,10 +58,10 @@ RAYONS_LETTRE = {
     "G": "Traiteur chaud",
 }
 
-# Ordre des rayons dans le PDF (une page par rayon) : la BVP d'abord, puis la
-# boucherie, le bazar, le traiteur chaud et la poissonnerie. Une lettre absente
+# Ordre des rayons dans le PDF (une page par rayon) : la BVP d'abord, puis le
+# traiteur chaud, la poissonnerie, la boucherie et le bazar. Une lettre absente
 # d'ici passe apres, par ordre alphabetique.
-_ORDRE_RAYONS_PDF = ("C", "B", "A", "G", "D")
+_ORDRE_RAYONS_PDF = ("C", "G", "D", "B", "A")
 
 # Rayons dont le format PDF affiche systematiquement poids/qte + prix + prix/kg
 # par ligne de commande (comme la Boucherie) : cf. avec_poids/poids_variable
