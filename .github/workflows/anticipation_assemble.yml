@@ -34,9 +34,14 @@ jobs:
           CDE_NUMERO:  ${{ github.event.client_payload.numero }}
           CDE_JOUR:    ${{ github.event.client_payload.dossier_jj_mm }}
           CDE_MOIS:    ${{ github.event.client_payload.dossier_mm_aaaa }}
+          CDE_REGENERER: ${{ github.event.client_payload.regenerer }}
         run: |
+          OPTIONS=""
+          if [ "$CDE_REGENERER" = "true" ]; then
+            OPTIONS="--regenerer"
+          fi
           python3 assembler_anticipation.py \
-            --numero "$CDE_NUMERO" --jour "$CDE_JOUR" --mois "$CDE_MOIS"
+            --numero "$CDE_NUMERO" --jour "$CDE_JOUR" --mois "$CDE_MOIS" $OPTIONS
 
       - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
         continue-on-error: true
