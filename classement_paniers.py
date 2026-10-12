@@ -11,8 +11,8 @@ Tranches :
   1. 30,00 € → 49,99 €
   2. 50,00 € → 79,99 €
   3. 80,00 € → 99,99 €
-  4. 100,00 € → 120,00 €
-  5. plus de 120 €
+  4. 100,00 € → 125,00 €
+  5. plus de 125 €
 (les commandes de moins de 30 € sont comptées à part.)
 
 Le tableau est affiché dans le log et, sur GitHub Actions, dans le résumé du run.
@@ -32,8 +32,8 @@ TRANCHES = [
     ("1. 30 € – 49,99 €",     30.00, 50.00),
     ("2. 50 € – 79,99 €",     50.00, 80.00),
     ("3. 80 € – 99,99 €",     80.00, 100.00),
-    ("4. 100 € – 120 €",      100.00, 120.005),
-    ("5. Plus de 120 €",      120.005, None),
+    ("4. 100 € – 125 €",      100.00, 125.005),
+    ("5. Plus de 125 €",      125.005, None),
 ]
 
 _RE_MONTANT = re.compile(r"Montant\s+initial\s+(\d+(?:[.,]\d+)?)", re.I)
