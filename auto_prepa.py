@@ -266,13 +266,11 @@ def _numero_bon_depose(nom_fichier, texte_pdf):
 
 
 def _commande_deja_traitee(drive_svc, numero, ignorer_parents=()):
-    """Vrai si la commande a deja ete preparee. Deux usages :
-
-    - ecarter un bon depose a la main pour une commande deja traitee par son
-      email de confirmation (la preparer une seconde fois la ferait ressortir
-      en double dans l'anticipation, la livraison et le suivi des avoirs) ;
-    - reconnaitre, dans traiter_commande_pdf, une commande que l'on regenere,
-      dont les lignes de suivi sont alors nettoyees avant d'etre reecrites.
+    """Vrai si la commande a deja ete preparee : elle est alors regeneree
+    (bon redepose a la main, ou email de confirmation remis a traiter) et
+    traiter_commande_pdf nettoie ses lignes de suivi avant de les reecrire et
+    remplace son bloc dans l'anticipation du jour, pour qu'elle ne ressorte
+    pas en double dans l'anticipation, la livraison et le suivi des avoirs.
 
     Deux conditions, dans cet ordre : son BonDeCommande_NUMERO.pdf est archive
     sur Drive ailleurs que dans `ignorer_parents` (le dossier de depot manuel),
@@ -359,11 +357,11 @@ def telecharger_bons_traitement_manuel(drive_svc, cache_dir):
                       f"(ni dans le nom du fichier, ni dans le PDF), ignore.")
                 continue
 
+            # Une commande deja preparee qu'on redepose est regeneree (bon de
+            # prepa refait apres une mise a jour de config) : traiter_commande_pdf
+            # nettoie alors ses suivis et remplace son anticipation.
             if _commande_deja_traitee(drive_svc, numero, ignorer_parents=(dossier_id,)):
-                print(f"    {nom_depot} : commande {numero} deja traitee.")
-                _archiver_depot_manuel(drive_svc, f["id"], nom_depot,
-                                       "commande deja traitee")
-                continue
+                print(f"    {nom_depot} : commande {numero} deja traitee, regeneree.")
 
             _, _, _, date_cde, _ = extraire_client_creneau_pdf(texte)
             if not date_cde:
@@ -881,14 +879,17 @@ def deposer_fichier_jour_anticipation(drive_svc, local_path, dossier_mm_aaaa, do
         print(f"    Depot Drive {path}/ echoue : {e}")
         return False
 
-def declencher_assemblage_anticipation(numero, dossier_jj_mm, dossier_mm_aaaa):
+def declencher_assemblage_anticipation(numero, dossier_jj_mm, dossier_mm_aaaa, regenerer=False):
     """Declenche en fire-and-forget (repository_dispatch) le workflow GitHub
     anticipation_assemble.yml, qui integre bon_anticipation_{numero}.txt dans
     le fichier du jour bon_anticipation_JJ_MM.txt et regenere son PDF
     brouillon. Fait dans un workflow separe (et non ici) car l'assemblage —
     telechargement/reupload Drive, generation PDF avec photos et
     codes-barres — prend du temps, et aut_prep tourne toutes les minutes :
-    le faire ici bloquerait le run suivant."""
+    le faire ici bloquerait le run suivant.
+
+    `regenerer` : la commande est regeneree, son bloc deja assemble dans le
+    fichier du jour est remplace (ou retire si elle n'anticipe plus rien)."""
     if not dossier_jj_mm or not dossier_mm_aaaa:
         return
     token = os.environ.get("GITHUB_TOKEN", "").strip() or os.environ.get("GH_PAT", "").strip()
@@ -903,6 +904,7 @@ def declencher_assemblage_anticipation(numero, dossier_jj_mm, dossier_mm_aaaa):
             "numero": numero,
             "dossier_jj_mm": dossier_jj_mm,
             "dossier_mm_aaaa": dossier_mm_aaaa,
+            "regenerer": regenerer,
         },
     }).encode()
     req = urllib.request.Request(url, data=body, method="POST", headers={
@@ -915,6 +917,27 @@ def declencher_assemblage_anticipation(numero, dossier_jj_mm, dossier_mm_aaaa):
         print(f"    Assemblage anticipation declenche (cde {numero})")
     except Exception as e:
         print(f"    Declenchement assemblage anticipation {numero} echoue : {e}")
+
+def supprimer_anticipation_commande_drive(drive_svc, numero, dossier_jj_mm, dossier_mm_aaaa):
+    """Met a la corbeille bon_anticipation_NUMERO.txt de
+    GITHUB/Anticipation/MM_AAAA/JJ_MM/ : commande regeneree qui n'anticipe
+    plus rien, dont l'ancien bon serait sinon reintegre par l'assembleur."""
+    if not dossier_jj_mm or not dossier_mm_aaaa:
+        return
+    filename = f"bon_anticipation_{numero}.txt"
+    try:
+        folder_id = _dossier_anticipation_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm, creer=False)
+        if not folder_id:
+            return
+        res = drive_svc.files().list(
+            q=f"name='{filename}' and '{folder_id}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        for f in res.get("files", []):
+            drive_svc.files().update(fileId=f["id"], body={"trashed": True}).execute()
+            print(f"    {filename} => Drive mis a la corbeille (plus rien a anticiper)")
+    except Exception as e:
+        print(f"    Suppression de {filename} sur Drive echouee : {e}")
 
 def _marquer_retrait_anticipation_drive(drive_svc, numero, dossier_mm_aaaa, dossier_jj_mm):
     """Depose un marqueur annuler_anticipation_NUMERO.txt dans Drive
@@ -2664,7 +2687,12 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
             contenu_anticipation = _f.read()
         archiver_anticipation_drive(drive_svc, anticipation_dst, dossier_jj_mm, dossier_mm_aaaa,
                                     ecraser=regeneration)
-        declencher_assemblage_anticipation(order_num, dossier_jj_mm, dossier_mm_aaaa)
+        declencher_assemblage_anticipation(order_num, dossier_jj_mm, dossier_mm_aaaa,
+                                           regenerer=regeneration)
+    elif regeneration:
+        supprimer_anticipation_commande_drive(drive_svc, order_num, dossier_jj_mm, dossier_mm_aaaa)
+        declencher_assemblage_anticipation(order_num, dossier_jj_mm, dossier_mm_aaaa,
+                                           regenerer=True)
 
     # Cette commande remplace peut-etre une commande annulee dont l'alerte
     # "anticipee et annulee" attendait de savoir ce qu'elle anticipe, elle, pour

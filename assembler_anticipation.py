@@ -51,6 +51,11 @@ def _parser_args(argv):
 
 def main():
     numero, dossier_jj_mm, dossier_mm_aaaa = _parser_args(sys.argv[1:])
+    # Commande regeneree (bon redepose ou email remis a traiter apres une
+    # mise a jour de config) : son bloc deja assemble est perime et doit
+    # etre remplace par le nouveau bon_anticipation_NUMERO.txt, ou retire si
+    # elle n'anticipe plus rien.
+    regenerer = "--regenerer" in sys.argv[1:]
 
     os.makedirs(ap.WORK_DIR, exist_ok=True)
     creds = ap.get_credentials()
@@ -75,6 +80,13 @@ def main():
 
     deja_assemblees = ac._commandes_deja_assemblees(contenu_jour)
 
+    remplacee = False
+    if regenerer and numero in deja_assemblees and numero not in annules:
+        contenu_jour = ac.retirer_blocs_commandes(contenu_jour, {numero})
+        deja_assemblees.discard(numero)
+        remplacee = True
+        print(f"Commande {numero} regeneree : ancien bloc retire de {nom_jour}.")
+
     # Ne se fie pas uniquement a --numero : le concurrency group GitHub
     # Actions de ce workflow (anticipation_assemble, cancel-in-progress:
     # false) ne conserve qu'un seul run "pending" a la fois. Quand plusieurs
@@ -93,7 +105,7 @@ def main():
     if numero in annules:
         print(f"Commande {numero} annulee/remplacee : jamais integree a "
               f"l'anticipation du {dossier_jj_mm}.")
-    elif numero not in bons_dossier and numero not in deja_assemblees:
+    elif numero not in bons_dossier and numero not in deja_assemblees and not regenerer:
         print(f"ERREUR : bon_anticipation_{numero}.txt introuvable dans Drive "
               f"GITHUB/Anticipation/{dossier_mm_aaaa}/{dossier_jj_mm}/.")
         sys.exit(1)
@@ -102,7 +114,7 @@ def main():
         (num for num in bons_dossier
          if num not in deja_assemblees and num not in annules),
         key=ac._cle_tri_commande)
-    if not a_integrer:
+    if not a_integrer and not remplacee:
         if nettoye:
             ac.publier_pdf_jour(drive_svc, folder_id, contenu_jour,
                                 dossier_jj_mm, dossier_mm_aaaa)
@@ -126,7 +138,8 @@ def main():
         ap.deposer_fichier_jour_anticipation(drive_svc, chemin_local_txt, dossier_mm_aaaa, dossier_jj_mm)
     finally:
         os.remove(chemin_local_txt)
-    print(f"  {nom_jour} mis a jour ({len(a_integrer)} commande(s) integree(s) : {', '.join(a_integrer)})")
+    print(f"  {nom_jour} mis a jour ({len(a_integrer)} commande(s) integree(s) : "
+          f"{', '.join(a_integrer) or 'aucune'})")
 
     produits = ac._parser_lignes_anticipation_jour(contenu_jour)
     par_lettre = {}

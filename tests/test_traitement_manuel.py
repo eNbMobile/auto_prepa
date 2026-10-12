@@ -268,20 +268,23 @@ class TestTelechargerBonsTraitementManuel(unittest.TestCase):
         self.assertEqual(list(nouveaux), ["BonDeCommande_54868421.pdf"])
         self.assertEqual(list(depots.values()), ["depot1"])
 
-    def test_commande_deja_traitee_mise_a_la_corbeille(self):
+    def test_commande_deja_traitee_regeneree(self):
+        """Redeposer une commande deja preparee (ex. apres une mise a jour de
+        la detection d'anticipation, commande 56158358 du 12/10/2026) la
+        regenere : le depot n'est plus mis a la corbeille sans traitement."""
         drive = _FakeDrive([
             dict(DOSSIER_MANUEL),
-            {"id": "depot1", "name": "BonDeCommande_54868421.pdf",
+            {"id": "depot1", "name": "Copie de BonDeCommande_54868421.pdf",
              "parents": [MANUEL_ID], "mimeType": "application/pdf"},
             {"id": "archive", "name": "BonDeCommande_54868421.pdf",
              "parents": ["id_jour"], "mimeType": "application/pdf"},
         ] + SUIVI_AVOIR, CSV_AVOIR)
         nouveaux, depots = ap.telecharger_bons_traitement_manuel(drive, self.cache)
 
-        self.assertEqual(nouveaux, {})
-        self.assertEqual(depots, {})
-        self.assertEqual(drive.corbeille, ["depot1"])
-        self.assertFalse(os.path.exists(
+        self.assertEqual(nouveaux, {"BonDeCommande_54868421.pdf": ("12_09", "09_2026")})
+        self.assertEqual(depots, {"BonDeCommande_54868421.pdf": "depot1"})
+        self.assertEqual(drive.corbeille, [])
+        self.assertTrue(os.path.exists(
             os.path.join(self.cache, "BonDeCommande_54868421.pdf")))
 
     def test_depot_repris_apres_un_echec_de_generation(self):
