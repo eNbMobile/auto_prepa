@@ -10,6 +10,7 @@ import io
 import base64
 import csv
 import tempfile
+import time
 import fcntl
 import urllib.request
 from datetime import date, datetime, timedelta
@@ -657,24 +658,45 @@ def upload_bon(drive_svc, local_path):
         return False
 
 
-def telecharger_config_drive(drive_svc):
-    """Telecharge les CSV de config et le binaire depuis Drive vers WORK_DIR."""
+# Fichiers sans lesquels aucun bon ne peut etre genere : s'il en manque un, les
+# commandes ne sont meme pas recuperees (emails laisses tels quels), pour etre
+# reprises au run suivant au lieu d'etre perdues.
+CONFIG_REQUISE = ["prepa_drive_degrade", "gencod_adresses.csv", "gencod_nomenclatures.csv"]
+CONFIG_TENTATIVES = 3
+
+
+def telecharger_config_drive(drive_svc, attente=2):
+    """Telecharge les CSV de config et le binaire depuis Drive vers WORK_DIR.
+
+    Une erreur Drive (500 passager, coupure reseau) est retentee jusqu'a
+    CONFIG_TENTATIVES fois, avec une attente croissante entre deux essais."""
     for filename in CONFIG_FILES + ["prepa_drive_degrade"]:
         dest = os.path.join(WORK_DIR, filename)
-        try:
-            res = drive_svc.files().list(
-                q=f"name='{filename}' and '{DRIVE_CONFIG_FOLDER_ID}' in parents and trashed=false",
-                fields="files(id)",
-            ).execute()
-            files = res.get("files", [])
-            if not files:
-                print(f"  ERREUR config : {filename} introuvable sur Drive")
-                continue
-            download_pdf(drive_svc, files[0]["id"], dest)
-            if filename == "prepa_drive_degrade":
-                os.chmod(dest, 0o755)
-        except Exception as e:
-            print(f"  ERREUR config {filename} : {e}")
+        for tentative in range(1, CONFIG_TENTATIVES + 1):
+            try:
+                res = drive_svc.files().list(
+                    q=f"name='{filename}' and '{DRIVE_CONFIG_FOLDER_ID}' in parents and trashed=false",
+                    fields="files(id)",
+                ).execute()
+                files = res.get("files", [])
+                if not files:
+                    print(f"  ERREUR config : {filename} introuvable sur Drive")
+                    break
+                download_pdf(drive_svc, files[0]["id"], dest)
+                if filename == "prepa_drive_degrade":
+                    os.chmod(dest, 0o755)
+                break
+            except Exception as e:
+                print(f"  ERREUR config {filename} (essai {tentative}/{CONFIG_TENTATIVES}) : {e}")
+                if tentative < CONFIG_TENTATIVES:
+                    time.sleep(attente * tentative)
+
+
+def config_manquante():
+    """Fichiers de CONFIG_REQUISE absents ou vides dans WORK_DIR."""
+    return [f for f in CONFIG_REQUISE
+            if not os.path.exists(os.path.join(WORK_DIR, f))
+            or os.path.getsize(os.path.join(WORK_DIR, f)) == 0]
 
 def _get_or_create_subfolder(drive_svc, parent_id, name):
     """Retourne l'ID d'un sous-dossier, le cree si necessaire."""
@@ -2776,6 +2798,17 @@ def _main():
     shopopop_token, shopopop_drive_id, shopopop_connecte = traiter_modifications_clients(
         drive_svc, gmail_svc, sheets_svc,
         shopopop_token, shopopop_drive_id, shopopop_connecte)
+
+    # Sans binaire ni config d'adressage, aucun bon ne peut etre genere. Les
+    # emails de confirmation sont libellises des leur telechargement et ne
+    # repassent jamais : on ne les touche pas, le run suivant les reprendra.
+    manquants = config_manquante()
+    if manquants:
+        print(f"ERREUR : {', '.join(manquants)} indisponible(s) apres "
+              f"{CONFIG_TENTATIVES} essais : commandes laissees en attente "
+              f"pour le run suivant.")
+        sys.exit(1)
+
     nouveaux = telecharger_bons_email(gmail_svc, CACHE_DIR)
 
     # Bons deposes a la main sur Drive (commande sans email de confirmation) :
