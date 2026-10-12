@@ -42,6 +42,8 @@ def main():
         ".csv":  "text/csv",
         ".json": "application/json",
         ".txt":  "text/plain",
+        ".c":    "text/x-csrc",
+        ".h":    "text/x-chdr",
     }.get(ext, "application/octet-stream")
 
     media = MediaFileUpload(local_path, mimetype=mime)
