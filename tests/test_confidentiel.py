@@ -21,12 +21,12 @@ def _sortie(fonction, *args, github=True):
 
 class TestConfidentiel(unittest.TestCase):
     def test_masque_nom_et_chaque_mot(self):
-        lignes = _sortie(confidentiel.masquer, "PEYROT SEILLIER", "Eloane")
-        self.assertIn("::add-mask::PEYROT SEILLIER", lignes)
-        self.assertIn("::add-mask::PEYROT", lignes)
-        self.assertIn("::add-mask::SEILLIER", lignes)
-        self.assertIn("::add-mask::ELOANE", lignes)
-        self.assertIn("::add-mask::Eloane", lignes)
+        lignes = _sortie(confidentiel.masquer, "DUPONT DURAND", "Marie")
+        self.assertIn("::add-mask::DUPONT DURAND", lignes)
+        self.assertIn("::add-mask::DUPONT", lignes)
+        self.assertIn("::add-mask::DURAND", lignes)
+        self.assertIn("::add-mask::MARIE", lignes)
+        self.assertIn("::add-mask::Marie", lignes)
 
     def test_ignore_valeurs_trop_courtes(self):
         self.assertEqual(_sortie(confidentiel.masquer, "LY", "", None), [])

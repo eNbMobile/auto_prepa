@@ -11,7 +11,7 @@
  * workflow garde un run en cours et un seul en attente, le reste est annulé.
  *
  * Déclencheurs planifiés (wrangler.toml) : filet de sécurité toutes les
- * 10 minutes (sans forcer : la fenêtre horaire du workflow s'applique) et
+ * 10 minutes et
  * renouvellement quotidien de la surveillance Gmail (gmail_watch.yml).
  */
 const REPO = 'eNbMobile/auto_prepa';
@@ -71,7 +71,11 @@ export default {
     if (event.cron === '17 3 * * *') {
       ctx.waitUntil(lancer(env, 'gmail_watch.yml', {}));
     } else {
-      ctx.waitUntil(lancer(env, 'auto_prepa.yml', { force: 'false', source: 'filet' }));
+      // force=true : la fenêtre horaire du workflow suppose un démarrage à la
+      // minute près (minute % 5, minute < 3) ; un run du filet démarré avec une
+      // minute de retard serait sauté. Un run sans rien à traiter s'arrête de
+      // toute façon en quelques secondes.
+      ctx.waitUntil(lancer(env, 'auto_prepa.yml', { force: 'true', source: 'filet' }));
     }
   },
 };

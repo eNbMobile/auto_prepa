@@ -33,7 +33,12 @@ DOSSIER_GITHUB = "GITHUB"
 DOSSIER = "AdressesInconnues"
 PREFIXE = "adresses_inconnues_"
 SUFFIXE_ENVOYE = "_envoye"
-_RE_FICHIER = re.compile(r"^adresses_inconnues_(\d{4}-\d{2}-\d{2})\.txt$")
+_RE_FICHIER = re.compile(r"^adresses_inconnues_(\d{4}-\d{2}-\d{2})(_envoye)?\.txt$")
+
+# Fenêtre de l'historique affiché dans le PDF (nombre de jours où chaque
+# produit est resté sans adresse) : les produits qui reviennent tous les jours
+# passent en tête de liste.
+JOURS_HISTORIQUE = 14
 
 # Adresse placeholder écrite par prepa_drive_degrade quand le gencod n'a ni
 # adresse ni nomenclature connue.
@@ -152,6 +157,15 @@ def noter_produits_non_adresses(drive_svc, numero, produits, jour=None):
             lignes.append(f"{gencod};{libelle.replace(';', ' ')};{adresse};{numero}")
         _ecrire_texte(drive_svc, dossier_id, nom, "\n".join(lignes) + "\n",
                       files[0]["id"] if files else None)
+        if files:
+            # Le rapport du soir a pu envoyer puis renommer le fichier entre sa
+            # lecture et sa réécriture ci-dessus : les lignes de cette commande
+            # sont alors reportées dans un nouveau fichier du jour, envoyé au
+            # rapport suivant, au lieu de se perdre dans le fichier déjà parti.
+            nom_actuel = drive_svc.files().get(fileId=files[0]["id"], fields="name").execute().get("name")
+            if nom_actuel != nom:
+                nouvelles = [f"{g};{l.replace(';', ' ')};{a};{numero}" for g, l, a in produits]
+                _ecrire_texte(drive_svc, dossier_id, nom, "\n".join(nouvelles) + "\n")
         print(f"    {len(produits)} produit(s) non adresse(s) note(s) dans {DOSSIER}/{nom}")
     except Exception as e:
         print(f"    Ecriture {DOSSIER}/{nom} echouee : {e}")
@@ -161,16 +175,18 @@ def noter_produits_non_adresses(drive_svc, numero, produits, jour=None):
 # Rapport du soir
 # ─────────────────────────────────────────────────────────────────
 
-def regrouper(contenu):
+def regrouper(contenu, annulees=()):
     """{gencod: {"libelle", "adresse", "commandes": [..]}} depuis le texte du
     fichier du jour (un produit vu dans plusieurs commandes n'apparaît qu'une
-    fois)."""
+    fois ; les commandes annulées ou remplacées sont ignorées)."""
     produits = {}
     for ligne in contenu.splitlines():
         champs = ligne.strip().split(";")
         if len(champs) < 4 or not champs[0]:
             continue
         gencod, libelle, adresse, numero = champs[0], champs[1], champs[2], champs[3]
+        if numero in annulees:
+            continue
         p = produits.setdefault(gencod, {"libelle": libelle, "adresse": adresse,
                                          "commandes": []})
         if adresse and not p["adresse"]:
@@ -207,18 +223,21 @@ def generer_pdf(produits, jour, chemin):
                          ("TOPPADDING", "BOTTOMPADDING", "LEFTPADDING", "RIGHTPADDING")]))
 
     data = [[Paragraph(t, entete) for t in
-             ("Code-barres", "Libellé", "Adresse actuelle", "Commande(s)")]]
-    for gencod, p in sorted(produits.items(), key=lambda kv: kv[1]["libelle"]):
+             ("Code-barres", "Libellé", "Adresse actuelle", "Commande(s)",
+              f"Jours sans adresse ({JOURS_HISTORIQUE} j)")]]
+    for gencod, p in sorted(produits.items(),
+                            key=lambda kv: (-kv[1].get("jours", 1), kv[1]["libelle"])):
         data.append([
             cellule_code_barres(gencod),
             Paragraph(p["libelle"], small),
             Paragraph(p["adresse"] or "aucune", small_c),
             Paragraph("<br/>".join(p["commandes"]), small_c),
+            Paragraph(str(p.get("jours", 1)), small_c),
         ])
 
     doc = SimpleDocTemplate(chemin, pagesize=A4, topMargin=8 * mm, bottomMargin=8 * mm,
                             leftMargin=3 * mm, rightMargin=3 * mm)
-    table = Table(data, colWidths=[108, 249, 90, 80], repeatRows=1)
+    table = Table(data, colWidths=[108, 209, 80, 70, 60], repeatRows=1)
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#006797")),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -265,25 +284,51 @@ def envoyer_email(gmail_svc, destinataire, copie, pdfs):
     gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
 
 
+def _tous_les_fichiers(drive_svc, dossier_id):
+    """[(jour, file_id, nom, envoye)] de tous les fichiers du dossier."""
+    fichiers, jeton = [], None
+    while True:
+        res = drive_svc.files().list(
+            q=f"'{dossier_id}' in parents and trashed=false and name contains '{PREFIXE}'",
+            fields="nextPageToken, files(id,name)", pageSize=1000, pageToken=jeton,
+        ).execute()
+        fichiers += res.get("files", [])
+        jeton = res.get("nextPageToken")
+        if not jeton:
+            break
+    trouves = []
+    for f in fichiers:
+        m = _RE_FICHIER.match(f["name"])
+        if m:
+            jour = datetime.strptime(m.group(1), "%Y-%m-%d").date()
+            trouves.append((jour, f["id"], f["name"], bool(m.group(2))))
+    return sorted(trouves)
+
+
 def fichiers_a_envoyer(drive_svc, jusqu_au):
     """[(jour, file_id, nom)] des fichiers du dossier non encore envoyés,
     datés au plus tard de `jusqu_au`, du plus ancien au plus récent."""
     dossier_id = _dossier_adresses(drive_svc, creer=False)
     if not dossier_id:
         return dossier_id, []
-    res = drive_svc.files().list(
-        q=f"'{dossier_id}' in parents and trashed=false and name contains '{PREFIXE}'",
-        fields="files(id,name)", pageSize=200,
-    ).execute()
-    trouves = []
-    for f in res.get("files", []):
-        m = _RE_FICHIER.match(f["name"])
-        if not m:
-            continue
-        jour = datetime.strptime(m.group(1), "%Y-%m-%d").date()
-        if jour <= jusqu_au:
-            trouves.append((jour, f["id"], f["name"]))
-    return dossier_id, sorted(trouves)
+    return dossier_id, [(j, i, n) for j, i, n, envoye in _tous_les_fichiers(drive_svc, dossier_id)
+                        if not envoye and j <= jusqu_au]
+
+
+def jours_sans_adresse(drive_svc, jusqu_au):
+    """{gencod: nombre de jours} où le produit est resté sans adresse sur les
+    JOURS_HISTORIQUE derniers jours (fichiers envoyés compris)."""
+    from datetime import timedelta
+    dossier_id = _dossier_adresses(drive_svc, creer=False)
+    if not dossier_id:
+        return {}
+    debut = jusqu_au - timedelta(days=JOURS_HISTORIQUE - 1)
+    vus = {}
+    for jour, file_id, _, _ in _tous_les_fichiers(drive_svc, dossier_id):
+        if debut <= jour <= jusqu_au:
+            for gencod in regrouper(_telecharger_texte(drive_svc, file_id)):
+                vus.setdefault(gencod, set()).add(jour)
+    return {g: len(j) for g, j in vus.items()}
 
 
 def main():
@@ -305,9 +350,13 @@ def main():
         print("Aucun produit non adressé à signaler.")
         return
 
+    annulees = cs.numeros_annules_registre()
+    historique = jours_sans_adresse(drive_svc, jusqu_au)
     pdfs, envoyes = [], []
     for jour, file_id, nom in fichiers:
-        produits = regrouper(_telecharger_texte(drive_svc, file_id))
+        produits = regrouper(_telecharger_texte(drive_svc, file_id), annulees)
+        for gencod, p in produits.items():
+            p["jours"] = max(1, historique.get(gencod, 1))
         envoyes.append((file_id, nom))
         if not produits:
             continue

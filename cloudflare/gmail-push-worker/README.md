@@ -15,7 +15,7 @@ Email reçu dans Gmail
 
 - **Délai** : quelques secondes entre la réception de l'email et le lancement du run.
 - **Filet de sécurité** : le worker relance aussi `aut_prep` toutes les 10 minutes
-  (cron Cloudflare, `source=filet`, fenêtre horaire du workflow respectée). Ça couvre
+  (cron Cloudflare, `source=filet`). Ça couvre
   les bons déposés à la main dans « Traitement manuel », les km Shopopop à retenter,
   le rattrapage 14h « EN ATTENTE », les alertes d'anticipation en attente, et une
   notification qui se perdrait.

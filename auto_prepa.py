@@ -2138,8 +2138,8 @@ _RE_CRENEAU = re.compile(r'\b(\d{1,2}h\d{2}\s*-\s*\d{1,2}h\d{2})\b')
 
 def extraire_client_creneau_pdf(texte):
     """Extrait (civilite, nom, prenom, date, creneau) depuis le bon d'encaissement
-    (pdftotext -layout) : civilite/nom/prenom sur la ligne client (ex. 'M. DOMMEE
-    FABRICE' ou 'Mme PEYROT SEILLIER ELOANE' - dernier mot = prenom, le reste =
+    (pdftotext -layout) : civilite/nom/prenom sur la ligne client (ex. 'M. MARTIN
+    PAUL' ou 'Mme DUPONT DURAND MARIE' - dernier mot = prenom, le reste =
     nom) ; date et creneau dans l'encadre jour de retrait/livraison (ex. 'VENDREDI
     14/08/2026' et '10h30 - 11h00'), sur des lignes distinctes du fait de la mise
     en colonnes (recherches independantes)."""

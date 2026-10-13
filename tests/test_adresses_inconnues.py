@@ -31,6 +31,7 @@ BON = [
 class FauxFichiers:
     def __init__(self, stock):
         self.stock = stock  # {nom: contenu}
+        self.renommes = {}  # {id: nouveau nom}, rapport du soir passé entre-temps
 
     def list(self, q, **_):
         nom = q.split("name='", 1)[1].split("'", 1)[0] if "name='" in q else None
@@ -38,6 +39,9 @@ class FauxFichiers:
 
     def get_media(self, fileId):
         return fileId
+
+    def get(self, fileId, fields=None):
+        return _Exec({"name": self.renommes.get(fileId, fileId)})
 
     def update(self, fileId, media_body=None, body=None):
         self.stock[fileId] = media_body._fd.getvalue().decode()
@@ -105,6 +109,22 @@ class TestFichierDuJour(unittest.TestCase):
         ai.noter_produits_non_adresses(drive, "222", [("2", "B", "M1")], jour)
         ai.noter_produits_non_adresses(drive, "111", [("3", "C", "")], jour)  # regeneree
         self.assertEqual(stock[nom].splitlines(), ["2;B;M1;222", "3;C;;111"])
+
+    def test_fichier_envoye_pendant_l_ecriture(self):
+        jour = date(2026, 10, 13)
+        nom = ai.nom_fichier_jour(jour)
+        stock = {nom: "1;A;;111\n"}
+        drive = FauxDrive(stock)
+        drive.files().renommes[nom] = nom.replace(".txt", "_envoye.txt")
+        ai.noter_produits_non_adresses(drive, "222", [("2", "B", "")], jour)
+        # La ligne de la commande 222 est reportee dans un nouveau fichier du
+        # jour (ici le meme nom dans le faux Drive) au lieu d'etre perdue.
+        self.assertEqual(stock[nom].splitlines()[-1], "2;B;;222")
+
+    def test_commandes_annulees_ignorees(self):
+        p = ai.regrouper("1;A;;111\n1;A;;222\n2;B;;222\n", annulees={"222"})
+        self.assertEqual(list(p), ["1"])
+        self.assertEqual(p["1"]["commandes"], ["111"])
 
     def test_rien_a_noter(self):
         stock = {}

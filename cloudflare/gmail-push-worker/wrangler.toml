@@ -5,8 +5,8 @@ compatibility_date = "2024-11-01"
 # Déclencheurs planifiés (UTC) :
 #  - toutes les 10 min : filet de sécurité aut_prep (bons déposés en
 #    « Traitement manuel », notification Gmail perdue, rattrapage 14h
-#    EN ATTENTE, alertes d'anticipation en attente). Le workflow garde sa
-#    propre fenêtre horaire : la nuit, un seul passage par heure.
+#    EN ATTENTE, alertes d'anticipation en attente). Lancé en force=true :
+#    un run sans rien à traiter s'arrête en quelques secondes.
 #  - 03h17 : renouvellement de la surveillance Gmail (users.watch expire au
 #    bout de 7 jours).
 [triggers]

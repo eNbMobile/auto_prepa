@@ -64,6 +64,10 @@ def masquer_config(cfg):
             pile.extend(v)
         elif isinstance(v, (str, int)) and not isinstance(v, bool):
             texte = str(v).strip()
+            # Un petit nombre (annee, seuil...) n'est pas confidentiel et
+            # masquerait ce nombre partout dans le log.
+            if isinstance(v, int) and len(texte) < 5:
+                continue
             if len(texte) >= LONGUEUR_MIN and "\n" not in texte and texte not in _deja_masques:
                 _deja_masques.add(texte)
                 print(f"::add-mask::{texte}", flush=True)
