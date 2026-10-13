@@ -7,6 +7,11 @@ on:
         description: "Forcer la vérification immédiate (ignore la fenêtre horaire)"
         type: boolean
         default: false
+      source:
+        description: "Origine du déclenchement (gmail = notification d'un nouvel email, filet = cron de secours)"
+        type: string
+        required: false
+        default: "manuel"
 
 concurrency:
   group: aut_prep
@@ -27,7 +32,9 @@ jobs:
         id: check_window
         env:
           FORCE_RUN: ${{ github.event.inputs.force }}
+          SOURCE:    ${{ github.event.inputs.source }}
         run: |
+          echo "Déclenchement : ${SOURCE:-manuel}"
           if [ "$FORCE_RUN" = "true" ]; then
             echo "Déclenchement manuel forcé — fenêtre horaire ignorée"
             echo "run_window=true" >> "$GITHUB_OUTPUT"

@@ -9,7 +9,12 @@ name: Deployer tableau de bord Cloudflare
 #   CLOUDFLARE_ACCOUNT_ID  identifiant du compte Cloudflare
 # Facultatif :
 #   WF_GH_TOKEN            s'il est défini, (ré)installé comme secret GH_TOKEN
-#                          des deux workers (sinon celui déjà en place est gardé)
+#                          des workers (sinon celui déjà en place est gardé)
+#   GMAIL_PUSH_TOKEN       jeton de l'URL de l'abonnement Pub/Sub, installé
+#                          comme secret PUBSUB_TOKEN du worker « gmailpush »
+#
+# Le worker « gmailpush » (cloudflare/gmail-push-worker) est déployé par le job
+# du même nom : il lance aut_prep à chaque email reçu (voir son README).
 
 on:
   push:
@@ -17,6 +22,7 @@ on:
     paths:
       - 'cloudflare/dashboard-worker/**'
       - 'cloudflare/dashboard2-worker/**'
+      - 'cloudflare/gmail-push-worker/**'
       - '.github/workflows/deploy_tableau_de_bord.yml'
   workflow_dispatch:
 
@@ -68,3 +74,32 @@ jobs:
           apiToken:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: cloudflare/${{ matrix.dossier }}
+
+  gmailpush:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Déployer le worker gmailpush et ses secrets
+        env:
+          CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GH_TOKEN:              ${{ secrets.WF_GH_TOKEN }}
+          PUBSUB_TOKEN:          ${{ secrets.GMAIL_PUSH_TOKEN }}
+        working-directory: cloudflare/gmail-push-worker
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::Secrets CLOUDFLARE_API_TOKEN et/ou CLOUDFLARE_ACCOUNT_ID absents du dépôt."
+            exit 1
+          fi
+          npx --yes wrangler@3.114.0 deploy
+          if [ -n "$GH_TOKEN" ]; then
+            printf '%s' "$GH_TOKEN" | npx --yes wrangler@3.114.0 secret put GH_TOKEN
+          fi
+          if [ -n "$PUBSUB_TOKEN" ]; then
+            printf '%s' "$PUBSUB_TOKEN" | npx --yes wrangler@3.114.0 secret put PUBSUB_TOKEN
+          else
+            echo "::warning::Secret GMAIL_PUSH_TOKEN absent : le worker refusera les notifications Pub/Sub tant qu'il n'est pas défini."
+          fi
