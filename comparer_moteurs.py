@@ -92,10 +92,22 @@ def avertissements(sortie):
             or "replacé automatiquement" in l]
 
 
-def anonymiser(ligne):
+def _lettres_en_x(texte):
+    return re.sub(r"[^\W\d_]", "x", texte)
+
+
+def anonymiser(ligne, autre=None):
+    """Ligne sans données personnelles : le champ « infos client » n'est
+    montré que s'il diffère de celui de `autre`, lettres remplacées par x
+    (dates, heures, n° de commande et ponctuation restent lisibles)."""
     champs = ligne.split(b";")
     if len(champs) > CHAMP_INFOS:
-        champs[CHAMP_INFOS] = b"<infos client>"
+        infos = champs[CHAMP_INFOS]
+        autres = autre.split(b";") if autre else []
+        if len(autres) > CHAMP_INFOS and autres[CHAMP_INFOS] != infos:
+            champs[CHAMP_INFOS] = ("<" + _lettres_en_x(infos.decode("latin-1")) + ">").encode("latin-1")
+        else:
+            champs[CHAMP_INFOS] = b"<infos client>"
     return b";".join(champs).decode("latin-1")
 
 
@@ -211,9 +223,9 @@ def main():
             for k in range(max(len(lc), len(lp))):
                 a = lc[k] if k < len(lc) else b"<absente>"
                 b = lp[k] if k < len(lp) else b"<absente>"
-                if a != b and affichees < 4:
-                    print(f"      L{k} C  : {anonymiser(a)}")
-                    print(f"      L{k} Py : {anonymiser(b)}")
+                if a != b and affichees < 2:
+                    print(f"      L{k} C  : {anonymiser(a, b)}")
+                    print(f"      L{k} Py : {anonymiser(b, a)}")
                     affichees += 1
         if not ok_antic:
             lc = (antic_c or b"").split(b"\n")
@@ -223,8 +235,8 @@ def main():
                 a = lc[k] if k < len(lc) else b""
                 b = lp[k] if k < len(lp) else b""
                 if a != b:
-                    print(f"      A{k} C  : {anonymiser(a)}")
-                    print(f"      A{k} Py : {anonymiser(b)}")
+                    print(f"      A{k} C  : {anonymiser(a, b)}")
+                    print(f"      A{k} Py : {anonymiser(b, a)}")
         if not ok_avert:
             print(f"      avertissements C  : {avertissements(sortie_c)[:4]}")
             print(f"      avertissements Py : {avertissements(sortie_p)[:4]}")

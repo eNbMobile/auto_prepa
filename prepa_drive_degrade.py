@@ -309,12 +309,20 @@ class TableGencods:
     `valeur` : valeur sans le \\r final (le C retirait le dernier caractere)."""
 
     def __init__(self, data):
-        flux = Flux(data)
-        self.lignes = []
-        for _ in range(nb_lignes(data)):
-            g = champ(flux, SEMI)
-            v = champ(flux, NL)
-            self.lignes.append((g, v))
+        brutes = (data or b"").split(b"\n")[:nb_lignes(data)]
+        if all(b";" in l for l in brutes):
+            # Cas normal : une ligne = « gencod;valeur ». Lecture directe,
+            # identique a la lecture caractere par caractere du C.
+            self.lignes = [tuple(l.split(b";", 1)) for l in brutes]
+        else:
+            # Ligne sans ';' : le C lit alors le gencod a cheval sur la
+            # ligne suivante ; on reproduit sa lecture exacte.
+            flux = Flux(data)
+            self.lignes = []
+            for _ in range(nb_lignes(data)):
+                g = champ(flux, SEMI)
+                v = champ(flux, NL)
+                self.lignes.append((g, v))
         self._p12 = {}
         self._court = {}
         for idx, (g, _) in enumerate(self.lignes):
