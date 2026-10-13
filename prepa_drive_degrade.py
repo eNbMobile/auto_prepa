@@ -229,7 +229,7 @@ class Fichier:
 
     def ajouter(self, b):
         if isinstance(b, str):
-            b = b.encode("latin-1")
+            b = b.encode("utf-8")  # litteraux du source C, ecrit en UTF-8
         self.data = (self.data or b"") + b
 
     def car(self, v):
