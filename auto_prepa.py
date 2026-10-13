@@ -661,7 +661,12 @@ def upload_bon(drive_svc, local_path):
 # Fichiers sans lesquels aucun bon ne peut etre genere : s'il en manque un, les
 # commandes ne sont meme pas recuperees (emails laisses tels quels), pour etre
 # reprises au run suivant au lieu d'etre perdues.
-CONFIG_REQUISE = ["prepa_drive_degrade", "gencod_adresses.csv", "gencod_nomenclatures.csv"]
+# Moteur de generation des bons : binaire C (defaut) ou son portage Python
+# prepa_drive_degrade.py (variable de depot MOTEUR_PREPA=python), qui n'a
+# pas besoin du binaire.
+MOTEUR_PREPA = os.environ.get("MOTEUR_PREPA", "").strip().lower() or "c"
+CONFIG_REQUISE = (["gencod_adresses.csv", "gencod_nomenclatures.csv"]
+                  + ([] if MOTEUR_PREPA == "python" else ["prepa_drive_degrade"]))
 CONFIG_TENTATIVES = 3
 
 
@@ -2482,7 +2487,9 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
             break
 
     print(f"  [{order_num}] Generation...", end="", flush=True)
-    r = subprocess.run(["./prepa_drive_degrade"], cwd=WORK_DIR,
+    commande = (["./prepa_drive_degrade"] if MOTEUR_PREPA != "python" else
+                [sys.executable, os.path.join(_BASE, "prepa_drive_degrade.py")])
+    r = subprocess.run(commande, cwd=WORK_DIR,
                        capture_output=True, text=True, timeout=120)
 
     if DEBUG_RAW_DIR:

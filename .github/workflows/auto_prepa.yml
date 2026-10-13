@@ -299,6 +299,8 @@ jobs:
           GH_PAT:                 ${{ secrets.GH_PAT }}
           GITHUB_TOKEN:           ${{ github.token }}
           WORK_DIR: "v 4.0.0"
+          # Vide ou "c" : binaire C ; "python" : portage prepa_drive_degrade.py
+          MOTEUR_PREPA:           ${{ vars.MOTEUR_PREPA }}
         run: |
           set +e
           python3 bootstrap.py auto_prepa.py
