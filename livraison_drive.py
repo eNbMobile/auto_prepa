@@ -401,7 +401,7 @@ def _inscrire_commande(sheets_svc, spreadsheet_id, cible, nom, prenom, numero_co
                            km if km is not None else ""]]},
     ).execute()
     print(f"    LIVRAISON DRIVE 2026 / {onglet} L{ligne} : {numero_commande or ''} | "
-          f"{cible.strftime('%d/%m')} | {nom} {prenom}"
+          f"{cible.strftime('%d/%m')}"
           + (f" | {km} km" if km is not None else " | km non trouve"))
     _etendre_plages(sheets_svc, spreadsheet_id, onglet, ligne)
     return ligne
@@ -426,7 +426,7 @@ def _inscrire_en_attente(sheets_svc, spreadsheet_id, cible, nom, prenom, numero_
                            km if km is not None else ""]]},
     ).execute()
     print(f"    LIVRAISON DRIVE 2026 / {ONGLET_EN_ATTENTE} L{ligne} : "
-          f"{nom} {prenom} | {cible.strftime('%d/%m')} | {numero_commande or ''}"
+          f"{cible.strftime('%d/%m')} | {numero_commande or ''}"
           + (f" | {km} km" if km is not None else " | km non trouve"))
 
 
@@ -523,7 +523,7 @@ def _chercher_et_supprimer(sheets_svc, spreadsheet_id, titre_onglet,
         if not _supprimer_ligne(sheets_svc, spreadsheet_id, titre_onglet, ligne):
             return False
         print(f"    LIVRAISON DRIVE 2026 / {titre_onglet} L{ligne} : "
-              f"{nom_val} {prenom_val} annulee -> ligne supprimee.")
+              f"commande annulee -> ligne supprimee.")
         return True
     return False
 
@@ -815,7 +815,7 @@ def retenter_km_manquants(sheets_svc, spreadsheet_id, shopopop_token, shopopop_d
             spreadsheetId=spreadsheet_id, range=f"'{onglet}'!E{ligne}",
             valueInputOption="USER_ENTERED", body={"values": [[km]]}).execute()
         print(f"    LIVRAISON DRIVE 2026 / {onglet} L{ligne} : km recupere en retentative "
-              f"pour {nom_complet} -> {km} km.")
+              f"-> {km} km.")
         lignes_rattrapees.add((onglet, ligne))
         if rattrapees is not None and numero:
             rattrapees[str(numero)] = (onglet, ligne, nom, prenom, km)
@@ -1051,8 +1051,8 @@ def signaler_km_manquants(sheets_svc, drive_svc, spreadsheet_id, envoyer_email,
         if not info.get("signale") and attente >= _DELAI_SIGNALEMENT_KM_MINUTES:
             onglet, ligne, nom, prenom, cible, _num = ligne_sans_km
             print(f"    LIVRAISON DRIVE 2026 / {onglet} L{ligne} : km toujours absent "
-                  f"{int(attente)} min apres l'inscription de la commande {numero} "
-                  f"({nom} {prenom}), signalement par email.")
+                  f"{int(attente)} min apres l'inscription de la commande {numero}, "
+                  f"signalement par email.")
             if envoyer_email(numero, nom, prenom, cible.strftime("%d/%m/%Y")):
                 _marquer_km_a_completer(sheets_svc, spreadsheet_id, onglet, ligne)
                 info = dict(info, signale=True)

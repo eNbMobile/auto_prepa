@@ -725,8 +725,8 @@ def _envoyer_email_commandes_arrivees_pendant_envoi(gmail_svc, dossier_jj_mm, nu
         msg["Subject"] = f"Anticipation {dossier_jj_mm} — commande(s) a relancer"
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
-        print(f"  Email alerte commande(s) arrivee(s) pendant l'envoi envoye => "
-              f"{destinataire} : {', '.join(numeros)}")
+        print(f"  Email alerte commande(s) arrivee(s) pendant l'envoi envoye : "
+              f"{', '.join(numeros)}")
     except Exception as e:
         print(f"  Envoi email alerte commande(s) arrivee(s) pendant l'envoi echoue : {e}")
 
