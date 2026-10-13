@@ -39,9 +39,9 @@ _HEADERS_NAVIGATEUR = {
     "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 
-# ID du "drive" (magasin) Shopopop (visible dans l'URL app.shopopop.com/deliveries?drive_id=...).
-# Utilisé si absent de config.json (clé "shopopop_drive_id") — à mettre à jour si le magasin change.
-SHOPOPOP_DRIVE_ID_DEFAUT = "14156"
+# L'ID du "drive" (magasin) Shopopop (visible dans l'URL
+# app.shopopop.com/deliveries?drive_id=...) est lu dans config.json (clé
+# "shopopop_drive_id").
 
 
 class _SansRedirection(urllib.request.HTTPRedirectHandler):
@@ -284,7 +284,7 @@ def _rechercher_livraison_terminee(access_token, drive_id, date_livraison, nom_c
             _statut_terminees = statut
         it, noms_vus = _chercher_destinataire(items, nom_complet)
         if not it:
-            print(f"    Shopopop : '{nom_complet}' absent des {len(noms_vus)} livraison(s) "
+            print(f"    Shopopop : destinataire absent des {len(noms_vus)} livraison(s) "
                   f"'{statut}' du {date_livraison.strftime('%d/%m/%Y')}.")
         return it
     _terminees_indisponible = True
@@ -315,10 +315,8 @@ def _rechercher_livraison_programmee(access_token, drive_id, date_livraison, nom
         return it
 
     if noms_vus:
-        print(f"    Shopopop : '{nom_complet}' absent des {len(noms_vus)} livraison(s) "
-              f"'Programmees' du {date_livraison.strftime('%d/%m/%Y')} (drive {drive_id}). "
-              f"Destinataires vus : {', '.join(noms_vus[:10])}"
-              + (", ..." if len(noms_vus) > 10 else "") + ".")
+        print(f"    Shopopop : destinataire absent des {len(noms_vus)} livraison(s) "
+              f"'Programmees' du {date_livraison.strftime('%d/%m/%Y')}.")
     else:
         print(f"    Shopopop : aucune livraison 'Programmee' pour le "
               f"{date_livraison.strftime('%d/%m/%Y')} (drive {drive_id}) — la commande n'a "
@@ -337,7 +335,7 @@ def distance_km(access_token, drive_id, date_livraison, nom_complet):
         if not it:
             it = _rechercher_livraison_terminee(access_token, drive_id, date_livraison, nom_complet)
     except Exception as e:
-        print(f"    Recherche distance Shopopop échouée ({nom_complet}) : {e}")
+        print(f"    Recherche distance Shopopop échouée : {e}")
         return None
     if not it:
         return None
@@ -356,6 +354,6 @@ def livraison_sortie_programmees(access_token, drive_id, date_livraison, nom_com
     try:
         it = _rechercher_livraison_programmee(access_token, drive_id, date_livraison, nom_complet)
     except Exception as e:
-        print(f"    Recherche Shopopop échouée ({nom_complet}) : {e}")
+        print(f"    Recherche Shopopop échouée : {e}")
         return None
     return it is None

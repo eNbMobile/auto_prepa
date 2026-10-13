@@ -49,16 +49,15 @@ import unicodedata
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import confidentiel
 import controle_stocks as cs
 import shopopop
 
 _TZ = ZoneInfo("Europe/Paris")
 
-# ID du classeur "LIVRAISON DRIVE 2026" (docs.google.com/spreadsheets/d/<id>).
-# Utilisé si absent de config.json (clé "livraison_spreadsheet_id") — à
-# mettre à jour dans config.json les années suivantes, quand un nouveau
-# classeur est créé.
-LIVRAISON_SPREADSHEET_ID_DEFAUT = "1vfBGpXnU2mi_JyNIcukbp0Gk48a9AIGYRl9KF98wG7g"
+# L'ID du classeur "LIVRAISON DRIVE 2026" est lu dans config.json (clé
+# "livraison_spreadsheet_id", à mettre à jour les années suivantes) : plus
+# aucun identifiant en dur dans ce dépôt public.
 
 MOIS_FR = ["JANVIER", "FEVRIER", "MARS", "AVRIL", "MAI", "JUIN", "JUILLET",
            "AOUT", "SEPTEMBRE", "OCTOBRE", "NOVEMBRE", "DECEMBRE"]
@@ -169,14 +168,14 @@ def _charger_config_dict(drive_svc):
     done = False
     while not done:
         _, done = dl.next_chunk()
-    return json.loads(buf.getvalue().decode())
+    return confidentiel.masquer_config(json.loads(buf.getvalue().decode()))
 
 
 def _charger_config_livraison(drive_svc):
     """Retourne l'ID du classeur LIVRAISON DRIVE 2026 depuis config.json
-    (clé "livraison_spreadsheet_id"), ou la valeur par défaut."""
+    (clé "livraison_spreadsheet_id", obligatoire)."""
     cfg = _charger_config_dict(drive_svc)
-    return cfg.get("livraison_spreadsheet_id", "").strip() or LIVRAISON_SPREADSHEET_ID_DEFAUT
+    return confidentiel.cle_obligatoire(cfg, "livraison_spreadsheet_id")
 
 
 def connecter_shopopop(drive_svc):
@@ -187,7 +186,7 @@ def connecter_shopopop(drive_svc):
     cfg = _charger_config_dict(drive_svc)
     email = cfg.get("ID_Shopopop", "").strip()
     mdp = cfg.get("MDP_Shopopop", "").strip()
-    drive_id = cfg.get("shopopop_drive_id", "").strip() or shopopop.SHOPOPOP_DRIVE_ID_DEFAUT
+    drive_id = confidentiel.cle_obligatoire(cfg, "shopopop_drive_id")
     if not email or not mdp:
         print("    ID_Shopopop/MDP_Shopopop absents de config.json, km Shopopop ignoré.")
         return None, drive_id
@@ -614,11 +613,11 @@ def annuler_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
                     idx_numero=3, numero_cible=numero_str):
                 return True
 
-        print(f"    Aucune ligne LIVRAISON DRIVE 2026 trouvee pour {nom} {prenom} "
+        print(f"    Aucune ligne LIVRAISON DRIVE 2026 trouvee pour la commande {numero_commande} "
               f"({date_cde_str}), rien a supprimer.")
         return False
     except Exception as e:
-        print(f"    Annulation LIVRAISON DRIVE 2026 echouee ({nom} {prenom}) : {e}")
+        print(f"    Annulation LIVRAISON DRIVE 2026 echouee (commande {numero_commande}) : {e}")
         return False
 
 
@@ -662,16 +661,16 @@ def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
         if shopopop_token:
             km = shopopop.distance_km(shopopop_token, shopopop_drive_id, date_cde, nom_complet)
             if km is None:
-                print(f"    km Shopopop introuvable pour {nom_complet}, nouvelle tentative dans "
+                print(f"    km Shopopop introuvable pour la commande {numero_commande}, nouvelle tentative dans "
                       f"{_DELAI_RETRY_KM_SECONDES}s (commande tres recente, pas encore synchronisee ?)...")
                 time.sleep(_DELAI_RETRY_KM_SECONDES)
                 km = shopopop.distance_km(shopopop_token, shopopop_drive_id, date_cde, nom_complet)
                 if km is None:
-                    print(f"    km Shopopop toujours introuvable pour {nom_complet} apres nouvelle "
+                    print(f"    km Shopopop toujours introuvable pour la commande {numero_commande} apres nouvelle "
                           f"tentative (sera retente lors des prochaines executions, et signale "
                           f"par email s'il manque encore dans {_DELAI_SIGNALEMENT_KM_MINUTES} min).")
         else:
-            print(f"    Pas de token Shopopop, km non recherche pour {nom_complet}.")
+            print(f"    Pas de token Shopopop, km non recherche pour la commande {numero_commande}.")
         nom_maj, prenom_maj = nom.strip().upper(), prenom.strip().upper()
         if date_cde == aujourdhui or (
                 date_cde == _lendemain_ouvre(aujourdhui) and maintenant.hour >= 14):
@@ -682,7 +681,7 @@ def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
                                   numero_commande, km)
         return km is None
     except Exception as e:
-        print(f"    Ecriture LIVRAISON DRIVE 2026 echouee ({nom_complet}) : {e}")
+        print(f"    Ecriture LIVRAISON DRIVE 2026 echouee (commande {numero_commande}) : {e}")
         return False
 
 

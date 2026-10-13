@@ -265,7 +265,7 @@ def envoyer_email_diff(pdf, date_j1, date_j, nb, baisse, hausse):
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         svc.users().messages().send(userId='me', body={'raw': raw}).execute()
-        print(f"  Email envoyé → {cs.EMAIL_DESTINATAIRE} (cc: {cs.EMAIL_COPIE_STOCK})")
+        print("  Email envoyé.")
     except Exception as e:
         print(f"  Email échoué : {e}")
 

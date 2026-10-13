@@ -23,6 +23,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 
+import confidentiel
 import livraison_drive
 
 _BASE = os.path.dirname(os.path.abspath(__file__))
@@ -1596,7 +1597,7 @@ def _envoyer_email_anticipation_annulee(gmail_svc, civilite, nom, prenom, num_an
         msg["subject"] = "Attention commande anticipée et annulée"
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
-        print(f"    Email alerte anticipation annulee envoye pour cde {num_ancien} => {destinataire}")
+        print(f"    Email alerte anticipation annulee envoye pour cde {num_ancien}")
     except Exception as e:
         print(f"    Envoi email alerte anticipation annulee {num_ancien} echoue : {e}")
 
@@ -1933,7 +1934,7 @@ def _envoyer_email_anticipation(gmail_svc, numero, contenu):
         msg["subject"] = sujet
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
-        print(f"    Email anticipation envoye pour cde {numero} => {destinataire}")
+        print(f"    Email anticipation envoye pour cde {numero}")
     except Exception as e:
         print(f"    Envoi email anticipation {numero} echoue : {e}")
 
@@ -1985,7 +1986,7 @@ def _envoyer_email_adresses_manquantes(gmail_svc, numero, avertissements_nomencl
         msg["subject"] = f"Commande {numero} - anomalie(s) d'adressage dans chemin_prepa_mono"
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
-        print(f"    Email anomalie(s) d'adressage envoye pour cde {numero} => {destinataire}")
+        print(f"    Email anomalie(s) d'adressage envoye pour cde {numero}")
     except Exception as e:
         print(f"    Envoi email anomalie(s) d'adressage {numero} echoue : {e}")
 
@@ -2013,7 +2014,7 @@ def _envoyer_email_anomalie_bon(gmail_svc, numero, lignes_invalides):
         msg["subject"] = f"Commande {numero} - bon de prepa invalide"
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
-        print(f"    Email anomalie envoye pour cde {numero} => {destinataire}")
+        print(f"    Email anomalie envoye pour cde {numero}")
     except Exception as e:
         print(f"    Envoi email anomalie {numero} echoue : {e}")
 
@@ -2084,7 +2085,7 @@ def _envoyer_email_bon_absent(gmail_svc, numero, motif, detail=""):
         msg["subject"] = f"Commande {numero} - {_SUJET_BON_ABSENT}"
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
-        print(f"    ALERTE bon absent envoyee pour cde {numero} => {destinataire}")
+        print(f"    ALERTE bon absent envoyee pour cde {numero}")
         return True
     except Exception as e:
         print(f"    Envoi alerte bon absent {numero} echoue : {e}")
@@ -2123,7 +2124,7 @@ def _envoyer_email_km_manquant(gmail_svc, numero, nom, prenom, date_cde_str):
         msg["subject"] = f"Commande {libelle_cde} - km Shopopop non renseigne"
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
-        print(f"    Email km manquant envoye pour cde {numero} => {destinataire}")
+        print(f"    Email km manquant envoye pour cde {numero}")
         return True
     except Exception as e:
         print(f"    Envoi email km manquant {numero} echoue : {e}")
@@ -2154,7 +2155,7 @@ def _envoyer_email_km_recupere(gmail_svc, numero, nom, prenom, km):
         msg["subject"] = f"Commande {libelle_cde} - km Shopopop finalement recupere"
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
-        print(f"    Email km finalement recupere envoye pour cde {numero} => {destinataire}")
+        print(f"    Email km finalement recupere envoye pour cde {numero}")
         return True
     except Exception as e:
         print(f"    Envoi email km recupere {numero} echoue : {e}")
@@ -2195,6 +2196,7 @@ def extraire_client_creneau_pdf(texte):
         mots = m_client.group(2).split(' ')
         prenom = mots[-1]
         nom = ' '.join(mots[:-1])
+        confidentiel.masquer(nom, prenom)
     m_date = _RE_DATE.search(texte)
     if m_date:
         date_cde = m_date.group(1)
@@ -2298,8 +2300,7 @@ def inscrire_commande_avoir_drive(drive_svc, civilite, numero, nom, prenom, date
                           "mimeType": "application/vnd.google-apps.spreadsheet"},
                     media_body=media, fields="id",
                 ).execute()
-            print(f"    Avoir/{AVOIR_SHEET_FILENAME} : {civilite} {numero} {nom} {prenom} | "
-                  f"{date_cde} | {creneau}")
+            print(f"    Avoir/{AVOIR_SHEET_FILENAME} : commande {numero} | {date_cde} | {creneau}")
         finally:
             os.remove(tmp)
     except Exception as e:
@@ -2434,13 +2435,12 @@ def _charger_config(drive_svc):
         done = False
         while not done:
             _, done = dl.next_chunk()
-        cfg = json.loads(buf.getvalue().decode())
+        cfg = confidentiel.masquer_config(json.loads(buf.getvalue().decode()))
         DRIVE_BONS_FOLDER_ID = cfg["drive_bons_folder_id"]
         DRIVE_BDC_FOLDER_ID  = cfg["drive_bdc_folder_id"]
         EMAIL_ANTICIPATION   = cfg.get("email_destinataire", "")
         EMAIL_ANTICIPATION_2 = cfg.get("email_destinataire_2", "")
-        LIVRAISON_SPREADSHEET_ID = (cfg.get("livraison_spreadsheet_id", "").strip()
-                                     or livraison_drive.LIVRAISON_SPREADSHEET_ID_DEFAUT)
+        LIVRAISON_SPREADSHEET_ID = confidentiel.cle_obligatoire(cfg, "livraison_spreadsheet_id")
     except Exception as e:
         print(f"ERREUR chargement config Drive : {e}")
         sys.exit(1)
@@ -2740,7 +2740,7 @@ def _charger_gmail_filters(drive_svc):
         done = False
         while not done:
             _, done = dl.next_chunk()
-        cfg = json.loads(buf.getvalue().decode("utf-8"))
+        cfg = confidentiel.masquer_config(json.loads(buf.getvalue().decode("utf-8")))
         GMAIL_CONF_FROM      = cfg["conf_from"]
         GMAIL_CONF_SUBJECT   = cfg["conf_subject"]
         GMAIL_LABEL_CONF     = cfg["conf_label"]

@@ -90,6 +90,19 @@ jobs:
           python3 - <<'EOF'
           import json, os, sys, time, urllib.request, urllib.parse
 
+          def masquer_config(cfg):
+              # Depot public : toute valeur de config (emails, ID Drive...)
+              # est remplacee par *** dans le log si elle venait a y figurer.
+              pile = [cfg]
+              while pile:
+                  v = pile.pop()
+                  if isinstance(v, dict): pile.extend(v.values())
+                  elif isinstance(v, list): pile.extend(v)
+                  elif isinstance(v, (str, int)) and not isinstance(v, bool):
+                      t = str(v).strip()
+                      if len(t) >= 4 and "\n" not in t:
+                          print(f"::add-mask::{t}", flush=True)
+
           def urlopen_retry(req, max_attempts=3):
               for attempt in range(max_attempts):
                   try:
@@ -139,6 +152,7 @@ jobs:
                           urllib.request.Request(dl_url, headers=headers), timeout=30
                       ).read()
                       cfg = json.loads(dl_resp.decode("utf-8"))
+                      masquer_config(cfg)
                       print("  gmail_filters.json chargé depuis Drive")
               except Exception as e:
                   print(f"Erreur chargement gmail_filters.json : {e}")
@@ -194,6 +208,7 @@ jobs:
                       app_cfg = json.loads(urlopen_retry(
                           urllib.request.Request(dl_url, headers=headers)
                       ).read().decode("utf-8"))
+                      masquer_config(app_cfg)
                       parents = [app_cfg.get("drive_bdc_folder_id", ""),
                                  app_cfg.get("drive_bons_folder_id", "")]
                   for parent in [p for p in parents if p]:

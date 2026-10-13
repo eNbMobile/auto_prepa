@@ -7,6 +7,8 @@ import urllib.request
 import urllib.parse
 from datetime import date, timedelta
 
+import confidentiel
+
 DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
 
 def get_access_token(token):
@@ -76,7 +78,7 @@ def charger_config(access_token):
         sys.exit(1)
     url = f"https://www.googleapis.com/drive/v3/files/{index['config.json']}?alt=media"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {access_token}"})
-    return json.loads(urllib.request.urlopen(req, timeout=30).read())
+    return confidentiel.masquer_config(json.loads(urllib.request.urlopen(req, timeout=30).read()))
 
 def main():
     args = sys.argv[1:]

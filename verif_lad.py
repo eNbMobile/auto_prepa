@@ -18,6 +18,7 @@ from datetime import datetime
 from email.mime.text import MIMEText
 from zoneinfo import ZoneInfo
 
+import confidentiel
 import controle_stocks as cs
 import livraison_drive as ld
 import shopopop
@@ -29,7 +30,7 @@ def _charger_config(drive_svc):
     """Retourne (spreadsheet_id, email_destinataire, email_destinataire_2,
     shopopop_email, shopopop_mdp, shopopop_drive_id) depuis config.json."""
     cfg = ld._charger_config_dict(drive_svc)
-    spreadsheet_id = cfg.get("livraison_spreadsheet_id", "").strip() or ld.LIVRAISON_SPREADSHEET_ID_DEFAUT
+    spreadsheet_id = confidentiel.cle_obligatoire(cfg, "livraison_spreadsheet_id")
     email = cfg.get("email_destinataire", "").strip()
     if not email:
         print("ERREUR : email_destinataire absent de config.json.")
@@ -37,7 +38,7 @@ def _charger_config(drive_svc):
     email_2 = cfg.get("email_destinataire_2", "").strip()
     shopopop_email = cfg.get("ID_Shopopop", "").strip()
     shopopop_mdp = cfg.get("MDP_Shopopop", "").strip()
-    shopopop_drive_id = cfg.get("shopopop_drive_id", "").strip() or shopopop.SHOPOPOP_DRIVE_ID_DEFAUT
+    shopopop_drive_id = confidentiel.cle_obligatoire(cfg, "shopopop_drive_id")
     return spreadsheet_id, email, email_2, shopopop_email, shopopop_mdp, shopopop_drive_id
 
 
@@ -62,7 +63,7 @@ def _envoyer_email_anomalies(gmail_svc, destinataire, destinataire_2, aujourdhui
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     try:
         gmail_svc.users().messages().send(userId='me', body={'raw': raw}).execute()
-        print(f"  Email envoyé -> {destinataire} (cc: {destinataire_2})")
+        print("  Email envoyé.")
     except Exception as e:
         print(f"  Email échoué : {e}")
 
@@ -102,16 +103,17 @@ def main():
 
     anomalies = []
     for ligne, nom_complet, km in commandes:
+        confidentiel.masquer(nom_complet)
         sortie = shopopop.livraison_sortie_programmees(
             shopopop_token, shopopop_drive_id, aujourdhui, nom_complet)
         if sortie is None:
-            print(f"  {nom_complet} : ECHEC de la vérification Shopopop")
+            print(f"  Ligne {ligne} : ECHEC de la vérification Shopopop")
             anomalies.append((nom_complet, "échec de la vérification Shopopop (connexion/API)"))
         elif sortie is False:
-            print(f"  {nom_complet} : toujours 'Programmée' (pas livrée)")
+            print(f"  Ligne {ligne} : toujours 'Programmée' (pas livrée)")
             anomalies.append((nom_complet, "toujours 'Programmée' (pas livrée)"))
         else:
-            print(f"  {nom_complet} : OK (livrée) — nom passé en vert")
+            print(f"  Ligne {ligne} : OK (livrée) — nom passé en vert")
             ld.marquer_livree(sheets_svc, spreadsheet_id, aujourdhui, ligne)
 
     print(f"\n{len(anomalies)} anomalie(s) sur {len(commandes)} commande(s).")
