@@ -2,7 +2,9 @@ name: Comparer moteurs de prepa
 
 # Compare, sur de vrais bons de commande récents, le binaire C de production
 # (prepa_drive_degrade, Drive) et son portage Python (prepa_drive_degrade.py).
-# N'affiche que des résumés anonymes (dépôt public).
+# N'affiche que des résumés anonymes (dépôt public). À relancer à la main
+# avant de basculer MOTEUR_PREPA=python, et après toute modification d'un des
+# deux moteurs.
 on:
   workflow_dispatch:
     inputs:
@@ -10,12 +12,6 @@ on:
         description: "Nombre maximum de bons à comparer"
         required: false
         default: "150"
-  push:
-    branches: [ccr-04b4b2ce-r47clp]
-    paths:
-      - 'prepa_drive_degrade.py'
-      - 'comparer_moteurs.py'
-      - '.github/workflows/comparer_moteurs.yml'
 
 concurrency:
   group: comparer_moteurs
