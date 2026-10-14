@@ -44,6 +44,16 @@
             android:taskAffinity=""
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density" />
 
+        <!-- Grande télécommande flottante, ouverte depuis Contrôle appareil. -->
+        <activity
+            android:name=".TelecommandeActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Maison.Flottante"
+            android:taskAffinity="fr.maison.app.telecommande"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density" />
+
         <!-- Fournisseur de « Contrôle appareil » : choisir l'app Maison dans le panneau. -->
         <service
             android:name=".Controles"

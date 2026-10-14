@@ -26,6 +26,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Flow;
 import java.util.function.Consumer;
 
@@ -36,7 +38,8 @@ import java.util.function.Consumer;
  * (lumières, prises, télé) et ses scènes y apparaissent, et sur Android 14+
  * l'app entière peut s'y afficher (PanneauActivity, déclarée dans le manifeste).
  *
- * Identifiants des commandes : « d:<deviceId> », « s:<sceneId> », « app ».
+ * Identifiants des commandes : « d:<deviceId> », « s:<sceneId> », « app »,
+ * « r:<télé> » (ouvre la télécommande), « t:<télé>:<touche> ».
  */
 @TargetApi(30)
 public class Controles extends ControlsProviderService {
@@ -55,35 +58,59 @@ public class Controles extends ControlsProviderService {
 
     /* ----------------------------------------------------------- éditeurs */
 
-    /** Publisher minimal : la source pousse les commandes quand on la démarre. */
+    /** Réseau des commandes : plusieurs appareils relus en parallèle. */
+    private static final ExecutorService POOL = Executors.newFixedThreadPool(4);
+
+    /** Destination des commandes publiées (un abonnement du système). */
+    interface Sortie {
+        void publier(Control c);
+        void finir();
+    }
+
+    /**
+     * Publisher : le système peut s'y abonner plusieurs fois (à chaque
+     * réouverture du panneau) ; chaque abonnement reçoit ses propres données.
+     */
     private static final class Editeur implements Flow.Publisher<Control> {
-        interface Source { void lancer(Editeur e); }
+        interface Source { void lancer(Sortie s); }
 
         final List<String> ids;
+        final Set<Abonnement> abonnements = new CopyOnWriteArraySet<>();
         private final Source source;
-        private Flow.Subscriber<? super Control> abonne;
-        private volatile boolean annule;
-        private boolean demarre;
 
         Editeur(List<String> ids, Source source) { this.ids = ids; this.source = source; }
 
         @Override
         public void subscribe(Flow.Subscriber<? super Control> s) {
-            abonne = s;
-            s.onSubscribe(new Flow.Subscription() {
-                @Override public void request(long n) {
-                    synchronized (Editeur.this) {
-                        if (demarre) return;
-                        demarre = true;
-                    }
-                    Maison.RESEAU.execute(() -> source.lancer(Editeur.this));
-                }
-                @Override public void cancel() { annule = true; ACTIFS.remove(Editeur.this); }
-            });
+            Abonnement a = new Abonnement(s);
+            abonnements.add(a);
+            s.onSubscribe(a);
         }
 
-        void publier(Control c) { if (!annule) abonne.onNext(c); }
-        void finir() { if (!annule) abonne.onComplete(); }
+        final class Abonnement implements Flow.Subscription, Sortie {
+            private final Flow.Subscriber<? super Control> abonne;
+            private volatile boolean annule;
+            private boolean lance;
+
+            Abonnement(Flow.Subscriber<? super Control> abonne) { this.abonne = abonne; }
+
+            @Override public void request(long n) {
+                synchronized (this) {
+                    if (lance || annule) return;
+                    lance = true;
+                }
+                POOL.execute(() -> source.lancer(this));
+            }
+
+            @Override public void cancel() {
+                annule = true;
+                abonnements.remove(this);
+                if (abonnements.isEmpty()) ACTIFS.remove(Editeur.this);
+            }
+
+            @Override public synchronized void publier(Control c) { if (!annule) abonne.onNext(c); }
+            @Override public synchronized void finir() { if (!annule) abonne.onComplete(); }
+        }
     }
 
     /* ------------------------------------------------------ liste complète */
@@ -95,6 +122,7 @@ public class Controles extends ControlsProviderService {
             try {
                 for (JSONObject a : chargerAppareils(this)) {
                     e.publier(sansEtat(this, a));
+                    if (a.optBoolean("tele")) e.publier(telecommandeSansEtat(this, a));
                     for (String[] t : touches(a)) e.publier(toucheSansEtat(this, a, t));
                 }
                 JSONArray scenes = new JSONObject(Maison.st(this, "scenes", null)).optJSONArray("items");
@@ -121,16 +149,13 @@ public class Controles extends ControlsProviderService {
 
     @Override
     public Flow.Publisher<Control> createPublisherFor(List<String> ids) {
-        Editeur ed = new Editeur(new ArrayList<>(ids), this::rafraichir);
+        List<String> copie = new ArrayList<>(ids);
+        Editeur ed = new Editeur(copie, s -> rafraichir(s, copie));
         ACTIFS.add(ed);
         return ed;
     }
 
-    private void rafraichir(Editeur e) {
-        rafraichir(e, e.ids);
-    }
-
-    private void rafraichir(Editeur e, List<String> ids) {
+    private void rafraichir(Sortie e, List<String> ids) {
         Map<String, JSONObject> appareils = new HashMap<>();
         try {
             for (JSONObject a : appareilsEnCache(this)) appareils.put(a.optString("id"), a);
@@ -138,6 +163,11 @@ public class Controles extends ControlsProviderService {
         for (String id : ids) {
             if (APP.equals(id)) { e.publier(controleApp(this, true)); continue; }
             if (id.startsWith("s:")) { e.publier(controleScene(id)); continue; }
+            if (id.startsWith("r:")) {
+                JSONObject tv = appareils.get(id.substring(2));
+                if (tv != null) e.publier(telecommandeAvecEtat(this, tv));
+                continue;
+            }
             if (id.startsWith("t:")) {
                 String[] p = id.split(":", 3);
                 JSONObject tv = p.length == 3 ? appareils.get(p[1]) : null;
@@ -147,21 +177,30 @@ public class Controles extends ControlsProviderService {
             }
             JSONObject a = appareils.get(id.substring(2));
             if (a == null) continue;
-            try {
-                JSONObject main = new JSONObject(Maison.st(this, "devices/" + a.getString("id") + "/status", null))
-                        .getJSONObject("components").getJSONObject("main");
-                e.publier(avecEtat(this, a, main, null));
-            } catch (Exception ex) {
-                e.publier(avecEtat(this, a, null,
-                        ex instanceof Maison.ErreurHttp ? ex.getMessage() : "Hors ligne"));
+            // Dernier état connu affiché tout de suite (pas de « Chargement… »),
+            // puis relecture réseau en parallèle.
+            String memo = Maison.prefs(this).getString("etat." + id, null);
+            if (memo != null) {
+                try { e.publier(avecEtat(this, a, new JSONObject(memo), null)); } catch (Exception ignore) { }
             }
+            POOL.execute(() -> {
+                try {
+                    JSONObject main = Tele.statut(this, a.getString("id"));
+                    Maison.prefs(this).edit().putString("etat." + id, main.toString()).apply();
+                    e.publier(avecEtat(this, a, main, null));
+                } catch (Exception ex) {
+                    if (memo == null) e.publier(avecEtat(this, a, null,
+                            ex instanceof Maison.ErreurHttp ? ex.getMessage() : "Hors ligne"));
+                }
+            });
         }
     }
 
     /** Relit un appareil après une action et le republie chez ceux qui l'affichent. */
     private void republier(String controlId) {
         for (Editeur e : ACTIFS) {
-            if (e.ids.contains(controlId)) rafraichir(e, List.of(controlId));
+            if (!e.ids.contains(controlId)) continue;
+            for (Editeur.Abonnement ab : e.abonnements) rafraichir(ab, List.of(controlId));
         }
     }
 
@@ -169,7 +208,7 @@ public class Controles extends ControlsProviderService {
 
     @Override
     public void performControlAction(String id, ControlAction action, Consumer<Integer> reponse) {
-        Maison.RESEAU.execute(() -> {
+        POOL.execute(() -> {
             try {
                 if (id.startsWith("t:")) {
                     String[] p = id.split(":", 3);
@@ -231,6 +270,28 @@ public class Controles extends ControlsProviderService {
                 .setControlTemplate(new StatelessTemplate("lancer")).setStatusText("Lancer").build();
     }
 
+    /** Ouvre la grande télécommande flottante (TelecommandeActivity). */
+    static PendingIntent intentionTelecommande(Context c) {
+        Intent i = new Intent(c, TelecommandeActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        return PendingIntent.getActivity(c, 4, i, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+    }
+
+    // Sans modèle : toucher la carte ouvre la télécommande au lieu d'envoyer une action.
+    private static Control telecommandeSansEtat(Context c, JSONObject tv) {
+        return new Control.StatelessBuilder("r:" + tv.optString("id"), intentionTelecommande(c))
+                .setTitle("Télécommande").setSubtitle(tv.optString("nom"))
+                .setStructure("Maison").setZone(tv.optString("piece", "Maison"))
+                .setDeviceType(DeviceTypes.TYPE_REMOTE_CONTROL).build();
+    }
+
+    private static Control telecommandeAvecEtat(Context c, JSONObject tv) {
+        return new Control.StatefulBuilder("r:" + tv.optString("id"), intentionTelecommande(c))
+                .setTitle("Télécommande").setSubtitle(tv.optString("nom"))
+                .setStructure("Maison").setZone(tv.optString("piece", "Maison"))
+                .setDeviceType(DeviceTypes.TYPE_REMOTE_CONTROL).setStatus(Control.STATUS_OK)
+                .setControlTemplate(ControlTemplate.getNoTemplateObject()).setStatusText("Ouvrir").build();
+    }
+
     private static String[] touche(String cle) {
         for (String[] t : TOUCHES) if (t[0].equals(cle)) return t;
         return null;
@@ -270,7 +331,8 @@ public class Controles extends ControlsProviderService {
 
     static Control sansEtat(Context c, JSONObject a) {
         boolean tele = a.optBoolean("tele");
-        return new Control.StatelessBuilder("d:" + a.optString("id"), intention(c, tele ? "tele" : "favoris", 100 + a.optString("id").hashCode() % 1000))
+        return new Control.StatelessBuilder("d:" + a.optString("id"),
+                tele ? intentionTelecommande(c) : intention(c, "favoris", 100 + a.optString("id").hashCode() % 1000))
                 .setTitle(a.optString("nom")).setSubtitle(a.optString("piece"))
                 .setStructure("Maison").setZone(a.optString("piece", "Maison"))
                 .setDeviceType(type(a)).build();
@@ -280,7 +342,7 @@ public class Controles extends ControlsProviderService {
         String id = a.optString("id");
         boolean tele = a.optBoolean("tele");
         Control.StatefulBuilder b = new Control.StatefulBuilder("d:" + id,
-                intention(c, tele ? "tele" : "favoris", 100 + id.hashCode() % 1000))
+                tele ? intentionTelecommande(c) : intention(c, "favoris", 100 + id.hashCode() % 1000))
                 .setTitle(a.optString("nom")).setSubtitle(a.optString("piece"))
                 .setStructure("Maison").setZone(a.optString("piece", "Maison"))
                 .setDeviceType(type(a));
@@ -295,7 +357,6 @@ public class Controles extends ControlsProviderService {
         if (a.optBoolean("variateur") && niveau != null) {
             float n = Math.max(0, Math.min(100, Float.parseFloat(niveau)));
             t = new ToggleRangeTemplate("niveau", bouton, new RangeTemplate("plage", 0, 100, n, 1, "%.0f %%"));
-            if (on) texte = Math.round(n) + " %";
         } else {
             t = new ToggleTemplate("bascule", bouton);
         }
