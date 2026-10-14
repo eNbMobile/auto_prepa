@@ -2580,6 +2580,41 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
     moteur_ombre.executer(drive_svc, _get_or_create_subfolder, order_num,
                           ombre, WORK_DIR, r.stdout, duree_moteur)
 
+    # Bon finalise (montant et heure en entete, prefixe parasite « -N; »
+    # retire) et depose AUSSITOT dans le dossier lu par l'appli de prepa : le
+    # suivi (Avoir, LIVRAISON DRIVE, Shopopop, anticipation, controles) ne
+    # retarde plus sa mise a disposition et se fait juste apres.
+    with open(bon_prepa_path, 'r', encoding='utf-8') as f:
+        lignes = f.readlines()
+    if lignes:
+        if montant_pdf:
+            lignes[0] = lignes[0].rstrip('\n') + ',' + montant_pdf
+        lignes[0] = lignes[0].rstrip('\n') + ',' + heure_pdf + '\n'
+        lignes[1:] = [re.sub(r'^(?:-\d+)?;(\d{13};)', r'\1', l) for l in lignes[1:]]
+    nom_bon_prepa = f"bon_prepa_{order_num}.txt"
+    bon_prepa_path = os.path.join(WORK_DIR, nom_bon_prepa)
+    with open(bon_prepa_path, 'w', encoding='utf-8') as f:
+        f.writelines(lignes)
+    os.remove(os.path.join(WORK_DIR, "bon_prepa.txt"))
+    anticipation_src = os.path.join(WORK_DIR, "bon_anticipation.txt")
+    anticipation_dst = os.path.join(WORK_DIR, f"bon_anticipation_{order_num}.txt")
+    if os.path.exists(anticipation_src):
+        os.replace(anticipation_src, anticipation_dst)
+
+    bons_deposes = []
+    for fpath in (bon_prepa_path, anticipation_dst):
+        if os.path.exists(fpath):
+            if upload_bon(drive_svc, fpath):
+                bons_deposes.append(fpath)
+            elif fpath == bon_prepa_path:
+                # Bon genere correctement mais jamais depose dans le dossier que
+                # lit l'appli de prepa : pour elle, la commande n'existe pas.
+                _envoyer_email_bon_absent(
+                    gmail_svc, order_num,
+                    "depot du bon sur Drive echoue",
+                    f"{nom_bon_prepa} a bien ete genere mais son upload dans le dossier "
+                    f"des bons a echoue.")
+
     civilite, nom, prenom, date_cde, creneau = extraire_client_creneau_pdf(pt.stdout)
 
     # Commande deja preparee que l'on regenere (email de confirmation replace a
@@ -2618,9 +2653,6 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
         # releves dans le fichier du jour (cf. adresses_inconnues.py, plus
         # bas) et envoyes en un seul PDF le soir.
 
-    with open(bon_prepa_path, 'r', encoding='utf-8') as f:
-        lignes = f.readlines()
-
     if len(lignes) > 1 and ',Livraison,' in lignes[1] and LIVRAISON_SPREADSHEET_ID:
         if not shopopop_connecte:
             shopopop_token, shopopop_drive_id = livraison_drive.connecter_shopopop(drive_svc)
@@ -2634,14 +2666,6 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
         # workflow d'ici la, meme sans nouvel email a traiter.
         if km_manquant:
             livraison_drive.noter_km_en_attente(drive_svc, order_num)
-
-    if lignes:
-        if montant_pdf:
-            lignes[0] = lignes[0].rstrip('\n') + ',' + montant_pdf
-        lignes[0] = lignes[0].rstrip('\n') + ',' + heure_pdf + '\n'
-        lignes[1:] = [re.sub(r'^(?:-\d+)?;(\d{13};)', r'\1', l) for l in lignes[1:]]
-    with open(bon_prepa_path, 'w', encoding='utf-8') as f:
-        f.writelines(lignes)
 
     adresses_inconnues.noter_produits_non_adresses(
         drive_svc, order_num, adresses_inconnues.extraire_produits_non_adresses(lignes))
@@ -2678,16 +2702,6 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
                         -1, -1)
         _envoyer_email_anomalie_bon(gmail_svc, order_num, lignes_invalides)
 
-    for src_name, dst_name in [
-        ("bon_prepa.txt",        f"bon_prepa_{order_num}.txt"),
-        ("bon_anticipation.txt", f"bon_anticipation_{order_num}.txt"),
-    ]:
-        src_f = os.path.join(WORK_DIR, src_name)
-        dst_f = os.path.join(WORK_DIR, dst_name)
-        if os.path.exists(src_f):
-            os.rename(src_f, dst_f)
-
-    anticipation_dst = os.path.join(WORK_DIR, f"bon_anticipation_{order_num}.txt")
     contenu_anticipation = ""
     if os.path.exists(anticipation_dst) and os.path.getsize(anticipation_dst) > 0:
         with open(anticipation_dst, encoding="utf-8") as _f:
@@ -2707,20 +2721,11 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
     # contenu_anticipation vide = elle n'anticipe rien, tout est a retourner.
     _traiter_alerte_anticipation_en_attente(drive_svc, gmail_svc, order_num, contenu_anticipation)
 
-    nom_bon_prepa = f"bon_prepa_{order_num}.txt"
-    for fname in [nom_bon_prepa, f"bon_anticipation_{order_num}.txt"]:
-        fpath = os.path.join(WORK_DIR, fname)
+    # Bons deja deposes juste apres la generation : copies locales retirees
+    # (celles dont le depot a echoue restent, comme avant).
+    for fpath in bons_deposes:
         if os.path.exists(fpath):
-            if upload_bon(drive_svc, fpath):
-                os.remove(fpath)
-            elif fname == nom_bon_prepa:
-                # Bon genere correctement mais jamais depose dans le dossier que
-                # lit l'appli de prepa : pour elle, la commande n'existe pas.
-                _envoyer_email_bon_absent(
-                    gmail_svc, order_num,
-                    "depot du bon sur Drive echoue",
-                    f"{fname} a bien ete genere mais son upload dans le dossier "
-                    f"des bons a echoue.")
+            os.remove(fpath)
 
     pdf_work = os.path.join(WORK_DIR, pdf)
     if os.path.exists(pdf_work):

@@ -264,14 +264,6 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a") as f: f.write(f"has_new={result}\n")
           EOF
 
-      - name: Restaurer le cache PDFs
-        if: steps.check_pdfs.outputs.has_new == 'true'
-        uses: actions/cache@v4
-        with:
-          path: pdf_cache
-          key: pdf-cache-${{ github.run_id }}
-          restore-keys: pdf-cache-
-
       - name: Installer pdftotext (poppler-utils)
         if: steps.check_pdfs.outputs.has_new == 'true'
         uses: awalsh128/cache-apt-pkgs-action@latest
@@ -280,15 +272,31 @@ jobs:
           version: 1.0
 
       - name: Installer Python et dépendances
+        id: python
         if: steps.check_pdfs.outputs.has_new == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: pip
+
+      # Environnement Python déjà installé gardé en cache (clé : version
+      # exacte de Python + requirements.txt) : plus de pip install à chaque
+      # run, seulement quand l'un des deux change.
+      - name: Restaurer l'environnement Python
+        id: venv
+        if: steps.check_pdfs.outputs.has_new == 'true'
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}
 
       - name: Installer les dépendances pip
         if: steps.check_pdfs.outputs.has_new == 'true'
-        run: pip install -r requirements.txt
+        run: |
+          if [ "${{ steps.venv.outputs.cache-hit }}" != "true" ]; then
+            python -m venv .venv
+            .venv/bin/pip install -r requirements.txt
+          fi
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Exécuter auto_prepa
         if: steps.check_pdfs.outputs.has_new == 'true'
