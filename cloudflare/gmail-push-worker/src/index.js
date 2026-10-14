@@ -75,7 +75,14 @@ export default {
 
     // Réponse non-2xx = Pub/Sub retentera plus tard : rien ne se perd si
     // GitHub est momentanément indisponible.
-    const ok = await lancer(env, 'auto_prepa.yml', { force: 'true', source: 'gmail' });
+    // trace : heures de publication Pub/Sub et de réception par le worker,
+    // affichées par le run pour découper le délai de notification.
+    const publie = corps.message.publishTime || corps.message.publish_time || '?';
+    const recu = new Date().toISOString();
+    const ok = await lancer(env, 'auto_prepa.yml', {
+      force: 'true', source: 'gmail',
+      trace: `publiée ${publie.slice(11, 23)} | reçue par le worker ${recu.slice(11, 23)}`,
+    });
     console.log(`${trace} → ${ok ? 'run lancé' : 'échec du lancement'}`);
     return new Response(null, { status: ok ? 204 : 502 });
   },
