@@ -62,6 +62,10 @@ public class ConfigActivity extends Activity {
             bouton("Ouvrir Maison", () -> startActivity(new Intent(this, MainActivity.class)));
             return;
         }
+        titre("Contrôle appareil");
+        texte("Volet → Contrôle appareil → ⋮ (en haut à droite) → choisis l'app « Maison » "
+                + "à la place de SmartThings. Tes appareils et scènes y apparaissent, "
+                + "et sur Android 14+ l'app Maison entière peut s'y afficher.", 14);
         titre("Tuiles interrupteur");
         texte("Chaque tuile allume ou éteint un appareil d'un seul appui, sans ouvrir l'app. "
                 + "Appui long sur la tuile dans le volet pour revenir ici.", 14);

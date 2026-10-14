@@ -3,6 +3,18 @@
 La PWA Maison (`cloudflare/maison-worker`) dans une app Android, avec des
 **tuiles pour le volet des raccourcis rapides** (ce qu'une PWA ne permet pas).
 
+## Contrôle appareil (volet One UI)
+
+Le bouton **Contrôle appareil** du volet affiche les commandes d'une app au
+choix (SmartThings par défaut). Maison en fournit aussi :
+
+- Volet → **Contrôle appareil** → **⋮** → choisir **Maison**.
+- Les appareils avec interrupteur (lumières, prises, télé) et les scènes sont
+  proposés ; un appui allume/éteint, glisser règle la luminosité.
+- Toucher la **télé** ouvre la télécommande Maison dans une fenêtre.
+- Sur Android 14+, le système peut proposer d'afficher **l'app Maison entière**
+  dans ce panneau (PanneauActivity, déclarée comme `META_DATA_PANEL_ACTIVITY`).
+
 ## Tuiles
 
 | Tuile | Effet |
