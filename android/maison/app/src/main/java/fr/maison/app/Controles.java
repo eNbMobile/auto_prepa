@@ -49,7 +49,7 @@ public class Controles extends ControlsProviderService {
     /** Touches de télécommande : {code, libellé, capacité requise (drapeau du cache)}. */
     private static final String[][] TOUCHES = {
         { "VOL+", "Volume +", "volume" }, { "VOL-", "Volume −", "volume" }, { "MUTE", "Muet", "muet" },
-        { "CH+", "Chaîne +", "chaines" }, { "CH-", "Chaîne −", "chaines" },
+        { "NETFLIX", "Netflix", "applis" }, { "M6PLUS", "M6+", "applis" },
         { "UP", "Haut ▲", "fleches" }, { "DOWN", "Bas ▼", "fleches" }, { "LEFT", "Gauche ◀", "fleches" },
         { "RIGHT", "Droite ▶", "fleches" }, { "OK", "OK", "fleches" }, { "BACK", "Retour", "fleches" },
         { "HOME", "Accueil", "fleches" }, { "PLAY", "Lecture / pause", "lecture" },
@@ -398,6 +398,7 @@ public class Controles extends ControlsProviderService {
                     .put("chaines", caps.contains("tvChannel"))
                     .put("fleches", caps.contains("samsungvd.remoteControl"))
                     .put("lecture", caps.contains("mediaPlayback"))
+                    .put("applis", caps.contains("custom.launchapp"))
                     .put("lumiere", caps.contains("switchLevel") || caps.contains("colorControl")
                             || bas.matches(".*(lampe|lumi|light|ampoule|led|plafonnier|spot).*"))
                     .put("prise", bas.matches(".*(prise|plug|outlet).*"));

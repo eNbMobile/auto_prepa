@@ -93,6 +93,9 @@
   .bascule .tb { border-radius: 0; background: transparent; height: calc(var(--b) * 1.1); }
   .bascule .lib { text-align: center; font-size: calc(var(--b) * .17); font-weight: 600; letter-spacing: .08em;
     color: var(--doux); padding: 2px 0; }
+  .applis { display: flex; flex-direction: column; flex: 1 0 var(--b); gap: calc(12px * var(--echelle)); }
+  .applis .tb { flex: 1; font-size: calc(var(--b) * .24); letter-spacing: .04em; }
+  .tb.netflix { color: #e50914; }
   .rangee-bascules { display: flex; flex-wrap: wrap; gap: calc(14px * var(--echelle)); align-items: stretch; }
   .reglage-taille { display: flex; align-items: center; gap: 12px; background: var(--carte); border-radius: 14px;
     padding: 10px 14px; margin-bottom: 12px; }
@@ -427,8 +430,6 @@ async function lancerScene(id, bouton) {
 
 function vueTele() {
   const el = $('#vue-tele');
-  // Ne pas effacer un numéro de chaîne en cours de saisie.
-  if (document.activeElement && document.activeElement.id === 'chaine') return;
   const teles = appareils.filter(estTele);
   if (!config.tele && teles.length) config.tele = teles[0].deviceId;
   const tv = appareil(config.tele);
@@ -440,7 +441,7 @@ function vueTele() {
   <div class="reglage-taille" id="reglage-taille" ${memoLocale('maison.tailleOuverte') ? '' : 'hidden'}>
     <span>A</span><input type="range" id="echelle" min="0.8" max="1.7" step="0.05" value="${config.echelleTele}"><span style="font-size:24px">A</span>
   </div>
-  ${telecommandeHtml(tv, true)}`;
+  ${telecommandeHtml(tv)}`;
 }
 
 /** Icônes au trait (24×24), dessinées en SVG pour un rendu net à toutes les tailles. */
@@ -463,7 +464,7 @@ const ICONES = {
 const ic = (nom) => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONES[nom]}</svg>`;
 
 /** Télécommande complète (vue Télé et carte télé du panneau). */
-function telecommandeHtml(tv, avecChaine) {
+function telecommandeHtml(tv) {
   const c = caps(tv), id = tv.deviceId;
   const allumee = val(id, 'switch', 'switch') === 'on';
   const muet = val(id, 'audioMute', 'mute') === 'muted';
@@ -485,11 +486,9 @@ function telecommandeHtml(tv, avecChaine) {
     <div class="ligne">${k('BACK', ic('retour'))}${k('HOME', ic('accueil'))}${k('MENU', ic('menu'))}</div>` : ''}
     <div class="rangee-bascules">
       ${c.has('audioVolume') ? `<div class="bascule">${k('VOL+', ic('plus'))}<div class="lib">VOL${volume != null ? ' ' + volume : ''}</div>${k('VOL-', ic('moins'))}</div>` : ''}
-      ${c.has('tvChannel') ? `<div class="bascule">${k('CH+', ic('haut'))}<div class="lib">CH</div>${k('CH-', ic('bas'))}</div>` : ''}
+      ${c.has('custom.launchapp') ? `<div class="applis">${k('NETFLIX', 'NETFLIX', 'netflix')}${k('M6PLUS', 'M6+')}</div>` : ''}
     </div>
     ${c.has('mediaPlayback') ? `<div class="ligne">${k('REW', ic('recul'))}${k('PLAY', ic('lecture'))}${k('FF', ic('avance'))}</div>` : ''}
-    ${avecChaine && c.has('tvChannel') ? `<div class="ligne"><input type="number" inputmode="numeric" id="chaine" placeholder="N° de chaîne"
-      style="flex:2 1 0;min-width:0;font-size:calc(20px * var(--echelle))"><button class="tb" data-cle="GOCH" style="flex:1 0 var(--b)">OK</button></div>` : ''}
   </div>`;
 }
 
@@ -517,7 +516,7 @@ function vuePanneau() {
       <div class="haut-p"><div><div class="piece-p">${esc(pieces[tv.roomId] || '')}</div>
         <div class="nom-p">${esc(nomAppareil(tv))}</div><div class="etat-p">${esc(sourceEnCours(tv))}</div></div>
         <button class="ico-p" data-vue-tele aria-label="Télécommande complète">${ic('tele')}</button></div>
-      ${telecommandeHtml(tv, false)}
+      ${telecommandeHtml(tv)}
     </div>` : `<div class="vide">${appareils.length ? 'Aucune télé trouvée.' : 'Chargement…'}</div>`);
 }
 
@@ -541,16 +540,12 @@ function toucheTele(cle) {
     case 'MUTE': return commande(id, 'audioMute', val(id, 'audioMute', 'mute') === 'muted' ? 'unmute' : 'mute');
     case 'VOL+': return commande(id, 'audioVolume', 'volumeUp');
     case 'VOL-': return commande(id, 'audioVolume', 'volumeDown');
-    case 'CH+': return commande(id, 'tvChannel', 'channelUp');
-    case 'CH-': return commande(id, 'tvChannel', 'channelDown');
     case 'PLAY': return commande(id, 'mediaPlayback', val(id, 'mediaPlayback', 'playbackStatus') === 'playing' ? 'pause' : 'play');
     case 'REW': return commande(id, 'mediaPlayback', 'rewind');
     case 'FF': return commande(id, 'mediaPlayback', 'fastForward');
-    case 'GOCH': {
-      const n = $('#chaine').value.trim();
-      if (n) { $('#chaine').value = ''; return commande(id, 'tvChannel', 'setTvChannel', [n]); }
-      return;
-    }
+    // Applis : identifiant Tizen connu pour Netflix ; M6+ lancé par son nom.
+    case 'NETFLIX': return commande(id, 'custom.launchapp', 'launchApp', ['org.tizen.netflix-app', 'Netflix']);
+    case 'M6PLUS': return commande(id, 'custom.launchapp', 'launchApp', ['M6+', 'M6+']);
     case 'SOURCE': return ouvrirSources(id, c);
     default:
       if (['UP', 'DOWN', 'LEFT', 'RIGHT', 'OK', 'BACK', 'HOME', 'MENU'].includes(cle)) {
@@ -713,8 +708,8 @@ function vueReglages() {
 
 /* ============================================================ événements */
 
-// Maintien appuyé = répétition (volume, flèches, chaînes).
-const REPETABLES = new Set(['UP', 'DOWN', 'LEFT', 'RIGHT', 'VOL+', 'VOL-', 'CH+', 'CH-']);
+// Maintien appuyé = répétition (volume, flèches).
+const REPETABLES = new Set(['UP', 'DOWN', 'LEFT', 'RIGHT', 'VOL+', 'VOL-']);
 let repetition = null;
 
 document.addEventListener('pointerdown', (e) => {
