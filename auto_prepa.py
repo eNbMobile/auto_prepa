@@ -2768,14 +2768,21 @@ def _main():
     os.makedirs(WORK_DIR, exist_ok=True)
     os.makedirs(CACHE_DIR, exist_ok=True)
 
+    # Jalons : chaque ligne du log GitHub porte l'heure exacte (sortie non
+    # bufferisee, PYTHONUNBUFFERED dans le workflow) ; ils montrent ou part
+    # le temps entre le demarrage et le depot du bon.
+    print("[jalon] demarrage auto_prepa")
     creds = get_credentials()
     drive_svc = build("drive", "v3", credentials=creds)
     gmail_svc = build("gmail", "v1", credentials=creds)
     sheets_svc = build("sheets", "v4", credentials=creds)
 
+    print("[jalon] connexion Google OK")
     _charger_config(drive_svc)
     _charger_gmail_filters(drive_svc)
+    print("[jalon] config.json et filtres Gmail charges")
     telecharger_config_drive(drive_svc)
+    print("[jalon] config d'adressage et binaire telecharges")
     chemin_csv = os.path.join(WORK_DIR, "chemin_prepa_ramasse.csv")
     if os.path.exists(chemin_csv):
         upload_bon(drive_svc, chemin_csv)
@@ -2845,6 +2852,7 @@ def _main():
     # Sans binaire ni config d'adressage, aucun bon ne peut etre genere. Les
     # emails de confirmation sont libellises des leur telechargement et ne
     # repassent jamais : on ne les touche pas, le run suivant les reprendra.
+    print("[jalon] km Shopopop et modifications clients traites")
     manquants = config_manquante()
     if manquants:
         print(f"ERREUR : {', '.join(manquants)} indisponible(s) apres "
@@ -2861,6 +2869,7 @@ def _main():
     nouveaux.update(nouveaux_manuels)
 
     nouveaux = _ecarter_commandes_annulees(drive_svc, nouveaux)
+    print("[jalon] emails, depots manuels et annulations examines")
 
     # Un bon depose pour une commande entre-temps annulee/remplacee n'a plus
     # lieu d'etre : sans cela il resterait dans le dossier et serait reexamine
