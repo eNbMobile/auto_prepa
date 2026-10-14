@@ -1,41 +1,78 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Télécommande du volet : les identifiants t_* sont reliés aux touches dans NotifTele.java. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical">
-    <LinearLayout android:layout_width="match_parent" android:layout_height="52dp" android:orientation="horizontal">
-        <TextView android:id="@+id/t_power" style="@style/BoutonNotif"
-            android:layout_weight="1" android:text="⏻" android:textSize="20sp" />
-        <TextView android:id="@+id/t_mute" style="@style/BoutonNotif"
-            android:layout_weight="1" android:text="🔇" android:textSize="20sp" />
-        <TextView android:id="@+id/t_home" style="@style/BoutonNotif"
-            android:layout_weight="1" android:text="⌂" android:textSize="20sp" />
-        <TextView android:id="@+id/t_back" style="@style/BoutonNotif"
-            android:layout_weight="1" android:text="↩" android:textSize="20sp" />
-        <TextView android:id="@+id/t_play" style="@style/BoutonNotif"
-            android:layout_weight="1" android:text="⏯" android:textSize="20sp" />
+    android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical"
+    android:paddingTop="4dp" android:paddingBottom="4dp">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="46dp" android:orientation="horizontal">
+        <ImageView android:id="@+id/t_power" android:layout_width="0dp" android:layout_height="match_parent"
+            android:layout_weight="1" android:layout_margin="3dp" android:padding="12dp"
+            android:scaleType="fitCenter" android:src="@drawable/ic_t_power" android:background="@drawable/bouton_notif_alim" />
+        <ImageView android:id="@+id/t_mute" android:layout_width="0dp" android:layout_height="match_parent"
+            android:layout_weight="1" android:layout_margin="3dp" android:padding="12dp"
+            android:scaleType="fitCenter" android:src="@drawable/ic_t_son" android:background="@drawable/bouton_notif" />
+        <ImageView android:id="@+id/t_home" android:layout_width="0dp" android:layout_height="match_parent"
+            android:layout_weight="1" android:layout_margin="3dp" android:padding="12dp"
+            android:scaleType="fitCenter" android:src="@drawable/ic_t_accueil" android:background="@drawable/bouton_notif" />
+        <ImageView android:id="@+id/t_back" android:layout_width="0dp" android:layout_height="match_parent"
+            android:layout_weight="1" android:layout_margin="3dp" android:padding="12dp"
+            android:scaleType="fitCenter" android:src="@drawable/ic_t_retour" android:background="@drawable/bouton_notif" />
+        <ImageView android:id="@+id/t_play" android:layout_width="0dp" android:layout_height="match_parent"
+            android:layout_weight="1" android:layout_margin="3dp" android:padding="12dp"
+            android:scaleType="fitCenter" android:src="@drawable/ic_t_lecture" android:background="@drawable/bouton_notif" />
     </LinearLayout>
-    <LinearLayout android:layout_width="match_parent" android:layout_height="52dp" android:orientation="horizontal">
-        <TextView android:id="@+id/t_volm" style="@style/BoutonNotif"
-            android:layout_weight="1" android:text="VOL −" android:textSize="15sp" />
-        <TextView android:id="@+id/t_up" style="@style/BoutonNotif"
-            android:layout_weight="1" android:text="▲" android:textSize="20sp" />
-        <TextView android:id="@+id/t_volp" style="@style/BoutonNotif"
-            android:layout_weight="1" android:text="VOL +" android:textSize="15sp" />
-    </LinearLayout>
-    <LinearLayout android:layout_width="match_parent" android:layout_height="52dp" android:orientation="horizontal">
-        <TextView android:id="@+id/t_left" style="@style/BoutonNotif"
-            android:layout_weight="1" android:text="◀" android:textSize="20sp" />
-        <TextView android:id="@+id/t_ok" style="@style/BoutonNotif"
-            android:layout_weight="1" android:text="OK" android:textSize="17sp" />
-        <TextView android:id="@+id/t_right" style="@style/BoutonNotif"
-            android:layout_weight="1" android:text="▶" android:textSize="20sp" />
-    </LinearLayout>
-    <LinearLayout android:layout_width="match_parent" android:layout_height="52dp" android:orientation="horizontal">
-        <TextView android:id="@+id/t_chm" style="@style/BoutonNotif"
-            android:layout_weight="1" android:text="CH −" android:textSize="15sp" />
-        <TextView android:id="@+id/t_down" style="@style/BoutonNotif"
-            android:layout_weight="1" android:text="▼" android:textSize="20sp" />
-        <TextView android:id="@+id/t_chp" style="@style/BoutonNotif"
-            android:layout_weight="1" android:text="CH +" android:textSize="15sp" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="150dp" android:orientation="horizontal"
+        android:layout_marginTop="4dp">
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:layout_margin="3dp" android:orientation="vertical" android:background="@drawable/bloc_notif">
+            <ImageView android:id="@+id/t_volp" android:layout_width="match_parent" android:layout_height="0dp"
+                android:layout_weight="1" android:padding="11dp" android:scaleType="fitCenter"
+                android:src="@drawable/ic_t_plus" android:background="@drawable/touche_notif" />
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center"
+                android:text="VOL" android:textSize="11sp" android:textStyle="bold" android:letterSpacing="0.1"
+                android:textColor="@color/notif_texte" />
+            <ImageView android:id="@+id/t_volm" android:layout_width="match_parent" android:layout_height="0dp"
+                android:layout_weight="1" android:padding="11dp" android:scaleType="fitCenter"
+                android:src="@drawable/ic_t_moins" android:background="@drawable/touche_notif" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1.7"
+            android:layout_margin="3dp" android:orientation="vertical" android:background="@drawable/bloc_notif">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+                android:orientation="horizontal">
+                <FrameLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" /><ImageView android:id="@+id/t_up" android:layout_width="0dp" android:layout_height="match_parent"
+                    android:layout_weight="1" android:padding="10dp" android:scaleType="fitCenter"
+                    android:src="@drawable/ic_t_haut" android:background="@drawable/touche_notif" /><FrameLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" />
+            </LinearLayout>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+                android:orientation="horizontal">
+                <ImageView android:id="@+id/t_left" android:layout_width="0dp" android:layout_height="match_parent"
+                    android:layout_weight="1" android:padding="10dp" android:scaleType="fitCenter"
+                    android:src="@drawable/ic_t_gauche" android:background="@drawable/touche_notif" />
+                <TextView android:id="@+id/t_ok" android:layout_width="0dp" android:layout_height="match_parent"
+                    android:layout_weight="1" android:layout_margin="4dp" android:gravity="center" android:text="OK"
+                    android:textSize="14sp" android:textStyle="bold" android:textColor="@color/notif_icone"
+                    android:background="@drawable/ok_notif" />
+                <ImageView android:id="@+id/t_right" android:layout_width="0dp" android:layout_height="match_parent"
+                    android:layout_weight="1" android:padding="10dp" android:scaleType="fitCenter"
+                    android:src="@drawable/ic_t_droite" android:background="@drawable/touche_notif" />
+            </LinearLayout>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+                android:orientation="horizontal">
+                <FrameLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" /><ImageView android:id="@+id/t_down" android:layout_width="0dp" android:layout_height="match_parent"
+                    android:layout_weight="1" android:padding="10dp" android:scaleType="fitCenter"
+                    android:src="@drawable/ic_t_bas" android:background="@drawable/touche_notif" /><FrameLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" />
+            </LinearLayout>
+        </LinearLayout>
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:layout_margin="3dp" android:orientation="vertical" android:background="@drawable/bloc_notif">
+            <ImageView android:id="@+id/t_chp" android:layout_width="match_parent" android:layout_height="0dp"
+                android:layout_weight="1" android:padding="11dp" android:scaleType="fitCenter"
+                android:src="@drawable/ic_t_haut" android:background="@drawable/touche_notif" />
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center"
+                android:text="CH" android:textSize="11sp" android:textStyle="bold" android:letterSpacing="0.1"
+                android:textColor="@color/notif_texte" />
+            <ImageView android:id="@+id/t_chm" android:layout_width="match_parent" android:layout_height="0dp"
+                android:layout_weight="1" android:padding="11dp" android:scaleType="fitCenter"
+                android:src="@drawable/ic_t_bas" android:background="@drawable/touche_notif" />
+        </LinearLayout>
     </LinearLayout>
 </LinearLayout>

@@ -28,13 +28,4 @@
         <item name="android:colorAccent">@color/accent</item>
     </style>
 
-    <style name="BoutonNotif">
-        <item name="android:layout_width">0dp</item>
-        <item name="android:layout_height">match_parent</item>
-        <item name="android:layout_margin">3dp</item>
-        <item name="android:gravity">center</item>
-        <item name="android:background">@drawable/bouton_notif</item>
-        <item name="android:textAppearance">@android:style/TextAppearance.Material.Notification.Title</item>
-        <item name="android:textStyle">bold</item>
-    </style>
 </resources>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="notif_icone">#F3F4F6</color>
+    <color name="notif_texte">#C7CBD1</color>
+    <color name="notif_bouton">#24FFFFFF</color>
+    <color name="notif_appui">#4038BDF8</color>
+    <color name="notif_alim">#F87171</color>
+    <color name="notif_alim_fond">#2EF87171</color>
+</resources>
