@@ -2440,6 +2440,23 @@ def _charger_config(drive_svc):
 
 def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, dossier_mm_aaaa,
                           heure_cron, shopopop_token, shopopop_drive_id, shopopop_connecte):
+    """Traite la commande puis archive son PDF dans Drive BDC/MM_AAAA/JJ_MM.
+
+    L'archivage (≈ 2,5 s) se faisait avant la generation : il ne retardait
+    que la mise a disposition du bon. Il a lieu desormais apres, dans tous
+    les cas (succes, echec, exception), comme avant."""
+    try:
+        return _traiter_commande_pdf(
+            drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, dossier_mm_aaaa,
+            heure_cron, shopopop_token, shopopop_drive_id, shopopop_connecte)
+    finally:
+        cache_path = os.path.join(CACHE_DIR, pdf)
+        if dossier_jj_mm and os.path.exists(cache_path):
+            archiver_pdf_drive(drive_svc, cache_path, dossier_jj_mm, dossier_mm_aaaa)
+
+
+def _traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, dossier_mm_aaaa,
+                          heure_cron, shopopop_token, shopopop_drive_id, shopopop_connecte):
     """Genere le bon_prepa/bon_anticipation d'un BonDeCommande_NUMERO.pdf deja
     present dans CACHE_DIR, l'archive/upload sur Drive, gere livraison/Shopopop
     et les anomalies.
@@ -2459,8 +2476,6 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
     cache_path = os.path.join(CACHE_DIR, pdf)
     if not os.path.exists(bdc_dst):
         shutil.copy2(cache_path, bdc_dst)
-    if dossier_jj_mm:
-        archiver_pdf_drive(drive_svc, cache_path, dossier_jj_mm, dossier_mm_aaaa)
 
     for fname in [
         "bon_prepa.txt", "bon_anticipation.txt",
@@ -2577,8 +2592,9 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
     print(f" OK ({duree_moteur:.2f} s)")
     # Mode ombre : le portage Python refait le bon à côté et on compare
     # (n'affecte jamais le bon du C ; cf. moteur_ombre.py).
-    moteur_ombre.executer(drive_svc, _get_or_create_subfolder, order_num,
-                          ombre, WORK_DIR, r.stdout, duree_moteur)
+    # Mode ombre : sorties brutes du C mises de cote tout de suite, le
+    # portage Python ne tourne qu'apres le depot du bon (cf. moteur_ombre.py).
+    ombre_c = moteur_ombre.garder_sorties_c(ombre, WORK_DIR)
 
     # Bon finalise (montant et heure en entete, prefixe parasite « -N; »
     # retire) et depose AUSSITOT dans le dossier lu par l'appli de prepa : le
@@ -2614,6 +2630,9 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
                     "depot du bon sur Drive echoue",
                     f"{nom_bon_prepa} a bien ete genere mais son upload dans le dossier "
                     f"des bons a echoue.")
+
+    moteur_ombre.executer(drive_svc, _get_or_create_subfolder, order_num,
+                          ombre, ombre_c, r.stdout, duree_moteur)
 
     civilite, nom, prenom, date_cde, creneau = extraire_client_creneau_pdf(pt.stdout)
 
@@ -2783,9 +2802,8 @@ def _main():
     print("[jalon] config.json et filtres Gmail charges")
     telecharger_config_drive(drive_svc)
     print("[jalon] config d'adressage et binaire telecharges")
-    chemin_csv = os.path.join(WORK_DIR, "chemin_prepa_ramasse.csv")
-    if os.path.exists(chemin_csv):
-        upload_bon(drive_svc, chemin_csv)
+    # chemin_prepa_ramasse.csv n'est plus renvoye sur Drive a chaque run :
+    # il vient d'en etre telecharge et n'est modifie qu'a la main (mensuel).
 
     # Connexion Shopopop differee : uniquement quand une commande LIVRAISON
     # est effectivement rencontree plus bas (5 a 10 fois/jour), ou quand il y

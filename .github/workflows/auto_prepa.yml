@@ -312,6 +312,8 @@ jobs:
           MOTEUR_OMBRE:           ${{ vars.MOTEUR_OMBRE }}
           # Sortie non bufferisee : chaque ligne du log a son heure exacte.
           PYTHONUNBUFFERED:       "1"
+          # Scripts du dépôt uniquement : pas de téléchargement de scripts/ sur Drive.
+          BOOTSTRAP_LOCAL:        "1"
         run: |
           set +e
           python3 bootstrap.py auto_prepa.py

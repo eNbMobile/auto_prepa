@@ -82,6 +82,14 @@ def main():
 
     access = _access_token()
 
+    # BOOTSTRAP_LOCAL=1 (aut_prep) : le script et tout ce qu'il importe sont
+    # dans le dépôt ; inutile de lister et télécharger scripts/ sur Drive
+    # (≈ 2,5 s par run). Le jeton rafraîchi ci-dessus reste écrit.
+    target_local = os.path.join(_HERE, target)
+    if os.environ.get("BOOTSTRAP_LOCAL") == "1" and os.path.exists(target_local):
+        result = subprocess.run([sys.executable, target_local] + args)
+        sys.exit(result.returncode)
+
     q = urllib.parse.quote(
         f"name='{_SCRIPTS_DIR}' and '{config_folder_id}' in parents "
         f"and mimeType='application/vnd.google-apps.folder' and trashed=false"
