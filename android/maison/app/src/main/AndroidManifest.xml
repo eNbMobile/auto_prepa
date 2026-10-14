@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="Maison"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:supportsRtl="false"
+        android:theme="@style/Theme.Maison">
+
+        <!-- La PWA Maison dans une WebView (même cookie que les tuiles). -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/raccourcis" />
+        </activity>
+
+        <!-- Choix des appareils des tuiles (aussi ouvert par appui long sur une tuile). -->
+        <activity
+            android:name=".ConfigActivity"
+            android:exported="true"
+            android:label="Tuiles rapides"
+            android:theme="@style/Theme.Maison.Config">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
+            </intent-filter>
+        </activity>
+
+        <!-- Tuiles qui ouvrent l'app sur une vue. -->
+        <service
+            android:name=".TuileTele"
+            android:exported="true"
+            android:icon="@drawable/ic_tele"
+            android:label="Télécommande"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+        <service
+            android:name=".TuileMaison"
+            android:exported="true"
+            android:icon="@drawable/ic_maison"
+            android:label="Maison"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <!-- Tuiles « interrupteur », chacune liée à un appareil choisi. -->
+        <service
+            android:name=".TuileAppareil$Un"
+            android:exported="true"
+            android:icon="@drawable/ic_ampoule"
+            android:label="Appareil 1"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data android:name="android.service.quicksettings.TOGGLEABLE_TILE" android:value="true" />
+        </service>
+        <service
+            android:name=".TuileAppareil$Deux"
+            android:exported="true"
+            android:icon="@drawable/ic_ampoule"
+            android:label="Appareil 2"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data android:name="android.service.quicksettings.TOGGLEABLE_TILE" android:value="true" />
+        </service>
+        <service
+            android:name=".TuileAppareil$Trois"
+            android:exported="true"
+            android:icon="@drawable/ic_ampoule"
+            android:label="Appareil 3"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data android:name="android.service.quicksettings.TOGGLEABLE_TILE" android:value="true" />
+        </service>
+        <service
+            android:name=".TuileAppareil$Quatre"
+            android:exported="true"
+            android:icon="@drawable/ic_ampoule"
+            android:label="Appareil 4"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data android:name="android.service.quicksettings.TOGGLEABLE_TILE" android:value="true" />
+        </service>
+    </application>
+</manifest>
