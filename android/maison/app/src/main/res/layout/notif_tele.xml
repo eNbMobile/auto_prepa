@@ -63,16 +63,15 @@
             </LinearLayout>
         </LinearLayout>
         <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
-            android:layout_margin="3dp" android:orientation="vertical" android:background="@drawable/bloc_notif">
-            <ImageView android:id="@+id/t_chp" android:layout_width="match_parent" android:layout_height="0dp"
-                android:layout_weight="1" android:padding="11dp" android:scaleType="fitCenter"
-                android:src="@drawable/ic_t_haut" android:background="@drawable/touche_notif" />
-            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center"
-                android:text="CH" android:textSize="11sp" android:textStyle="bold" android:letterSpacing="0.1"
-                android:textColor="@color/notif_texte" />
-            <ImageView android:id="@+id/t_chm" android:layout_width="match_parent" android:layout_height="0dp"
-                android:layout_weight="1" android:padding="11dp" android:scaleType="fitCenter"
-                android:src="@drawable/ic_t_bas" android:background="@drawable/touche_notif" />
+            android:orientation="vertical">
+            <TextView android:id="@+id/t_netflix" android:layout_width="match_parent" android:layout_height="0dp"
+                android:layout_weight="1" android:layout_margin="3dp" android:gravity="center" android:text="NETFLIX"
+                android:textSize="15sp" android:textStyle="bold" android:textColor="#E50914"
+                android:background="@drawable/bouton_notif" />
+            <TextView android:id="@+id/t_m6" android:layout_width="match_parent" android:layout_height="0dp"
+                android:layout_weight="1" android:layout_margin="3dp" android:gravity="center" android:text="M6+"
+                android:textSize="15sp" android:textStyle="bold" android:textColor="@color/notif_icone"
+                android:background="@drawable/bouton_notif" />
         </LinearLayout>
     </LinearLayout>
 </LinearLayout>

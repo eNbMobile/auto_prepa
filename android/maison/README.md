@@ -6,7 +6,7 @@ La PWA Maison (`cloudflare/maison-worker`) dans une app Android, avec des
 ## Télécommande dans le volet
 
 Toute la télécommande dans une **notification épinglée** : alimentation, muet,
-accueil, retour, lecture/pause, volume ±, flèches + OK, chaînes ±. Chaque
+accueil, retour, lecture/pause, volume ±, flèches + OK, **Netflix** et **M6+**. Chaque
 appui envoie la touche à la télé **sans ouvrir l'app** ; toucher le titre
 ouvre la télécommande complète.
 
@@ -71,3 +71,13 @@ dans le KV Cloudflare `maison-smartthings` (clés `android:keystore` et
 `android:mdp`), car le dépôt est public.
 
 Code : Java sans dépendance (WebView, `TileService`), minSdk 26, targetSdk 35.
+
+## Raccourcis Netflix et M6+
+
+Lancés avec la capacité SmartThings `custom.launchapp` (commande `launchApp`) :
+
+- Netflix : identifiant Tizen `org.tizen.netflix-app`.
+- M6+ : aucun identifiant public fiable n'a été trouvé, l'appli est lancée par
+  son nom (`M6+`). Si le bouton ne fait rien, il faudra relever son
+  identifiant sur la télé (Tizen Studio → Device Manager → liste des applis
+  installées) et le mettre dans `Tele.java` et `page.html` (`M6PLUS`).
