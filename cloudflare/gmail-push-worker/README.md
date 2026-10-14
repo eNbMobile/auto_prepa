@@ -14,11 +14,12 @@ Email reçu dans Gmail
 ```
 
 - **Délai** : quelques secondes entre la réception de l'email et le lancement du run.
-- **Filet de sécurité** : le worker relance aussi `aut_prep` toutes les 10 minutes
-  (cron Cloudflare, `source=filet`). Ça couvre
-  les bons déposés à la main dans « Traitement manuel », les km Shopopop à retenter,
-  le rattrapage 15h « EN ATTENTE », les alertes d'anticipation en attente, et une
-  notification qui se perdrait.
+- **Filet de sécurité (désactivé depuis le 14/10/2026)** : le worker peut relancer
+  `aut_prep` toutes les 10 minutes (cron Cloudflare, `source=filet`) en ajoutant
+  `"*/10 * * * *"` aux crons de `wrangler.toml`. Sans lui, les bons déposés à la
+  main dans « Traitement manuel », les km Shopopop à retenter et les alertes
+  d'anticipation en attente ne sont repris qu'au prochain email reçu (ou par un
+  lancement manuel de aut_prep).
 - **Renouvellement** : Gmail coupe les notifications au bout de 7 jours. Le worker
   lance chaque nuit (03h17 UTC) le workflow `gmail_watch.yml`, qui les réactive
   (un schedule GitHub sert de secours).
@@ -75,8 +76,7 @@ Ajoute la clé :
    « Notification Gmail active jusqu'au … ».
 2. À la commande suivante, un run `aut_prep` doit apparaître dans la minute, avec
    « Déclenchement : gmail » dans l'étape « Déterminer la fenêtre d'exécution ».
-3. **Une fois que c'est vérifié, désactive le job aut_prep sur cron-job.org** : le
-   filet de 10 minutes du worker le remplace.
+3. **Une fois que c'est vérifié, désactive le job aut_prep sur cron-job.org.**
 
 ## Retour en arrière
 
