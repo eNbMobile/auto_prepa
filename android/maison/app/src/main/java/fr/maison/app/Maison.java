@@ -77,8 +77,8 @@ final class Maison {
     static String st(Context c, String chemin, String corpsJson) throws IOException {
         HttpURLConnection cx = (HttpURLConnection) new URL(BASE + "/api/st/" + chemin).openConnection();
         try {
-            cx.setConnectTimeout(8000);
-            cx.setReadTimeout(10000);
+            cx.setConnectTimeout(5000);
+            cx.setReadTimeout(8000);
             cx.setRequestProperty("Cookie", cookie(c));
             cx.setRequestProperty("Accept", "application/json");
             if (corpsJson != null) {
