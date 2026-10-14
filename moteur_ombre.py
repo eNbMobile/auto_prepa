@@ -52,6 +52,25 @@ def preparer(work_dir, pdf_name):
         return None
 
 
+def garder_sorties_c(dossier, work_dir):
+    """Copie les sorties brutes du C (avant toute retouche par auto_prepa.py)
+    dans dossier/c/, pour comparer plus tard, après le dépôt du bon.
+    Renvoie ce sous-dossier, ou None."""
+    if not dossier:
+        return None
+    try:
+        cible = os.path.join(dossier, "c")
+        os.makedirs(cible, exist_ok=True)
+        for nom in ("bon_prepa.txt", "bon_anticipation.txt"):
+            src = os.path.join(work_dir, nom)
+            if os.path.exists(src):
+                shutil.copy2(src, cible)
+        return cible
+    except Exception as e:  # noqa: BLE001
+        print(f"    Mode ombre : copie des sorties du C impossible ({type(e).__name__})")
+        return None
+
+
 def normaliser_bon(data):
     """Même nettoyage que auto_prepa.py : préfixe parasite « -N; » retiré."""
     lignes = (data or b"").split(b"\n")
@@ -125,8 +144,12 @@ def deposer_ecart(drive_svc, get_or_create_subfolder, numero, dossier, work_dir)
 
 
 def executer(drive_svc, get_or_create_subfolder, numero, dossier, work_dir, sortie_c, duree_c):
-    """Point d'entrée appelé par auto_prepa.py après un passage réussi du C."""
+    """Point d'entrée appelé par auto_prepa.py après un passage réussi du C.
+    `work_dir` : dossier contenant les sorties brutes du C (garder_sorties_c)."""
     if not dossier:
+        return None
+    if not work_dir:
+        shutil.rmtree(dossier, ignore_errors=True)
         return None
     try:
         res = comparer(dossier, work_dir, sortie_c)

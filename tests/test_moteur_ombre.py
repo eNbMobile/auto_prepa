@@ -73,6 +73,19 @@ class TestMoteurOmbre(unittest.TestCase):
         self.assertFalse(res["identique"])
         self.assertIn("Python EN ERREUR (ValueError)", log)
 
+    def test_sorties_c_gardees_avant_retouche(self):
+        # auto_prepa.py retouche puis renomme bon_prepa.txt apres le depot :
+        # la comparaison se fait sur la copie brute prise juste apres le C.
+        self._bon_c(BON)
+        dossier = moteur_ombre.preparer(self.work, "BonDeCommande_1.pdf")
+        copie_c = moteur_ombre.garder_sorties_c(dossier, self.work)
+        os.remove(os.path.join(self.work, "bon_prepa.txt"))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            res = moteur_ombre.executer(None, None, "1", dossier, copie_c, "", 1.0)
+        self.assertTrue(res["identique"])
+        self.assertFalse(os.path.exists(dossier))
+
     def test_interrupteur(self):
         with mock.patch.dict(os.environ, {"MOTEUR_OMBRE": "0"}):
             self.assertFalse(moteur_ombre.actif("c"))
