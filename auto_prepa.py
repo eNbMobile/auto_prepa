@@ -26,6 +26,7 @@ from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 import adresses_inconnues
 import confidentiel
 import livraison_drive
+import moteur_ombre
 
 _BASE = os.path.dirname(os.path.abspath(__file__))
 WORK_DIR  = os.environ.get("WORK_DIR",  os.path.join(_BASE, "v 4.0.0"))
@@ -2527,8 +2528,12 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
     print(f"  [{order_num}] Generation...", end="", flush=True)
     commande = (["./prepa_drive_degrade"] if MOTEUR_PREPA != "python" else
                 [sys.executable, os.path.join(_BASE, "prepa_drive_degrade.py")])
+    ombre = (moteur_ombre.preparer(WORK_DIR, pdf)
+             if moteur_ombre.actif(MOTEUR_PREPA) else None)
+    t_moteur = time.perf_counter()
     r = subprocess.run(commande, cwd=WORK_DIR,
                        capture_output=True, text=True, timeout=120)
+    duree_moteur = time.perf_counter() - t_moteur
 
     if DEBUG_RAW_DIR:
         os.makedirs(DEBUG_RAW_DIR, exist_ok=True)
@@ -2569,7 +2574,11 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
             f"le binaire s'est termine normalement mais n'a rien ecrit dans "
             f"bon_prepa.txt.\nsortie : {r.stdout[:300]}")
         return "processed", shopopop_token, shopopop_drive_id, shopopop_connecte
-    print(" OK")
+    print(f" OK ({duree_moteur:.2f} s)")
+    # Mode ombre : le portage Python refait le bon à côté et on compare
+    # (n'affecte jamais le bon du C ; cf. moteur_ombre.py).
+    moteur_ombre.executer(drive_svc, _get_or_create_subfolder, order_num,
+                          ombre, WORK_DIR, r.stdout, duree_moteur)
 
     civilite, nom, prenom, date_cde, creneau = extraire_client_creneau_pdf(pt.stdout)
 
