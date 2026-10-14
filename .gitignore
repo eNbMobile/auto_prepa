@@ -19,3 +19,7 @@ gmail_filters_local.json
 !j.xlsx
 !j1.xlsx
 !stocks/*.xlsx
+
+# Secrets et état local de « wrangler dev »
+.dev.vars
+.wrangler/

@@ -1,0 +1,12 @@
+name = "maison"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+# Jetons OAuth SmartThings et réglages de la PWA (namespace « maison-smartthings »).
+[[kv_namespaces]]
+binding = "MAISON"
+id = "6d225b9e623d4d088001b9f2bdb93c6d"
+
+# Rafraîchissement nocturne du jeton (le refresh token expire après 30 jours sans usage).
+[triggers]
+crons = ["17 3 * * *"]

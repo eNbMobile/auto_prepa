@@ -1,0 +1,832 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111827">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icone-192.png">
+<link rel="apple-touch-icon" href="/icone-192.png">
+<title>Maison</title>
+<style>
+  :root {
+    --fond: #111827; --carte: #1f2937; --carte2: #273244; --bord: #374151;
+    --texte: #f3f4f6; --doux: #9ca3af; --accent: #38bdf8; --accent-texte: #0b1220;
+    --allume: #fbbf24; --allume-texte: #1c1300; --danger: #f87171;
+    --rayon: 20px;
+    --tuile: 132px;        /* hauteur des tuiles, modifiée par les réglages */
+    --echelle: 1;          /* taille des boutons de la télécommande */
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --fond: #f3f4f6; --carte: #ffffff; --carte2: #e5e7eb; --bord: #d1d5db;
+      --texte: #111827; --doux: #6b7280; --accent: #0284c7; --accent-texte: #ffffff;
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--fond); color: var(--texte);
+    font: 17px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { padding: env(safe-area-inset-top) 0 calc(84px + env(safe-area-inset-bottom)); min-height: 100vh;
+    overscroll-behavior-y: contain; user-select: none; -webkit-user-select: none; }
+  button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; touch-action: manipulation; }
+  header { display: flex; align-items: center; gap: 10px; padding: 14px 16px 6px; }
+  header h1 { margin: 0; font-size: 26px; flex: 1; }
+  .icone-btn { width: 44px; height: 44px; border-radius: 50%; background: var(--carte); font-size: 20px; }
+  main { padding: 6px 16px 16px; }
+  .vue { display: none; }
+  .vue.active { display: block; }
+  .vide { color: var(--doux); text-align: center; padding: 40px 10px; }
+  .vide .grand { display: inline-block; margin-top: 16px; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .06em; color: var(--doux);
+    margin: 22px 4px 10px; }
+
+  /* --- tuiles ----------------------------------------------------------- */
+  .grille { display: grid; grid-template-columns: repeat(var(--colonnes, 2), minmax(0, 1fr)); gap: 12px; }
+  .tuile { position: relative; min-height: var(--tuile); border-radius: var(--rayon); background: var(--carte);
+    padding: 14px; display: flex; flex-direction: column; justify-content: space-between; text-align: left;
+    transition: transform .08s, background .2s; overflow: hidden; }
+  .tuile:active { transform: scale(.96); }
+  .tuile .ico { font-size: calc(var(--tuile) * .26); line-height: 1; }
+  .tuile .nom { font-weight: 650; font-size: calc(13px + var(--tuile) * .03); overflow-wrap: anywhere; }
+  .tuile .etat { color: var(--doux); font-size: 14px; margin-top: 2px; }
+  .tuile.on { background: var(--allume); color: var(--allume-texte); }
+  .tuile.on .etat { color: inherit; opacity: .75; }
+  .tuile.attente { opacity: .6; }
+  .tuile .plus { position: absolute; top: 6px; right: 6px; width: 40px; height: 40px; border-radius: 50%;
+    font-size: 22px; opacity: .6; }
+  .scene { background: var(--carte2); }
+
+  /* --- barre de navigation ----------------------------------------------- */
+  nav { position: fixed; left: 0; right: 0; bottom: 0; display: flex; background: var(--carte);
+    border-top: 1px solid var(--bord); padding-bottom: env(safe-area-inset-bottom); z-index: 5; }
+  nav button { flex: 1; padding: 10px 0 12px; display: flex; flex-direction: column; align-items: center; gap: 2px;
+    font-size: 12px; color: var(--doux); }
+  nav button span { font-size: 24px; }
+  nav button.active { color: var(--accent); }
+
+  /* --- télécommande ------------------------------------------------------ */
+  .tele { --b: calc(72px * var(--echelle)); max-width: min(100%, calc(420px * max(1, var(--echelle)))); margin: 0 auto;
+    display: grid; gap: calc(14px * var(--echelle)); }
+  /* Les rangées passent à la ligne quand les boutons deviennent trop gros pour l'écran. */
+  .tele .ligne { display: flex; flex-wrap: wrap; justify-content: space-between; gap: calc(12px * var(--echelle)); }
+  .tb { min-width: var(--b); height: var(--b); padding: 0 12px; border-radius: calc(var(--b) / 2); background: var(--carte);
+    font-size: calc(var(--b) * .36); display: grid; place-items: center; flex: 1 0 var(--b); transition: transform .06s, background .1s; }
+  .tb small { display: block; font-size: calc(var(--b) * .17); color: var(--doux); margin-top: -4px; }
+  .tb:active, .tb.appui { transform: scale(.93); background: var(--carte2); }
+  .tb.rouge { background: #b91c1c; color: #fff; }
+  .tb.actif { background: var(--accent); color: var(--accent-texte); }
+  .croix { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr);
+    width: min(100%, calc(var(--b) * 3.4)); aspect-ratio: 1; margin: 0 auto; border-radius: 50%;
+    background: var(--carte); overflow: hidden; }
+  .croix .tb { border-radius: 0; background: transparent; min-width: 0; height: auto; }
+  .croix .tb:active, .croix .tb.appui { background: var(--carte2); }
+  .croix .ok { border-radius: 50%; background: var(--carte2); margin: 6px; font-weight: 700; font-size: calc(var(--b) * .3); }
+  .bascule { display: flex; flex-direction: column; flex: 1 0 var(--b); border-radius: calc(var(--b) / 2); background: var(--carte); overflow: hidden; }
+  .bascule .tb { border-radius: 0; background: transparent; height: calc(var(--b) * 1.15); }
+  .bascule .lib { text-align: center; font-size: calc(var(--b) * .2); color: var(--doux); padding: 2px 0; }
+  .rangee-bascules { display: flex; flex-wrap: wrap; gap: calc(14px * var(--echelle)); align-items: stretch; }
+  .reglage-taille { display: flex; align-items: center; gap: 12px; background: var(--carte); border-radius: 14px;
+    padding: 10px 14px; margin-bottom: 12px; }
+  .reglage-taille input { flex: 1; }
+  select, input[type=text], input[type=number] { font: inherit; color: inherit; background: var(--carte);
+    border: 1px solid var(--bord); border-radius: 12px; padding: 12px; width: 100%; }
+  input[type=range] { width: 100%; height: 36px; accent-color: var(--accent); }
+
+  /* --- feuille de détail ------------------------------------------------- */
+  .voile { position: fixed; inset: 0; background: rgba(0,0,0,.5); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 10; }
+  .voile.ouvert { opacity: 1; pointer-events: auto; }
+  .feuille { position: fixed; left: 0; right: 0; bottom: 0; max-height: 85vh; overflow: auto; background: var(--fond);
+    border-radius: 24px 24px 0 0; padding: 10px 16px calc(24px + env(safe-area-inset-bottom)); z-index: 11;
+    transform: translateY(105%); visibility: hidden; transition: transform .25s ease, visibility 0s .25s; }
+  .feuille.ouverte { transform: none; visibility: visible; transition: transform .25s ease; }
+  .feuille .poignee { width: 44px; height: 5px; border-radius: 3px; background: var(--bord); margin: 4px auto 12px; }
+  .feuille h3 { margin: 0 0 14px; font-size: 22px; }
+  .controle { background: var(--carte); border-radius: 16px; padding: 14px; margin-bottom: 12px; }
+  .controle .titre { display: flex; justify-content: space-between; color: var(--doux); font-size: 15px; margin-bottom: 8px; }
+  .gros { width: 100%; padding: 18px; border-radius: 16px; background: var(--carte2); font-size: 20px; font-weight: 650; }
+  .gros.on { background: var(--allume); color: var(--allume-texte); }
+  .gros.accent { background: var(--accent); color: var(--accent-texte); }
+  .duo { display: flex; gap: 10px; }
+  .duo > * { flex: 1; }
+  .attr { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--bord); font-size: 15px; }
+  .attr:last-child { border: 0; }
+  .attr span:last-child { color: var(--doux); text-align: right; margin-left: 12px; overflow-wrap: anywhere; }
+
+  /* --- réglages ---------------------------------------------------------- */
+  .liste { background: var(--carte); border-radius: 16px; overflow: hidden; }
+  .liste .el { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--bord); }
+  .liste .el:last-child { border: 0; }
+  .liste .el .txt { flex: 1; min-width: 0; }
+  .liste .el .txt small { display: block; color: var(--doux); }
+  .liste .el input[type=checkbox] { width: 26px; height: 26px; accent-color: var(--accent); }
+  .liste .el button { width: 40px; height: 40px; border-radius: 50%; background: var(--carte2); }
+  .choix { display: flex; gap: 8px; }
+  .choix button { flex: 1; padding: 12px 6px; border-radius: 12px; background: var(--carte); }
+  .choix button.actif { background: var(--accent); color: var(--accent-texte); font-weight: 650; }
+
+  .toast { position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(20px);
+    background: #000c; color: #fff; padding: 12px 18px; border-radius: 14px; opacity: 0; transition: .2s; z-index: 20;
+    max-width: 90vw; text-align: center; pointer-events: none; }
+  .toast.visible { opacity: 1; transform: translateX(-50%); }
+  .tourne { animation: tourne 1s linear infinite; }
+  @keyframes tourne { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="titre">Maison</h1>
+  <button class="icone-btn" id="taille" aria-label="Taille des boutons" hidden>🔍</button>
+  <button class="icone-btn" id="actualiser" aria-label="Actualiser">⟳</button>
+</header>
+
+<main>
+  <section class="vue" id="vue-relier">
+    <div class="vide">
+      <div style="font-size:56px">🔗</div>
+      <p>Il reste à relier ton compte SmartThings.</p>
+      <a class="gros accent grand" href="/oauth/debut" style="text-decoration:none;display:inline-block;width:auto">Relier SmartThings</a>
+    </div>
+  </section>
+  <section class="vue" id="vue-favoris"></section>
+  <section class="vue" id="vue-tele"></section>
+  <section class="vue" id="vue-scenes"></section>
+  <section class="vue" id="vue-pieces"></section>
+  <section class="vue" id="vue-reglages"></section>
+</main>
+
+<nav id="nav">
+  <button data-vue="favoris"><span>⭐</span>Favoris</button>
+  <button data-vue="tele"><span>📺</span>Télé</button>
+  <button data-vue="scenes"><span>✨</span>Scènes</button>
+  <button data-vue="pieces"><span>🏠</span>Pièces</button>
+  <button data-vue="reglages"><span>⚙️</span>Réglages</button>
+</nav>
+
+<div class="voile" id="voile"></div>
+<div class="feuille" id="feuille"><div class="poignee"></div><div id="feuille-contenu"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+'use strict';
+
+/* ======================================================= état et stockage */
+
+const TITRES = { favoris: 'Favoris', tele: 'Télécommande', scenes: 'Scènes', pieces: 'Pièces', reglages: 'Réglages', relier: 'Maison' };
+const TAILLES_TUILES = { m: 120, l: 150, xl: 190 };
+const CONFIG_DEFAUT = { favoris: [], tele: null, tailleTuiles: 'l', colonnes: 2, echelleTele: 1.15, scenesFavorites: [] };
+
+let config = { ...CONFIG_DEFAUT };
+let appareils = [];          // liste brute /devices
+let pieces = {};             // roomId -> nom
+let scenes = [];
+const statuts = {};          // deviceId -> components.main
+let vueCourante = 'favoris';
+let relie = true;
+
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function memoLocale(cle, valeur) {
+  try {
+    if (valeur === undefined) return JSON.parse(localStorage.getItem(cle) || 'null');
+    localStorage.setItem(cle, JSON.stringify(valeur));
+  } catch { return null; }
+}
+
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.add('visible');
+  clearTimeout(toast.minuterie);
+  toast.minuterie = setTimeout(() => t.classList.remove('visible'), 2600);
+}
+
+function vibre(ms = 12) { try { navigator.vibrate && navigator.vibrate(ms); } catch {} }
+
+/* ================================================================ API */
+
+async function st(chemin, options = {}) {
+  const r = await fetch('/api/st/' + chemin, {
+    method: options.body ? 'POST' : 'GET',
+    headers: options.body ? { 'content-type': 'application/json' } : {},
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+  if (r.status === 401) {
+    const e = await r.json().catch(() => ({}));
+    if (e.erreur === 'session') { location.reload(); throw new Error('session'); }
+    relie = false; afficher('relier');
+    throw new Error('SmartThings non relié');
+  }
+  if (!r.ok) throw new Error('SmartThings ' + r.status + ' ' + (await r.text()).slice(0, 120));
+  return r.status === 204 ? {} : r.json().catch(() => ({}));
+}
+
+/** Suit la pagination SmartThings (_links.next). */
+async function tout(chemin) {
+  const items = [];
+  let suivant = chemin;
+  for (let i = 0; suivant && i < 20; i += 1) {
+    const page = await st(suivant);
+    items.push(...(page.items || []));
+    const href = page._links && page._links.next && page._links.next.href;
+    suivant = href ? href.replace(/^https?:\/\/[^/]+\/(v1\/)?/, '') : null;
+  }
+  return items;
+}
+
+async function sauverConfig() {
+  memoLocale('maison.config', config);
+  try {
+    await fetch('/api/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(config) });
+  } catch { toast('Réglages gardés sur ce téléphone seulement'); }
+}
+
+async function commande(id, capability, command, args = [], component = 'main') {
+  vibre();
+  try {
+    await st('devices/' + id + '/commands', { body: { commands: [{ component, capability, command, arguments: args }] } });
+    setTimeout(() => chargerStatut(id).then(rafraichirVue), 800);
+    return true;
+  } catch (e) {
+    toast('Commande refusée : ' + e.message);
+    return false;
+  }
+}
+
+async function chargerStatut(id) {
+  try {
+    const s = await st('devices/' + id + '/status');
+    statuts[id] = (s.components && s.components.main) || {};
+  } catch { /* l'appareil garde son dernier état connu */ }
+}
+
+/* ======================================================== modèle appareils */
+
+const appareil = (id) => appareils.find((d) => d.deviceId === id);
+const caps = (d) => new Set(((d && d.components || []).find((c) => c.id === 'main') || { capabilities: [] }).capabilities.map((c) => c.id));
+const val = (id, cap, attr) => { const s = statuts[id]; return s && s[cap] && s[cap][attr] ? s[cap][attr].value : undefined; };
+const unite = (id, cap, attr) => { const s = statuts[id]; return (s && s[cap] && s[cap][attr] && s[cap][attr].unit) || ''; };
+const estTele = (d) => { const c = caps(d); return c.has('samsungvd.remoteControl') || c.has('tvChannel') || (c.has('audioVolume') && c.has('mediaInputSource')); };
+const nomAppareil = (d) => d.label || d.name || 'Appareil';
+
+function iconeAppareil(d) {
+  const c = caps(d);
+  const n = (nomAppareil(d) + ' ' + (d.ocf && d.ocf.ocfDeviceType || '')).toLowerCase();
+  if (estTele(d)) return '📺';
+  if (c.has('lock')) return '🔒';
+  if (c.has('windowShade')) return '🪟';
+  if (c.has('thermostatMode') || c.has('thermostatHeatingSetpoint')) return '🌡️';
+  if (c.has('robotCleanerMovement') || /aspirateur|robot/.test(n)) return '🧹';
+  if (/clim|air ?con/.test(n) || c.has('airConditionerMode')) return '❄️';
+  if (/lave|washer|dryer|séche/.test(n)) return '🧺';
+  if (/frigo|réfrig|fridge/.test(n)) return '🧊';
+  if (/prise|plug|outlet/.test(n)) return '🔌';
+  if (c.has('colorControl') || c.has('switchLevel') || /lampe|lumi|light|ampoule|led/.test(n)) return '💡';
+  if (c.has('audioVolume')) return '🔊';
+  if (c.has('motionSensor')) return '🏃';
+  if (c.has('contactSensor')) return '🚪';
+  if (c.has('temperatureMeasurement')) return '🌡️';
+  if (c.has('switch')) return '⏻';
+  return '📟';
+}
+
+function texteEtat(d) {
+  const id = d.deviceId, c = caps(d);
+  const morceaux = [];
+  if (c.has('switch')) {
+    const s = val(id, 'switch', 'switch');
+    if (s) morceaux.push(s === 'on' ? 'Allumé' : 'Éteint');
+  }
+  if (c.has('switchLevel') && val(id, 'switch', 'switch') === 'on') {
+    const l = val(id, 'switchLevel', 'level'); if (l != null) morceaux.push(l + ' %');
+  }
+  if (c.has('windowShade')) {
+    const w = val(id, 'windowShade', 'windowShade');
+    if (w) morceaux.push({ open: 'Ouvert', closed: 'Fermé', 'partially open': 'Entrouvert', opening: 'Ouverture…', closing: 'Fermeture…' }[w] || w);
+  }
+  if (c.has('lock')) { const l = val(id, 'lock', 'lock'); if (l) morceaux.push(l === 'locked' ? 'Verrouillé' : 'Déverrouillé'); }
+  if (c.has('contactSensor')) { const v = val(id, 'contactSensor', 'contact'); if (v) morceaux.push(v === 'open' ? 'Ouvert' : 'Fermé'); }
+  if (c.has('motionSensor')) { const v = val(id, 'motionSensor', 'motion'); if (v) morceaux.push(v === 'active' ? 'Mouvement' : 'Calme'); }
+  if (c.has('temperatureMeasurement')) {
+    const t = val(id, 'temperatureMeasurement', 'temperature');
+    if (t != null) morceaux.push(String(Math.round(t * 10) / 10).replace('.', ',') + ' °' + (unite(id, 'temperatureMeasurement', 'temperature') || 'C'));
+  }
+  if (c.has('relativeHumidityMeasurement')) { const h = val(id, 'relativeHumidityMeasurement', 'humidity'); if (h != null) morceaux.push(Math.round(h) + ' %HR'); }
+  if (!c.has('switch') && c.has('audioVolume')) { const v = val(id, 'audioVolume', 'volume'); if (v != null) morceaux.push('Vol. ' + v); }
+  return morceaux.join(' · ') || (statuts[id] ? '' : '…');
+}
+
+/* ================================================================ vues */
+
+function afficher(vue) {
+  if (!relie && vue !== 'relier') vue = 'relier';
+  vueCourante = vue;
+  document.querySelectorAll('.vue').forEach((v) => v.classList.toggle('active', v.id === 'vue-' + vue));
+  document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('active', b.dataset.vue === vue));
+  $('#titre').textContent = TITRES[vue] || 'Maison';
+  $('#taille').hidden = vue !== 'tele';
+  if (vue !== 'relier' && location.hash !== '#' + vue) history.replaceState(null, '', '#' + vue);
+  rafraichirVue();
+  if (vue === 'tele' && config.tele) chargerStatut(config.tele).then(rafraichirVue);
+}
+
+function rafraichirVue() {
+  document.documentElement.style.setProperty('--tuile', (TAILLES_TUILES[config.tailleTuiles] || 150) + 'px');
+  document.documentElement.style.setProperty('--colonnes', config.colonnes || 2);
+  ({ favoris: vueFavoris, tele: vueTele, scenes: vueScenes, pieces: vuePieces, reglages: vueReglages }[vueCourante] || (() => {}))();
+}
+
+function tuileHtml(d) {
+  const on = caps(d).has('switch') && val(d.deviceId, 'switch', 'switch') === 'on';
+  return `<button class="tuile${on ? ' on' : ''}" data-id="${esc(d.deviceId)}">
+    <span class="ico">${iconeAppareil(d)}</span>
+    <span><div class="nom">${esc(nomAppareil(d))}</div><div class="etat">${esc(texteEtat(d))}</div></span>
+    <span class="plus" data-detail="${esc(d.deviceId)}" role="button" aria-label="Détails">⋯</span>
+  </button>`;
+}
+
+function vueFavoris() {
+  const el = $('#vue-favoris');
+  const favs = config.favoris.map(appareil).filter(Boolean);
+  const scs = (config.scenesFavorites || []).map((id) => scenes.find((s) => s.sceneId === id)).filter(Boolean);
+  if (!favs.length && !scs.length) {
+    el.innerHTML = `<div class="vide"><div style="font-size:56px">⭐</div>
+      <p>Aucun favori pour l'instant.<br>Choisis tes appareils dans les réglages.</p>
+      <button class="gros accent grand" style="width:auto" onclick="afficher('reglages')">Choisir mes favoris</button></div>`;
+    return;
+  }
+  el.innerHTML = (favs.length ? `<div class="grille">${favs.map(tuileHtml).join('')}</div>` : '')
+    + (scs.length ? `<h2>Scènes</h2><div class="grille">${scs.map(sceneHtml).join('')}</div>` : '');
+}
+
+function vuePieces() {
+  const el = $('#vue-pieces');
+  if (!appareils.length) { el.innerHTML = '<div class="vide">Chargement des appareils…</div>'; return; }
+  const groupes = {};
+  for (const d of appareils) (groupes[pieces[d.roomId] || 'Sans pièce'] ||= []).push(d);
+  el.innerHTML = Object.keys(groupes).sort((a, b) => a.localeCompare(b, 'fr')).map((p) =>
+    `<h2>${esc(p)}</h2><div class="grille">${groupes[p].map(tuileHtml).join('')}</div>`).join('');
+  // Les statuts des pièces se chargent à la demande (une requête par appareil).
+  for (const d of appareils) if (!statuts[d.deviceId]) chargerStatut(d.deviceId).then(() => vueCourante === 'pieces' && majTuile(d.deviceId));
+}
+
+function majTuile(id) {
+  const d = appareil(id);
+  document.querySelectorAll(`.tuile[data-id="${CSS.escape(id)}"]`).forEach((t) => { t.outerHTML = tuileHtml(d); });
+}
+
+function sceneHtml(s) {
+  return `<button class="tuile scene" data-scene="${esc(s.sceneId)}">
+    <span class="ico">✨</span><span><div class="nom">${esc(s.sceneName)}</div></span></button>`;
+}
+
+function vueScenes() {
+  const el = $('#vue-scenes');
+  el.innerHTML = scenes.length ? `<div class="grille">${scenes.map(sceneHtml).join('')}</div>`
+    : '<div class="vide">Aucune scène SmartThings.</div>';
+}
+
+async function lancerScene(id, bouton) {
+  vibre(20);
+  bouton && bouton.classList.add('attente');
+  try { await st('scenes/' + id + '/execute', { body: {} }); toast('Scène lancée'); }
+  catch (e) { toast('Échec : ' + e.message); }
+  finally { bouton && bouton.classList.remove('attente'); }
+}
+
+/* --------------------------------------------------------- télécommande */
+
+function vueTele() {
+  const el = $('#vue-tele');
+  // Ne pas effacer un numéro de chaîne en cours de saisie.
+  if (document.activeElement && document.activeElement.id === 'chaine') return;
+  const teles = appareils.filter(estTele);
+  if (!config.tele && teles.length) config.tele = teles[0].deviceId;
+  const tv = appareil(config.tele);
+  if (!tv) { el.innerHTML = `<div class="vide">${appareils.length ? 'Aucune télé trouvée.' : 'Chargement…'}</div>`; return; }
+  const c = caps(tv), id = tv.deviceId;
+  const allumee = val(id, 'switch', 'switch') === 'on';
+  const muet = val(id, 'audioMute', 'mute') === 'muted';
+  const volume = val(id, 'audioVolume', 'volume');
+  const sources = sourcesTele(id, c);
+  const fleches = c.has('samsungvd.remoteControl');
+  const k = (cle, contenu, cls = '') => `<button class="tb ${cls}" data-cle="${cle}" aria-label="${cle}">${contenu}</button>`;
+
+  // Le réglage de taille reste replié pour ne pas encombrer.
+  el.innerHTML = `
+  ${teles.length > 1 ? `<select id="choix-tele" style="margin-bottom:12px">${teles.map((t) =>
+    `<option value="${esc(t.deviceId)}"${t.deviceId === id ? ' selected' : ''}>${esc(nomAppareil(t))}</option>`).join('')}</select>` : ''}
+  <div class="reglage-taille" id="reglage-taille" ${memoLocale('maison.tailleOuverte') ? '' : 'hidden'}>
+    <span>A</span><input type="range" id="echelle" min="0.8" max="1.7" step="0.05" value="${config.echelleTele}"><span style="font-size:24px">A</span>
+  </div>
+  <div class="tele" style="--echelle:${config.echelleTele}">
+    <div class="ligne">
+      ${c.has('switch') ? k('POWER', '⏻', allumee ? 'rouge' : '') : ''}
+      ${c.has('audioMute') ? k('MUTE', muet ? '🔇' : '🔈', muet ? 'actif' : '') : ''}
+      ${sources.length ? k('SOURCE', '⇄<small>Source</small>') : ''}
+    </div>
+    ${fleches ? `<div class="croix">
+      <span></span>${k('UP', '▲')}<span></span>
+      ${k('LEFT', '◀')}${k('OK', 'OK', 'ok')}${k('RIGHT', '▶')}
+      <span></span>${k('DOWN', '▼')}<span></span>
+    </div>
+    <div class="ligne">${k('BACK', '↩<small>Retour</small>')}${k('HOME', '⌂<small>Accueil</small>')}${k('MENU', '☰<small>Menu</small>')}</div>` : ''}
+    <div class="rangee-bascules">
+      ${c.has('audioVolume') ? `<div class="bascule">${k('VOL+', '+')}<div class="lib">VOL${volume != null ? ' ' + volume : ''}</div>${k('VOL-', '−')}</div>` : ''}
+      ${c.has('tvChannel') ? `<div class="bascule">${k('CH+', '⌃')}<div class="lib">CH</div>${k('CH-', '⌄')}</div>` : ''}
+    </div>
+    ${c.has('mediaPlayback') ? `<div class="ligne">${k('REW', '⏪')}${k('PLAY', '⏯')}${k('FF', '⏩')}</div>` : ''}
+    ${c.has('tvChannel') ? `<div class="ligne"><input type="number" inputmode="numeric" id="chaine" placeholder="N° de chaîne"
+      style="flex:2 1 0;min-width:0;font-size:calc(20px * var(--echelle))"><button class="tb" data-cle="GOCH" style="flex:1 0 var(--b)">OK</button></div>` : ''}
+  </div>`;
+}
+
+function sourcesTele(id, c) {
+  if (c.has('samsungvd.mediaInputSource')) {
+    const m = val(id, 'samsungvd.mediaInputSource', 'supportedInputSourcesMap');
+    if (Array.isArray(m) && m.length) return m.map((s) => ({ id: s.id, nom: s.name || s.id, cap: 'samsungvd.mediaInputSource' }));
+  }
+  if (c.has('mediaInputSource')) {
+    const l = val(id, 'mediaInputSource', 'supportedInputSources');
+    if (Array.isArray(l)) return l.map((s) => ({ id: s, nom: s, cap: 'mediaInputSource' }));
+  }
+  return [];
+}
+
+function toucheTele(cle) {
+  const id = config.tele;
+  const c = caps(appareil(id));
+  switch (cle) {
+    case 'POWER': return commande(id, 'switch', val(id, 'switch', 'switch') === 'on' ? 'off' : 'on');
+    case 'MUTE': return commande(id, 'audioMute', val(id, 'audioMute', 'mute') === 'muted' ? 'unmute' : 'mute');
+    case 'VOL+': return commande(id, 'audioVolume', 'volumeUp');
+    case 'VOL-': return commande(id, 'audioVolume', 'volumeDown');
+    case 'CH+': return commande(id, 'tvChannel', 'channelUp');
+    case 'CH-': return commande(id, 'tvChannel', 'channelDown');
+    case 'PLAY': return commande(id, 'mediaPlayback', val(id, 'mediaPlayback', 'playbackStatus') === 'playing' ? 'pause' : 'play');
+    case 'REW': return commande(id, 'mediaPlayback', 'rewind');
+    case 'FF': return commande(id, 'mediaPlayback', 'fastForward');
+    case 'GOCH': {
+      const n = $('#chaine').value.trim();
+      if (n) { $('#chaine').value = ''; return commande(id, 'tvChannel', 'setTvChannel', [n]); }
+      return;
+    }
+    case 'SOURCE': return ouvrirSources(id, c);
+    default:
+      if (['UP', 'DOWN', 'LEFT', 'RIGHT', 'OK', 'BACK', 'HOME', 'MENU'].includes(cle)) {
+        return commande(id, 'samsungvd.remoteControl', 'send', [cle]);
+      }
+  }
+}
+
+function ouvrirSources(id, c) {
+  const sources = sourcesTele(id, c);
+  ouvrirFeuille(`<h3>Source</h3>${sources.map((s) =>
+    `<button class="gros" style="margin-bottom:10px" data-source="${esc(s.id)}" data-cap="${esc(s.cap)}">${esc(s.nom)}</button>`).join('')}`);
+}
+
+/* ------------------------------------------------------- feuille détail */
+
+function ouvrirFeuille(html) {
+  $('#feuille-contenu').innerHTML = html;
+  $('#voile').classList.add('ouvert');
+  $('#feuille').classList.add('ouverte');
+}
+function fermerFeuille() {
+  $('#voile').classList.remove('ouvert');
+  $('#feuille').classList.remove('ouverte');
+  ouvrirFeuille.id = null;
+}
+
+function detail(id) {
+  const d = appareil(id);
+  if (!d) return;
+  ouvrirFeuille.id = id;
+  const c = caps(d);
+  const blocs = [];
+  if (c.has('switch')) {
+    const on = val(id, 'switch', 'switch') === 'on';
+    blocs.push(`<button class="gros${on ? ' on' : ''}" data-action="basculer">${on ? '⏻ Éteindre' : '⏻ Allumer'}</button>`);
+  }
+  if (c.has('switchLevel')) {
+    const l = val(id, 'switchLevel', 'level') ?? 0;
+    blocs.push(`<div class="controle"><div class="titre"><span>Luminosité</span><span id="v-niveau">${l} %</span></div>
+      <input type="range" min="1" max="100" value="${l}" data-reglage="niveau"></div>`);
+  }
+  if (c.has('colorTemperature')) {
+    const t = val(id, 'colorTemperature', 'colorTemperature') ?? 4000;
+    blocs.push(`<div class="controle"><div class="titre"><span>Température de couleur</span><span id="v-temp">${t} K</span></div>
+      <input type="range" min="2200" max="6500" step="100" value="${t}" data-reglage="temp"></div>`);
+  }
+  if (c.has('audioVolume') && !estTele(d)) {
+    const v = val(id, 'audioVolume', 'volume') ?? 0;
+    blocs.push(`<div class="controle"><div class="titre"><span>Volume</span><span id="v-volume">${v}</span></div>
+      <input type="range" min="0" max="100" value="${v}" data-reglage="volume"></div>`);
+  }
+  if (c.has('windowShade')) {
+    blocs.push(`<div class="duo"><button class="gros" data-action="ouvrir">▲ Ouvrir</button>
+      ${c.has('windowShade') ? '<button class="gros" data-action="pause">■</button>' : ''}
+      <button class="gros" data-action="fermer">▼ Fermer</button></div>`);
+  }
+  if (c.has('lock')) {
+    blocs.push(`<div class="duo"><button class="gros" data-action="verrouiller">🔒 Verrouiller</button>
+      <button class="gros" data-action="deverrouiller">🔓 Ouvrir</button></div>`);
+  }
+  for (const cap of ['thermostatHeatingSetpoint', 'thermostatCoolingSetpoint']) {
+    if (!c.has(cap)) continue;
+    const attr = cap === 'thermostatHeatingSetpoint' ? 'heatingSetpoint' : 'coolingSetpoint';
+    const v = val(id, cap, attr);
+    blocs.push(`<div class="controle"><div class="titre"><span>${attr === 'heatingSetpoint' ? 'Chauffage' : 'Clim'}</span></div>
+      <div class="duo"><button class="gros" data-consigne="${cap}" data-pas="-0.5">−</button>
+      <div style="display:grid;place-items:center;font-size:26px;font-weight:700">${v ?? '–'}°</div>
+      <button class="gros" data-consigne="${cap}" data-pas="0.5">+</button></div></div>`);
+  }
+  if (estTele(d)) blocs.push('<button class="gros accent" data-action="tele">📺 Ouvrir la télécommande</button>');
+
+  // Tous les attributs bruts, pour les appareils que l'app ne sait pas piloter.
+  const s = statuts[id] || {};
+  const lignes = [];
+  for (const [cap, attrs] of Object.entries(s)) {
+    for (const [attr, o] of Object.entries(attrs)) {
+      if (!o || o.value == null || typeof o.value === 'object') continue;
+      lignes.push(`<div class="attr"><span>${esc(attr)}</span><span>${esc(o.value)}${o.unit ? ' ' + esc(o.unit) : ''}</span></div>`);
+    }
+  }
+  const fav = config.favoris.includes(id);
+  ouvrirFeuille(`<h3>${iconeAppareil(d)} ${esc(nomAppareil(d))}</h3>
+    <div style="display:grid;gap:12px">${blocs.join('')}
+      <button class="gros" data-action="favori">${fav ? '★ Retirer des favoris' : '☆ Ajouter aux favoris'}</button>
+      ${lignes.length ? `<details class="controle"><summary>État détaillé</summary>${lignes.join('')}</details>` : ''}
+    </div>`);
+}
+
+async function actionDetail(action) {
+  const id = ouvrirFeuille.id;
+  if (!id) return;
+  const actions = {
+    basculer: () => basculer(id),
+    ouvrir: () => commande(id, 'windowShade', 'open'),
+    fermer: () => commande(id, 'windowShade', 'close'),
+    pause: () => commande(id, 'windowShade', 'pause'),
+    verrouiller: () => commande(id, 'lock', 'lock'),
+    deverrouiller: () => confirm('Déverrouiller ?') && commande(id, 'lock', 'unlock'),
+    tele: () => { config.tele = id; fermerFeuille(); afficher('tele'); },
+    favori: () => {
+      config.favoris = config.favoris.includes(id) ? config.favoris.filter((x) => x !== id) : [...config.favoris, id];
+      sauverConfig(); detail(id); rafraichirVue();
+    },
+  };
+  await (actions[action] || (() => {}))();
+  if (['basculer'].includes(action)) detail(id);
+}
+
+async function basculer(id) {
+  const avant = val(id, 'switch', 'switch');
+  const apres = avant === 'on' ? 'off' : 'on';
+  // Affichage optimiste : la tuile change tout de suite, et revient si la commande échoue.
+  statuts[id] = statuts[id] || {};
+  statuts[id].switch = { switch: { value: apres } };
+  majTuile(id);
+  if (!(await commande(id, 'switch', apres))) {
+    statuts[id].switch = { switch: { value: avant } };
+    majTuile(id);
+  }
+}
+
+/* -------------------------------------------------------------- réglages */
+
+function vueReglages() {
+  const el = $('#vue-reglages');
+  const choix = (cle, options) => `<div class="choix">${options.map(([v, l]) =>
+    `<button data-config="${cle}" data-valeur="${v}" class="${String(config[cle]) === String(v) ? 'actif' : ''}">${l}</button>`).join('')}</div>`;
+  const favs = config.favoris.map(appareil).filter(Boolean);
+  const autres = appareils.filter((d) => !config.favoris.includes(d.deviceId))
+    .sort((a, b) => nomAppareil(a).localeCompare(nomAppareil(b), 'fr'));
+  el.innerHTML = `
+    <h2>Taille des tuiles</h2>${choix('tailleTuiles', [['m', 'Normale'], ['l', 'Grande'], ['xl', 'Très grande']])}
+    <h2>Colonnes</h2>${choix('colonnes', [[1, '1'], [2, '2'], [3, '3']])}
+    <h2>Boutons de la télécommande</h2>
+    <div class="controle"><div class="titre"><span>Taille</span><span>${Math.round(config.echelleTele * 100)} %</span></div>
+      <input type="range" id="echelle-reglages" min="0.8" max="1.7" step="0.05" value="${config.echelleTele}"></div>
+    <h2>Favoris (dans l'ordre)</h2>
+    <div class="liste">${favs.length ? favs.map((d, i) => `<div class="el">
+      <span style="font-size:24px">${iconeAppareil(d)}</span>
+      <div class="txt">${esc(nomAppareil(d))}<small>${esc(pieces[d.roomId] || '')}</small></div>
+      <button data-monter="${i}" ${i ? '' : 'disabled style="opacity:.3"'}>▲</button>
+      <input type="checkbox" checked data-fav="${esc(d.deviceId)}"></div>`).join('')
+      : '<div class="el"><div class="txt"><small>Coche des appareils ci-dessous.</small></div></div>'}</div>
+    <h2>Autres appareils</h2>
+    <div class="liste">${autres.map((d) => `<div class="el">
+      <span style="font-size:24px">${iconeAppareil(d)}</span>
+      <div class="txt">${esc(nomAppareil(d))}<small>${esc(pieces[d.roomId] || '')}</small></div>
+      <input type="checkbox" data-fav="${esc(d.deviceId)}"></div>`).join('') || '<div class="el"><div class="txt"><small>Aucun</small></div></div>'}</div>
+    <h2>Scènes en favoris</h2>
+    <div class="liste">${scenes.map((s) => `<div class="el"><span style="font-size:24px">✨</span>
+      <div class="txt">${esc(s.sceneName)}</div>
+      <input type="checkbox" data-scenefav="${esc(s.sceneId)}" ${(config.scenesFavorites || []).includes(s.sceneId) ? 'checked' : ''}></div>`).join('')
+      || '<div class="el"><div class="txt"><small>Aucune scène</small></div></div>'}</div>
+    <h2>Compte</h2>
+    <button class="gros" id="delier" style="color:var(--danger)">Délier SmartThings</button>
+    <p style="color:var(--doux);font-size:14px;margin-top:18px">Astuce : appui long sur l'icône Maison de l'écran d'accueil
+      pour ouvrir directement la télécommande.</p>`;
+}
+
+/* ============================================================ événements */
+
+// Maintien appuyé = répétition (volume, flèches, chaînes).
+const REPETABLES = new Set(['UP', 'DOWN', 'LEFT', 'RIGHT', 'VOL+', 'VOL-', 'CH+', 'CH-']);
+let repetition = null;
+
+document.addEventListener('pointerdown', (e) => {
+  const b = e.target.closest('[data-cle]');
+  if (!b || !REPETABLES.has(b.dataset.cle)) return;
+  b.classList.add('appui');
+  const cle = b.dataset.cle;
+  toucheTele(cle);
+  let n = 0;
+  repetition = { b, timer: setTimeout(function boucle() {
+    toucheTele(cle); n += 1;
+    repetition.timer = setTimeout(boucle, n > 4 ? 180 : 320);
+  }, 450) };
+  e.preventDefault();
+});
+const finRepetition = () => { if (repetition) { clearTimeout(repetition.timer); repetition.b.classList.remove('appui'); repetition = null; } };
+['pointerup', 'pointercancel', 'pointerleave'].forEach((t) => document.addEventListener(t, finRepetition));
+
+// Appui long sur une tuile = détail (comme dans SmartThings).
+let appuiLong = null;
+document.addEventListener('pointerdown', (e) => {
+  const t = e.target.closest('.tuile[data-id]');
+  if (!t || e.target.closest('[data-detail]')) return;
+  appuiLong = { x: e.clientX, y: e.clientY, fait: false, timer: setTimeout(() => {
+    appuiLong.fait = true; vibre(25);
+    const id = t.dataset.id;
+    detail(id); chargerStatut(id).then(() => ouvrirFeuille.id === id && detail(id));
+  }, 480) };
+});
+document.addEventListener('pointermove', (e) => {
+  // Un défilement annule l'appui long.
+  if (appuiLong && !appuiLong.fait && Math.hypot(e.clientX - appuiLong.x, e.clientY - appuiLong.y) > 10) {
+    clearTimeout(appuiLong.timer); appuiLong = null;
+  }
+});
+['pointerup', 'pointercancel'].forEach((t) => document.addEventListener(t, () => { if (appuiLong) clearTimeout(appuiLong.timer); }));
+document.addEventListener('contextmenu', (e) => { if (e.target.closest('.tuile, .tb')) e.preventDefault(); });
+
+document.addEventListener('click', (e) => {
+  const cible = e.target;
+  const nav = cible.closest('nav button');
+  if (nav) return afficher(nav.dataset.vue);
+
+  const plus = cible.closest('[data-detail]');
+  if (plus) { e.stopPropagation(); const id = plus.dataset.detail; detail(id); chargerStatut(id).then(() => ouvrirFeuille.id === id && detail(id)); return; }
+
+  const tuile = cible.closest('.tuile[data-id]');
+  if (tuile) {
+    if (appuiLong && appuiLong.fait) { appuiLong = null; return; }
+    appuiLong = null;
+    const d = appareil(tuile.dataset.id);
+    if (estTele(d)) { config.tele = d.deviceId; return afficher('tele'); }
+    if (caps(d).has('switch')) return basculer(d.deviceId);
+    detail(d.deviceId); return chargerStatut(d.deviceId).then(() => detail(d.deviceId));
+  }
+  const sc = cible.closest('[data-scene]');
+  if (sc) return lancerScene(sc.dataset.scene, sc);
+
+  const touche = cible.closest('[data-cle]');
+  if (touche && !REPETABLES.has(touche.dataset.cle)) return toucheTele(touche.dataset.cle);
+  if (cible.closest('#taille')) {
+    const r = $('#reglage-taille'); r.hidden = !r.hidden; memoLocale('maison.tailleOuverte', !r.hidden); return;
+  }
+  const src = cible.closest('[data-source]');
+  if (src) { fermerFeuille(); return commande(config.tele, src.dataset.cap, 'setInputSource', [src.dataset.source]); }
+
+  const act = cible.closest('[data-action]');
+  if (act) return actionDetail(act.dataset.action);
+  const cons = cible.closest('[data-consigne]');
+  if (cons) {
+    const id = ouvrirFeuille.id, cap = cons.dataset.consigne;
+    const attr = cap === 'thermostatHeatingSetpoint' ? 'heatingSetpoint' : 'coolingSetpoint';
+    const v = Number(val(id, cap, attr) ?? 20) + Number(cons.dataset.pas);
+    statuts[id][cap] = { [attr]: { value: v } };
+    detail(id);
+    return commande(id, cap, cap === 'thermostatHeatingSetpoint' ? 'setHeatingSetpoint' : 'setCoolingSetpoint', [v]);
+  }
+  if (cible.id === 'voile') return fermerFeuille();
+
+  const cfg = cible.closest('[data-config]');
+  if (cfg) {
+    const v = cfg.dataset.valeur;
+    config[cfg.dataset.config] = /^\d+$/.test(v) ? Number(v) : v;
+    sauverConfig(); return rafraichirVue();
+  }
+  const monter = cible.closest('[data-monter]');
+  if (monter) {
+    const i = Number(monter.dataset.monter);
+    [config.favoris[i - 1], config.favoris[i]] = [config.favoris[i], config.favoris[i - 1]];
+    sauverConfig(); return rafraichirVue();
+  }
+  if (cible.id === 'actualiser') return toutCharger(true);
+  if (cible.id === 'delier') {
+    if (!confirm('Délier le compte SmartThings ?')) return;
+    return fetch('/api/deconnecter', { method: 'POST' }).then(() => location.reload());
+  }
+});
+
+document.addEventListener('change', (e) => {
+  const c = e.target;
+  if (c.dataset.fav) {
+    const id = c.dataset.fav;
+    config.favoris = c.checked ? [...config.favoris.filter((x) => x !== id), id] : config.favoris.filter((x) => x !== id);
+    if (c.checked) chargerStatut(id);
+    sauverConfig(); return rafraichirVue();
+  }
+  if (c.dataset.scenefav) {
+    const id = c.dataset.scenefav, l = config.scenesFavorites || [];
+    config.scenesFavorites = c.checked ? [...l, id] : l.filter((x) => x !== id);
+    return sauverConfig();
+  }
+  if (c.id === 'choix-tele') { config.tele = c.value; sauverConfig(); chargerStatut(c.value).then(rafraichirVue); return rafraichirVue(); }
+  if (c.dataset.reglage) {
+    const id = ouvrirFeuille.id, v = Number(c.value);
+    if (c.dataset.reglage === 'niveau') return commande(id, 'switchLevel', 'setLevel', [v]);
+    if (c.dataset.reglage === 'temp') return commande(id, 'colorTemperature', 'setColorTemperature', [v]);
+    if (c.dataset.reglage === 'volume') return commande(id, 'audioVolume', 'setVolume', [v]);
+  }
+  if (c.id === 'echelle' || c.id === 'echelle-reglages') { sauverConfig(); if (c.id === 'echelle-reglages') rafraichirVue(); }
+});
+
+document.addEventListener('input', (e) => {
+  const c = e.target;
+  if (c.id === 'echelle' || c.id === 'echelle-reglages') {
+    config.echelleTele = Number(c.value);
+    const t = $('.tele'); if (t) t.style.setProperty('--echelle', c.value);
+  }
+  const affiche = { niveau: ['#v-niveau', ' %'], temp: ['#v-temp', ' K'], volume: ['#v-volume', ''] }[c.dataset.reglage];
+  if (affiche && $(affiche[0])) $(affiche[0]).textContent = c.value + affiche[1];
+});
+
+// Glisser la feuille vers le bas pour la fermer.
+let glisse = null;
+$('#feuille').addEventListener('touchstart', (e) => { if ($('#feuille').scrollTop <= 0) glisse = e.touches[0].clientY; }, { passive: true });
+$('#feuille').addEventListener('touchend', (e) => {
+  if (glisse != null && e.changedTouches[0].clientY - glisse > 90) fermerFeuille();
+  glisse = null;
+});
+window.addEventListener('popstate', () => afficher((location.hash || '#favoris').slice(1)));
+
+/* ============================================================ chargement */
+
+async function toutCharger(force = false) {
+  const btn = $('#actualiser');
+  btn.classList.add('tourne');
+  try {
+    const etat = await fetch('/api/etat').then((r) => (r.status === 401 ? location.reload() : r.json()));
+    relie = etat.relie;
+    if (!relie) return afficher('relier');
+    if (vueCourante === 'relier') afficher('favoris');
+    const [devs, locs, scs] = await Promise.all([tout('devices'), tout('locations'), tout('scenes').catch(() => [])]);
+    appareils = devs; scenes = scs;
+    const salles = await Promise.all(locs.map((l) => tout('locations/' + l.locationId + '/rooms').catch(() => [])));
+    pieces = {};
+    salles.flat().forEach((r) => { pieces[r.roomId] = r.name; });
+    memoLocale('maison.cache', { appareils, scenes, pieces });
+    rafraichirVue();
+    await rafraichirStatuts(force);
+  } catch (e) {
+    if (e.message !== 'session') toast('Chargement impossible : ' + e.message);
+  } finally {
+    btn.classList.remove('tourne');
+  }
+}
+
+async function rafraichirStatuts(tous = false) {
+  const ids = new Set(config.favoris);
+  if (config.tele) ids.add(config.tele);
+  if (tous && vueCourante === 'pieces') appareils.forEach((d) => ids.add(d.deviceId));
+  await Promise.all([...ids].filter(appareil).map(chargerStatut));
+  rafraichirVue();
+}
+
+async function demarrer() {
+  // Démarrage instantané sur la dernière liste connue, puis mise à jour réseau.
+  const cache = memoLocale('maison.cache');
+  if (cache) ({ appareils, scenes, pieces } = { appareils: cache.appareils || [], scenes: cache.scenes || [], pieces: cache.pieces || {} });
+  config = { ...CONFIG_DEFAUT, ...(memoLocale('maison.config') || {}) };
+  afficher((location.hash || '#favoris').slice(1));
+  try {
+    const distante = await fetch('/api/config').then((r) => r.json());
+    if (distante && Object.keys(distante).length) { config = { ...CONFIG_DEFAUT, ...distante }; memoLocale('maison.config', config); }
+  } catch {}
+  rafraichirVue();
+  await toutCharger();
+  // États rafraîchis toutes les 15 s tant que l'app est à l'écran.
+  setInterval(() => { if (relie && document.visibilityState === 'visible' && !repetition) rafraichirStatuts(); }, 15000);
+  document.addEventListener('visibilitychange', () => { if (relie && document.visibilityState === 'visible') rafraichirStatuts(); });
+}
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+demarrer();
+</script>
+</body>
+</html>
