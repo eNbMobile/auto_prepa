@@ -1,9 +1,11 @@
 package fr.maison.app;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.StatusBarManager;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.drawable.Icon;
 import android.os.Build;
@@ -53,6 +55,32 @@ public class ConfigActivity extends Activity {
             }
         }
         if (n > 0) choisir(n);
+        if (getIntent().getBooleanExtra("notif", false)) basculerNotif();
+    }
+
+    /** Affiche ou masque la télécommande du volet (demande l'autorisation si besoin). */
+    private void basculerNotif() {
+        if (!NotifTele.autorisee(this)) {
+            if (Build.VERSION.SDK_INT >= 33) requestPermissions(new String[] { Manifest.permission.POST_NOTIFICATIONS }, 1);
+            return;
+        }
+        if (NotifTele.affichee(this)) {
+            NotifTele.masquer(this);
+            construire();
+            return;
+        }
+        Context app = getApplicationContext();
+        Maison.RESEAU.execute(() -> {
+            NotifTele.afficherDepuisReseau(app);
+            runOnUiThread(() -> liste.postDelayed(this::construire, 300));
+        });
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int code, String[] perms, int[] resultats) {
+        if (NotifTele.autorisee(this)) basculerNotif();
+        else Toast.makeText(this, "Sans notifications, la télécommande du volet ne peut pas s'afficher.",
+                Toast.LENGTH_LONG).show();
     }
 
     private void construire() {
@@ -62,6 +90,10 @@ public class ConfigActivity extends Activity {
             bouton("Ouvrir Maison", () -> startActivity(new Intent(this, MainActivity.class)));
             return;
         }
+        titre("Télécommande dans le volet");
+        texte("Toute la télécommande dans une notification épinglée : chaque bouton envoie "
+                + "la touche sans ouvrir l'app. La tuile « Télécommande » l'affiche ou la masque.", 14);
+        bouton(NotifTele.affichee(this) ? "Masquer la télécommande" : "Afficher la télécommande", this::basculerNotif);
         titre("Contrôle appareil");
         texte("Volet → Contrôle appareil → ⋮ (en haut à droite) → choisis l'app « Maison » "
                 + "à la place de SmartThings. Tes appareils et scènes y apparaissent, "
