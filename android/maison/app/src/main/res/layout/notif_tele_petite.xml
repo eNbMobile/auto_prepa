@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Télécommande du volet : les identifiants t_* sont reliés aux touches dans NotifTele.java. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="52dp" android:orientation="horizontal">
+        <TextView android:id="@+id/t_volm" style="@style/BoutonNotif"
+            android:layout_weight="1" android:text="VOL −" android:textSize="14sp" />
+        <TextView android:id="@+id/t_volp" style="@style/BoutonNotif"
+            android:layout_weight="1" android:text="VOL +" android:textSize="14sp" />
+        <TextView android:id="@+id/t_mute" style="@style/BoutonNotif"
+            android:layout_weight="1" android:text="🔇" android:textSize="20sp" />
+        <TextView android:id="@+id/t_play" style="@style/BoutonNotif"
+            android:layout_weight="1" android:text="⏯" android:textSize="20sp" />
+        <TextView android:id="@+id/t_power" style="@style/BoutonNotif"
+            android:layout_weight="1" android:text="⏻" android:textSize="20sp" />
+    </LinearLayout>
+</LinearLayout>

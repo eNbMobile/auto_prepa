@@ -173,7 +173,7 @@ public class Controles extends ControlsProviderService {
             try {
                 if (id.startsWith("t:")) {
                     String[] p = id.split(":", 3);
-                    envoyerTouche(p[1], p[2]);
+                    Tele.envoyer(this, p[1], p[2]);
                 } else if (id.startsWith("s:")) {
                     Maison.st(this, "scenes/" + id.substring(2) + "/execute", "{}");
                 } else if (id.startsWith("d:")) {
@@ -195,32 +195,6 @@ public class Controles extends ControlsProviderService {
                 republier(id);
             }
         });
-    }
-
-    /** Même logique que la télécommande de la PWA (page.html, toucheTele). */
-    private void envoyerTouche(String tv, String cle) throws Exception {
-        switch (cle) {
-            case "VOL+": commande(tv, "audioVolume", "volumeUp", ""); break;
-            case "VOL-": commande(tv, "audioVolume", "volumeDown", ""); break;
-            case "CH+": commande(tv, "tvChannel", "channelUp", ""); break;
-            case "CH-": commande(tv, "tvChannel", "channelDown", ""); break;
-            case "MUTE": {
-                boolean muet = "muted".equals(valeur(statut(tv), "audioMute", "mute"));
-                commande(tv, "audioMute", muet ? "unmute" : "mute", "");
-                break;
-            }
-            case "PLAY": {
-                boolean lecture = "playing".equals(valeur(statut(tv), "mediaPlayback", "playbackStatus"));
-                commande(tv, "mediaPlayback", lecture ? "pause" : "play", "");
-                break;
-            }
-            default: commande(tv, "samsungvd.remoteControl", "send", "\"" + cle + "\"");
-        }
-    }
-
-    private JSONObject statut(String dev) throws Exception {
-        return new JSONObject(Maison.st(this, "devices/" + dev + "/status", null))
-                .getJSONObject("components").getJSONObject("main");
     }
 
     private void commande(String dev, String cap, String cmd, String args) throws Exception {
@@ -313,11 +287,11 @@ public class Controles extends ControlsProviderService {
         if (main == null) {
             return b.setStatus(Control.STATUS_ERROR).setStatusText(erreur == null ? "Erreur" : erreur).build();
         }
-        boolean on = "on".equals(valeur(main, "switch", "switch"));
+        boolean on = "on".equals(Tele.valeur(main, "switch", "switch"));
         ControlButton bouton = new ControlButton(on, on ? "Éteindre" : "Allumer");
         String texte = on ? "Allumé" : "Éteint";
         ControlTemplate t;
-        String niveau = valeur(main, "switchLevel", "level");
+        String niveau = Tele.valeur(main, "switchLevel", "level");
         if (a.optBoolean("variateur") && niveau != null) {
             float n = Math.max(0, Math.min(100, Float.parseFloat(niveau)));
             t = new ToggleRangeTemplate("niveau", bouton, new RangeTemplate("plage", 0, 100, n, 1, "%.0f %%"));
@@ -326,12 +300,6 @@ public class Controles extends ControlsProviderService {
             t = new ToggleTemplate("bascule", bouton);
         }
         return b.setStatus(Control.STATUS_OK).setControlTemplate(t).setStatusText(texte).build();
-    }
-
-    private static String valeur(JSONObject main, String cap, String attr) {
-        JSONObject c = main.optJSONObject(cap);
-        JSONObject v = c == null ? null : c.optJSONObject(attr);
-        return v == null || v.isNull("value") ? null : v.opt("value").toString();
     }
 
     /* --------------------------------------------- liste des appareils */
