@@ -34,6 +34,30 @@
             </intent-filter>
         </activity>
 
+        <!-- L'app dans le panneau « Contrôle appareil » (et fenêtre de la télé). -->
+        <activity
+            android:name=".PanneauActivity"
+            android:exported="true"
+            android:allowEmbedded="true"
+            android:resizeableActivity="true"
+            android:taskAffinity=""
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density" />
+
+        <!-- Fournisseur de « Contrôle appareil » : choisir l'app Maison dans le panneau. -->
+        <service
+            android:name=".Controles"
+            android:exported="true"
+            android:icon="@drawable/ic_maison"
+            android:label="Maison"
+            android:permission="android.permission.BIND_CONTROLS">
+            <intent-filter>
+                <action android:name="android.service.controls.ControlsProviderService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.controls.META_DATA_PANEL_ACTIVITY"
+                android:value="fr.maison.app.PanneauActivity" />
+        </service>
+
         <!-- Tuiles qui ouvrent l'app sur une vue. -->
         <service
             android:name=".TuileTele"
