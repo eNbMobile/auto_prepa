@@ -3,17 +3,22 @@
 La PWA Maison (`cloudflare/maison-worker`) dans une app Android, avec des
 **tuiles pour le volet des raccourcis rapides** (ce qu'une PWA ne permet pas).
 
-## Télécommande dans le volet
+## Télécommande dans le volet (automatique)
 
-Toute la télécommande dans une **notification épinglée** : alimentation, muet,
-accueil, retour, lecture/pause, volume ±, flèches + OK, **Netflix** et **M6+**. Chaque
-appui envoie la touche à la télé **sans ouvrir l'app** ; toucher le titre
-ouvre la télécommande complète.
+La télécommande s'affiche dans les notifications **dès que la télé est
+allumée** et disparaît quand elle s'éteint : alimentation, son, accueil,
+retour, lecture/pause, volume ±, flèches + OK, Netflix et M6+. Chaque appui
+envoie la touche sans ouvrir l'app.
 
-- La tuile **Télécommande** l'affiche ou la masque (sur Android 13+, le premier
-  appui demande l'autorisation des notifications).
-- Repliée, la notification garde une rangée : volume ±, muet, lecture, ⏻.
-  Glisser vers le bas pour la déplier.
+- La tuile **Télécommande** active ou coupe ce mode (sur Android 13+, le
+  premier appui demande l'autorisation des notifications).
+- Fonctionnement : `ServiceTele`, service au premier plan, relit l'état de la
+  télé toutes les 30 s **quand l'écran est allumé** (et aussitôt à
+  l'allumage ou au déverrouillage). Il est relancé au démarrage du téléphone
+  et à chaque ouverture de l'app.
+- Android impose une notification « Télécommande automatique » pendant la
+  surveillance (canal minimal) : appui long dessus → désactiver ce canal pour
+  la masquer, la surveillance continue.
 
 ## Contrôle appareil (volet One UI)
 
