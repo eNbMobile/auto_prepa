@@ -1,0 +1,103 @@
+name: App Android Maison
+
+# Construit l'app Android « Maison » (android/maison) : la PWA Maison dans une
+# WebView, plus des tuiles pour le volet des raccourcis rapides.
+#
+# L'APK est publié dans la Release « maison-android », toujours à la même
+# adresse :
+#   https://github.com/eNbMobile/auto_prepa/releases/download/maison-android/Maison.apk
+#
+# Signature : le dépôt étant public, la clé n'y est pas. Elle est générée au
+# premier build puis rangée dans le KV Cloudflare « maison-smartthings »
+# (jamais servi par le worker) : toutes les versions ont la même signature et
+# s'installent par-dessus la précédente.
+#
+# Secrets : CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (déjà en place).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android/maison/**'
+      - '.github/workflows/android_maison.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: android_maison
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CF_TOKEN:   ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      KV: 6d225b9e623d4d088001b9f2bdb93c6d
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+
+      - name: Clé de signature (KV Cloudflare)
+        run: |
+          if [ -z "$CF_TOKEN" ] || [ -z "$CF_ACCOUNT" ]; then
+            echo "::error::Secrets CLOUDFLARE_API_TOKEN et/ou CLOUDFLARE_ACCOUNT_ID absents du dépôt."
+            exit 1
+          fi
+          kv="https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/storage/kv/namespaces/$KV/values"
+          auth="Authorization: Bearer $CF_TOKEN"
+          cle="$RUNNER_TEMP/maison.jks"
+          code=$(curl -sS -o "$RUNNER_TEMP/mdp" -w '%{http_code}' -H "$auth" "$kv/android:mdp")
+          if [ "$code" = "200" ]; then
+            mdp=$(cat "$RUNNER_TEMP/mdp")
+            echo "::add-mask::$mdp"
+            curl -sSf -H "$auth" "$kv/android:keystore" | base64 -d > "$cle"
+            echo "Clé existante récupérée."
+          elif [ "$code" = "404" ]; then
+            mdp=$(openssl rand -hex 24)
+            echo "::add-mask::$mdp"
+            keytool -genkeypair -keystore "$cle" -alias maison -keyalg RSA -keysize 2048 \
+              -validity 10000 -storepass "$mdp" -keypass "$mdp" -dname "CN=Maison" -storetype PKCS12
+            base64 -w0 "$cle" > "$RUNNER_TEMP/cle.b64"
+            curl -sSf -X PUT -H "$auth" --data-binary @"$RUNNER_TEMP/cle.b64" "$kv/android:keystore" > /dev/null
+            printf '%s' "$mdp" | curl -sSf -X PUT -H "$auth" --data-binary @- "$kv/android:mdp" > /dev/null
+            echo "Nouvelle clé générée et rangée dans le KV."
+          else
+            echo "::error::Lecture du KV impossible (HTTP $code)."
+            exit 1
+          fi
+          rm -f "$RUNNER_TEMP/mdp" "$RUNNER_TEMP/cle.b64"
+          echo "KEYSTORE=$cle" >> "$GITHUB_ENV"
+          echo "KEYSTORE_PASSWORD=$mdp" >> "$GITHUB_ENV"
+
+      - name: Construire l'APK
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+        run: gradle -p android/maison assembleRelease --no-daemon
+
+      - name: Publier la Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/maison/app/build/outputs/apk/release/app-release.apk Maison.apk
+          gh release delete maison-android --cleanup-tag --yes || true
+          gh release create maison-android Maison.apk \
+            --target "$GITHUB_SHA" \
+            --title "Maison (Android) — version 1.${{ github.run_number }}" \
+            --notes "Télécharger Maison.apk depuis le téléphone, l'ouvrir et autoriser l'installation. Les mises à jour s'installent par-dessus."
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/maison-android/Maison.apk"
+          echo "APK : $url" >> "$GITHUB_STEP_SUMMARY"

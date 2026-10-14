@@ -1,0 +1,48 @@
+plugins {
+    id 'com.android.application'
+}
+
+// La clé de signature est fournie par le workflow (voir android_maison.yml) :
+// toujours la même, pour pouvoir installer les mises à jour par-dessus.
+def cle = System.getenv('KEYSTORE')
+
+android {
+    namespace 'fr.maison.app'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'fr.maison.app'
+        minSdk 26
+        targetSdk 35
+        versionCode((System.getenv('VERSION_CODE') ?: '1') as int)
+        versionName "1.${System.getenv('VERSION_CODE') ?: '0'}"
+    }
+
+    signingConfigs {
+        release {
+            if (cle) {
+                storeFile file(cle)
+                storePassword System.getenv('KEYSTORE_PASSWORD')
+                keyAlias 'maison'
+                keyPassword System.getenv('KEYSTORE_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig cle ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

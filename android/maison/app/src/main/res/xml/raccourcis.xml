@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Appui long sur l'icône de l'app. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="tele" android:enabled="true" android:icon="@drawable/ic_tele"
+        android:shortcutShortLabel="@string/raccourci_tele">
+        <intent android:action="android.intent.action.VIEW"
+            android:targetPackage="fr.maison.app" android:targetClass="fr.maison.app.MainActivity">
+            <extra android:name="vue" android:value="tele" />
+        </intent>
+    </shortcut>
+    <shortcut android:shortcutId="tuiles" android:enabled="true" android:icon="@drawable/ic_ampoule"
+        android:shortcutShortLabel="@string/raccourci_tuiles">
+        <intent android:action="android.intent.action.VIEW"
+            android:targetPackage="fr.maison.app" android:targetClass="fr.maison.app.ConfigActivity" />
+    </shortcut>
+</shortcuts>
