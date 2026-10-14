@@ -18,6 +18,7 @@ from datetime import date, datetime
 from email.mime.text import MIMEText
 from zoneinfo import ZoneInfo
 
+import confidentiel
 import controle_stocks as cs
 
 _TZ = ZoneInfo("Europe/Paris")
@@ -25,10 +26,8 @@ _TZ = ZoneInfo("Europe/Paris")
 MOIS_FR = ["JANVIER", "FEVRIER", "MARS", "AVRIL", "MAI", "JUIN", "JUILLET",
            "AOUT", "SEPTEMBRE", "OCTOBRE", "NOVEMBRE", "DECEMBRE"]
 
-# ID du classeur "AVOIR DEMARQUE DRIVE 2026" (docs.google.com/spreadsheets/d/<id>).
-# Utilise si absent de config.json (cle "avoir_spreadsheet_id") — a mettre a
-# jour dans config.json les annees suivantes, quand un nouveau classeur est cree.
-AVOIR_SPREADSHEET_ID_DEFAUT = "1TEz5Bmx_sIOOSdAoBGB9KXuZAzP3TdhnPCfVDS4yyrs"
+# L'ID du classeur "AVOIR DEMARQUE DRIVE 2026" est lu dans config.json (cle
+# "avoir_spreadsheet_id", a mettre a jour les annees suivantes).
 
 
 def _normaliser(texte):
@@ -185,8 +184,8 @@ def _charger_config_avoir(drive_svc):
     done = False
     while not done:
         _, done = dl.next_chunk()
-    cfg = json.loads(buf.getvalue().decode())
-    avoir_id = cfg.get("avoir_spreadsheet_id", "").strip() or AVOIR_SPREADSHEET_ID_DEFAUT
+    cfg = confidentiel.masquer_config(json.loads(buf.getvalue().decode()))
+    avoir_id = confidentiel.cle_obligatoire(cfg, "avoir_spreadsheet_id")
     email = cfg.get("email_destinataire", "").strip()
     if not email:
         print("ERREUR : email_destinataire absent de config.json.")
@@ -279,7 +278,7 @@ def _lire_avoirs_jaunes(drive_svc, spreadsheet_id, date_ref):
             if not nom:
                 continue
             rgb = _couleur_cellule(row[0])
-            print(f"    [{titre}] {nom} {_valeur_str(row[1].value)} — fond rgb={rgb}")
+            confidentiel.masquer(nom, _valeur_str(row[1].value))
             if not _est_jaune(rgb):
                 continue
             avoirs.append({
@@ -364,9 +363,9 @@ def _envoyer_email_avoir(gmail_svc, destinataire, destinataire_2, civilite, avoi
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     try:
         gmail_svc.users().messages().send(userId='me', body={'raw': raw}).execute()
-        print(f"  Email envoye -> {destinataire} (cc: {destinataire_2}) ({avoir['nom']} {avoir['prenom']}, {montant})")
+        print(f"  Email envoye ({avoir['onglet']}, {montant}).")
     except Exception as e:
-        print(f"  Email echoue ({avoir['nom']} {avoir['prenom']}) : {e}")
+        print(f"  Email echoue ({avoir['onglet']}) : {e}")
 
 
 def main():
@@ -408,17 +407,18 @@ def main():
     gmail_svc = cs._get_gmail_service()
     nb_envoyes = 0
     for civilite, numero, nom, prenom, date_cde, creneau in commandes:
-        print(f"\nVerification : {civilite} {nom} {prenom} (commande du {date_cde}, {creneau})")
+        confidentiel.masquer(nom, prenom)
+        print(f"\nVerification : commande {numero} du {date_cde} ({creneau})")
         trouve = False
         for avoir in avoirs_jaunes:
             if not _personne_correspond(nom, prenom, avoir["nom"], avoir["prenom"]):
                 continue
             trouve = True
             if not _date_fin_valide(avoir["date_fin"], aujourdhui):
-                print(f"  Avoir trouve ({avoir['onglet']}, {avoir['nom']} {avoir['prenom']}) "
+                print(f"  Avoir trouve ({avoir['onglet']}) "
                       f"mais expire (date fin {_formatter_date(avoir['date_fin'])}) — ignore.")
                 continue
-            print(f"  Avoir trouve ({avoir['onglet']}, {avoir['nom']} {avoir['prenom']}, "
+            print(f"  Avoir trouve ({avoir['onglet']}, "
                   f"{_formatter_montant(avoir['montant'])}) — envoi du mail.")
             _envoyer_email_avoir(gmail_svc, email_destinataire, email_destinataire_2, civilite, avoir, date_cde, creneau)
             nb_envoyes += 1

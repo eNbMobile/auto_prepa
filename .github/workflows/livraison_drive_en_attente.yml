@@ -2,7 +2,8 @@ name: Livraison Drive - En attente
 
 on:
   schedule:
-    - cron: '3 12 * * 1-6'  # 14h03 Paris (CEST = UTC+2) du lundi au samedi - decale de
+    - cron: '3 12 * * 1-6'  # 14h03 Paris en heure d'ete (CEST = UTC+2)
+    - cron: '3 13 * * 1-6'  # 14h03 Paris en heure d'hiver (CET = UTC+1) ; du lundi au samedi, decale de
                             # l'heure ronde pour limiter le risque de declenchement
                             # 'schedule' saute par GitHub Actions en cas de forte charge
                             # (cf. garde-fou dans auto_prepa.py :
@@ -18,7 +19,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Deux horaires planifiés (heure d'été UTC+2 / heure d'hiver UTC+1) : seul
+  # celui qui tombe à 14h à Paris laisse passer le job principal.
+  heure:
+    runs-on: ubuntu-latest
+    outputs:
+      ok: ${{ steps.paris.outputs.ok }}
+    steps:
+      - id: paris
+        run: |
+          h=$(TZ=Europe/Paris date +%-H)
+          echo "Heure de Paris : $h h"
+          if [ "${{ github.event_name }}" != "schedule" ] || [ "$h" = "14" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
   en-attente:
+    needs: heure
+    if: needs.heure.outputs.ok == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 

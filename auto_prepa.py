@@ -23,6 +23,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 
+import adresses_inconnues
+import confidentiel
 import livraison_drive
 
 _BASE = os.path.dirname(os.path.abspath(__file__))
@@ -659,7 +661,12 @@ def upload_bon(drive_svc, local_path):
 # Fichiers sans lesquels aucun bon ne peut etre genere : s'il en manque un, les
 # commandes ne sont meme pas recuperees (emails laisses tels quels), pour etre
 # reprises au run suivant au lieu d'etre perdues.
-CONFIG_REQUISE = ["prepa_drive_degrade", "gencod_adresses.csv", "gencod_nomenclatures.csv"]
+# Moteur de generation des bons : binaire C (defaut) ou son portage Python
+# prepa_drive_degrade.py (variable de depot MOTEUR_PREPA=python), qui n'a
+# pas besoin du binaire.
+MOTEUR_PREPA = os.environ.get("MOTEUR_PREPA", "").strip().lower() or "c"
+CONFIG_REQUISE = (["gencod_adresses.csv", "gencod_nomenclatures.csv"]
+                  + ([] if MOTEUR_PREPA == "python" else ["prepa_drive_degrade"]))
 CONFIG_TENTATIVES = 3
 
 
@@ -1596,7 +1603,7 @@ def _envoyer_email_anticipation_annulee(gmail_svc, civilite, nom, prenom, num_an
         msg["subject"] = "Attention commande anticipée et annulée"
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
-        print(f"    Email alerte anticipation annulee envoye pour cde {num_ancien} => {destinataire}")
+        print(f"    Email alerte anticipation annulee envoye pour cde {num_ancien}")
     except Exception as e:
         print(f"    Envoi email alerte anticipation annulee {num_ancien} echoue : {e}")
 
@@ -1933,61 +1940,9 @@ def _envoyer_email_anticipation(gmail_svc, numero, contenu):
         msg["subject"] = sujet
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
-        print(f"    Email anticipation envoye pour cde {numero} => {destinataire}")
+        print(f"    Email anticipation envoye pour cde {numero}")
     except Exception as e:
         print(f"    Envoi email anticipation {numero} echoue : {e}")
-
-def _envoyer_email_adresses_manquantes(gmail_svc, numero, avertissements_nomenclature, avertissements_inconnues):
-    """Alerte par email sur les anomalies d'adressage remontees par prepa_drive_degrade.
-
-    Deux cas distincts :
-    - adresse absente de chemin_prepa_mono mais nomenclature trouvee : le produit
-      est replace au bon endroit via gencod_nomenclatures.csv (chemin_prepa_ramasse
-      ou chemin_prepa_mono selon le cas) ;
-    - ni adresse ni nomenclature : le produit est insere avec la mention
-      'ADRESSE INCONNUE' et positionne en fin de chemin (zone 'W').
-    """
-    from email.mime.text import MIMEText
-    destinataire = EMAIL_ANTICIPATION
-    if not destinataire:
-        return
-    total = len(avertissements_nomenclature) + len(avertissements_inconnues)
-    sections = [
-        f"Bonjour,\n\n"
-        f"Lors du traitement de la commande {numero}, {total} anomalie(s) d'adressage "
-        f"ont ete detectee(s) :\n"
-    ]
-    if avertissements_nomenclature:
-        detail = '\n'.join(f"  {a}" for a in avertissements_nomenclature)
-        sections.append(
-            f"\n{len(avertissements_nomenclature)} produit(s) dont l'adresse ne fait pas "
-            f"partie du chemin de preparation ont ete replaces au bon endroit via leur "
-            f"nomenclature (gencod_nomenclatures.csv) dans chemin_prepa_ramasse ou "
-            f"chemin_prepa_mono :\n\n"
-            f"{detail}\n"
-        )
-    if avertissements_inconnues:
-        detail = '\n'.join(f"  {a}" for a in avertissements_inconnues)
-        sections.append(
-            f"\n{len(avertissements_inconnues)} produit(s) sans adresse ni nomenclature "
-            f"connue(s) ont ete inseres avec la mention 'ADRESSE INCONNUE' et positionnes "
-            f"en fin de chemin (zone 'W') :\n\n"
-            f"{detail}\n"
-        )
-    sections.append(
-        f"\nMerci de mettre a jour chemin_prepa_mono.csv"
-        f"{' et gencod_nomenclatures.csv' if avertissements_inconnues else ''} sur Drive.\n"
-    )
-    corps = ''.join(sections)
-    try:
-        msg = MIMEText(corps, "plain", "utf-8")
-        msg["to"] = destinataire
-        msg["subject"] = f"Commande {numero} - anomalie(s) d'adressage dans chemin_prepa_mono"
-        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-        gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
-        print(f"    Email anomalie(s) d'adressage envoye pour cde {numero} => {destinataire}")
-    except Exception as e:
-        print(f"    Envoi email anomalie(s) d'adressage {numero} echoue : {e}")
 
 def _envoyer_email_anomalie_bon(gmail_svc, numero, lignes_invalides):
     """Alerte par email quand un bon de prepa contient des lignes mal formees."""
@@ -2013,7 +1968,7 @@ def _envoyer_email_anomalie_bon(gmail_svc, numero, lignes_invalides):
         msg["subject"] = f"Commande {numero} - bon de prepa invalide"
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
-        print(f"    Email anomalie envoye pour cde {numero} => {destinataire}")
+        print(f"    Email anomalie envoye pour cde {numero}")
     except Exception as e:
         print(f"    Envoi email anomalie {numero} echoue : {e}")
 
@@ -2084,7 +2039,7 @@ def _envoyer_email_bon_absent(gmail_svc, numero, motif, detail=""):
         msg["subject"] = f"Commande {numero} - {_SUJET_BON_ABSENT}"
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
-        print(f"    ALERTE bon absent envoyee pour cde {numero} => {destinataire}")
+        print(f"    ALERTE bon absent envoyee pour cde {numero}")
         return True
     except Exception as e:
         print(f"    Envoi alerte bon absent {numero} echoue : {e}")
@@ -2123,7 +2078,7 @@ def _envoyer_email_km_manquant(gmail_svc, numero, nom, prenom, date_cde_str):
         msg["subject"] = f"Commande {libelle_cde} - km Shopopop non renseigne"
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
-        print(f"    Email km manquant envoye pour cde {numero} => {destinataire}")
+        print(f"    Email km manquant envoye pour cde {numero}")
         return True
     except Exception as e:
         print(f"    Envoi email km manquant {numero} echoue : {e}")
@@ -2154,7 +2109,7 @@ def _envoyer_email_km_recupere(gmail_svc, numero, nom, prenom, km):
         msg["subject"] = f"Commande {libelle_cde} - km Shopopop finalement recupere"
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
-        print(f"    Email km finalement recupere envoye pour cde {numero} => {destinataire}")
+        print(f"    Email km finalement recupere envoye pour cde {numero}")
         return True
     except Exception as e:
         print(f"    Envoi email km recupere {numero} echoue : {e}")
@@ -2183,8 +2138,8 @@ _RE_CRENEAU = re.compile(r'\b(\d{1,2}h\d{2}\s*-\s*\d{1,2}h\d{2})\b')
 
 def extraire_client_creneau_pdf(texte):
     """Extrait (civilite, nom, prenom, date, creneau) depuis le bon d'encaissement
-    (pdftotext -layout) : civilite/nom/prenom sur la ligne client (ex. 'M. DOMMEE
-    FABRICE' ou 'Mme PEYROT SEILLIER ELOANE' - dernier mot = prenom, le reste =
+    (pdftotext -layout) : civilite/nom/prenom sur la ligne client (ex. 'M. MARTIN
+    PAUL' ou 'Mme DUPONT DURAND MARIE' - dernier mot = prenom, le reste =
     nom) ; date et creneau dans l'encadre jour de retrait/livraison (ex. 'VENDREDI
     14/08/2026' et '10h30 - 11h00'), sur des lignes distinctes du fait de la mise
     en colonnes (recherches independantes)."""
@@ -2195,6 +2150,7 @@ def extraire_client_creneau_pdf(texte):
         mots = m_client.group(2).split(' ')
         prenom = mots[-1]
         nom = ' '.join(mots[:-1])
+        confidentiel.masquer(nom, prenom)
     m_date = _RE_DATE.search(texte)
     if m_date:
         date_cde = m_date.group(1)
@@ -2298,8 +2254,7 @@ def inscrire_commande_avoir_drive(drive_svc, civilite, numero, nom, prenom, date
                           "mimeType": "application/vnd.google-apps.spreadsheet"},
                     media_body=media, fields="id",
                 ).execute()
-            print(f"    Avoir/{AVOIR_SHEET_FILENAME} : {civilite} {numero} {nom} {prenom} | "
-                  f"{date_cde} | {creneau}")
+            print(f"    Avoir/{AVOIR_SHEET_FILENAME} : commande {numero} | {date_cde} | {creneau}")
         finally:
             os.remove(tmp)
     except Exception as e:
@@ -2434,13 +2389,12 @@ def _charger_config(drive_svc):
         done = False
         while not done:
             _, done = dl.next_chunk()
-        cfg = json.loads(buf.getvalue().decode())
+        cfg = confidentiel.masquer_config(json.loads(buf.getvalue().decode()))
         DRIVE_BONS_FOLDER_ID = cfg["drive_bons_folder_id"]
         DRIVE_BDC_FOLDER_ID  = cfg["drive_bdc_folder_id"]
         EMAIL_ANTICIPATION   = cfg.get("email_destinataire", "")
         EMAIL_ANTICIPATION_2 = cfg.get("email_destinataire_2", "")
-        LIVRAISON_SPREADSHEET_ID = (cfg.get("livraison_spreadsheet_id", "").strip()
-                                     or livraison_drive.LIVRAISON_SPREADSHEET_ID_DEFAUT)
+        LIVRAISON_SPREADSHEET_ID = confidentiel.cle_obligatoire(cfg, "livraison_spreadsheet_id")
     except Exception as e:
         print(f"ERREUR chargement config Drive : {e}")
         sys.exit(1)
@@ -2533,7 +2487,9 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
             break
 
     print(f"  [{order_num}] Generation...", end="", flush=True)
-    r = subprocess.run(["./prepa_drive_degrade"], cwd=WORK_DIR,
+    commande = (["./prepa_drive_degrade"] if MOTEUR_PREPA != "python" else
+                [sys.executable, os.path.join(_BASE, "prepa_drive_degrade.py")])
+    r = subprocess.run(commande, cwd=WORK_DIR,
                        capture_output=True, text=True, timeout=120)
 
     if DEBUG_RAW_DIR:
@@ -2611,8 +2567,9 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
         print(f"    {total} anomalie(s) d'adressage detectee(s) dans chemin_prepa_mono "
               f"({len(avertissements_nomenclature)} replacee(s) via nomenclature, "
               f"{len(avertissements_inconnues)} adresse inconnue)")
-        _envoyer_email_adresses_manquantes(
-            gmail_svc, order_num, avertissements_nomenclature, avertissements_inconnues)
+        # Plus d'email par commande : les produits restes sans place sont
+        # releves dans le fichier du jour (cf. adresses_inconnues.py, plus
+        # bas) et envoyes en un seul PDF le soir.
 
     with open(bon_prepa_path, 'r', encoding='utf-8') as f:
         lignes = f.readlines()
@@ -2638,6 +2595,9 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
         lignes[1:] = [re.sub(r'^(?:-\d+)?;(\d{13};)', r'\1', l) for l in lignes[1:]]
     with open(bon_prepa_path, 'w', encoding='utf-8') as f:
         f.writelines(lignes)
+
+    adresses_inconnues.noter_produits_non_adresses(
+        drive_svc, order_num, adresses_inconnues.extraire_produits_non_adresses(lignes))
 
     if articles_pdf is not None and produits_pdf is not None:
         with open(bon_prepa_path, 'r', encoding='utf-8') as _f:
@@ -2740,7 +2700,7 @@ def _charger_gmail_filters(drive_svc):
         done = False
         while not done:
             _, done = dl.next_chunk()
-        cfg = json.loads(buf.getvalue().decode("utf-8"))
+        cfg = confidentiel.masquer_config(json.loads(buf.getvalue().decode("utf-8")))
         GMAIL_CONF_FROM      = cfg["conf_from"]
         GMAIL_CONF_SUBJECT   = cfg["conf_subject"]
         GMAIL_LABEL_CONF     = cfg["conf_label"]

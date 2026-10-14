@@ -25,7 +25,7 @@ MANUEL_ID = "id_manuel"
 TEXTE_BON = """\
 Commande : 54868421 - H9 99008447250800 LIVRAISON PAIEMENT EN LIGNE
 
-Mme WADY FATENE                    BON D'ENCAISSEMENT
+Mme DUPONT MARIE                    BON D'ENCAISSEMENT
 
                                    SAMEDI 12/09/2026      13h00 - 14h00
 
@@ -45,7 +45,7 @@ SUIVI_AVOIR = [
      "mimeType": "application/vnd.google-apps.spreadsheet"},
 ]
 CSV_AVOIR = ("Civilité,N° commande,Nom,Prénom,Date,Créneau\r\n"
-             "Mme,54868421,WADY,FATENE,12/09/2026,13h00 - 14h00\r\n")
+             "Mme,54868421,DUPONT,MARIE,12/09/2026,13h00 - 14h00\r\n")
 
 
 class _FakeRequete:
@@ -318,7 +318,7 @@ class TestTelechargerBonsTraitementManuel(unittest.TestCase):
 
     def test_date_de_livraison_absente_du_pdf(self):
         ap.subprocess.run = lambda *a, **k: _FakeSortie(
-            "Commande : 54868421 - H9\nMme WADY FATENE\n")
+            "Commande : 54868421 - H9\nMme DUPONT MARIE\n")
         drive = _FakeDrive([
             dict(DOSSIER_MANUEL),
             {"id": "depot1", "name": "BonDeCommande_54868421.pdf",

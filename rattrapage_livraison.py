@@ -187,15 +187,15 @@ def rattraper(sheets_svc, spreadsheet_id, gmail_svc, drive_svc, dates, simulatio
         deja = _numeros_onglet(sheets_svc, spreadsheet_id, onglet_mois, 0)
         for numero, nom, prenom in commandes:
             if numero in annulees:
-                print(f"  {numero} {nom} {prenom} : annulee/remplacee, ignoree.")
+                print(f"  {numero} : annulee/remplacee, ignoree.")
                 continue
             if numero in deja:
-                print(f"  {numero} {nom} {prenom} : deja inscrite, rien a faire.")
+                print(f"  {numero} : deja inscrite, rien a faire.")
                 continue
             onglet_attente = ld._trouver_onglet(sheets_svc, spreadsheet_id, ld.ONGLET_EN_ATTENTE)
             en_attente = numero in _numeros_onglet(sheets_svc, spreadsheet_id, onglet_attente, 3)
             if simulation:
-                print(f"  {numero} {nom} {prenom} : A INSCRIRE"
+                print(f"  {numero} : A INSCRIRE"
                       + (" (et a retirer de EN ATTENTE)" if en_attente else "") + " [simulation]")
                 continue
             if en_attente:
@@ -206,7 +206,7 @@ def rattraper(sheets_svc, spreadsheet_id, gmail_svc, drive_svc, dates, simulatio
             if km is None:
                 onglet = ld._trouver_onglet(sheets_svc, spreadsheet_id, ld.MOIS_FR[cible.month - 1])
                 ld._marquer_km_a_completer(sheets_svc, spreadsheet_id, onglet, ligne)
-                a_completer.append(f"{numero} {nom} {prenom} ({cible.strftime('%d/%m')})")
+                a_completer.append(f"{numero} ({cible.strftime('%d/%m')})")
             deja.add(numero)
             time.sleep(_PAUSE_SHEETS_SECONDES)
 
@@ -237,10 +237,10 @@ def ajouter(sheets_svc, spreadsheet_id, ajouts, simulation=False):
     for numero, cible, nom, prenom, km in ajouts:
         onglet = ld._trouver_onglet(sheets_svc, spreadsheet_id, ld.MOIS_FR[cible.month - 1])
         if numero in _numeros_onglet(sheets_svc, spreadsheet_id, onglet, 0):
-            print(f"  {numero} {nom} {prenom} : deja dans '{onglet}', rien a faire.")
+            print(f"  {numero} : deja dans '{onglet}', rien a faire.")
             continue
         if simulation:
-            print(f"  {numero} {nom} {prenom} ({cible.strftime('%d/%m')}) : A AJOUTER [simulation]")
+            print(f"  {numero} ({cible.strftime('%d/%m')}) : A AJOUTER [simulation]")
             continue
         ld._inscrire_commande(sheets_svc, spreadsheet_id, cible, nom, prenom, numero, km)
 
@@ -272,16 +272,16 @@ def completer_km(sheets_svc, spreadsheet_id, drive_svc, dates, simulation=False)
             ligne = 2 + i
             km = ld.shopopop.distance_km(token, drive_id, cible, f"{nom} {prenom}")
             if km is None:
-                restants.append(f"{numero} {nom} {prenom} ({jour})")
+                restants.append(f"{numero} ({jour})")
                 continue
             if simulation:
-                print(f"  {onglet} L{ligne} {numero} {nom} {prenom} : {km} km [simulation]")
+                print(f"  {onglet} L{ligne} {numero} : {km} km [simulation]")
                 continue
             sheets_svc.spreadsheets().values().update(
                 spreadsheetId=spreadsheet_id, range=f"'{onglet}'!E{ligne}",
                 valueInputOption="USER_ENTERED", body={"values": [[km]]}).execute()
             ld._effacer_marquage_km(sheets_svc, spreadsheet_id, onglet, ligne)
-            print(f"  {onglet} L{ligne} {numero} {nom} {prenom} : {km} km, surlignage retire.")
+            print(f"  {onglet} L{ligne} {numero} : {km} km, surlignage retire.")
             time.sleep(_PAUSE_SHEETS_SECONDES / 2)
     if restants:
         print(f"\n{len(restants)} km toujours introuvable(s) sur Shopopop :")

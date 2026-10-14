@@ -12,11 +12,11 @@ name: Deplacer commandes en attente
 
 on:
   schedule:
-    - cron: '7 20 * * *'  # 22h07 Paris (CEST = UTC+2) - decale de l'heure ronde
+    - cron: '7 20 * * *'  # 22h07 Paris en heure d'ete (CEST = UTC+2)
+    - cron: '7 21 * * *'  # 22h07 Paris en heure d'hiver (CET = UTC+1) - decale de l'heure ronde
                            # pour limiter le risque de declenchement 'schedule'
                            # saute par GitHub Actions en cas de forte charge
                            # (meme precaution que livraison_drive_en_attente.yml).
-                           # 21h07 Paris en heure d'hiver (CET = UTC+1).
   workflow_dispatch:
 
 concurrency:
@@ -24,7 +24,28 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Deux horaires planifiés (heure d'été UTC+2 / heure d'hiver UTC+1) : le job
+  # principal ne passe qu'à partir de 22h à Paris (jamais avant le calcul des
+  # ventes et du CA du jour). En été le second passage (23h07) ne trouve plus
+  # rien à déplacer ; un run retardé par GitHub après 22h passe quand même.
+  heure:
+    runs-on: ubuntu-latest
+    outputs:
+      ok: ${{ steps.paris.outputs.ok }}
+    steps:
+      - id: paris
+        run: |
+          h=$(TZ=Europe/Paris date +%-H)
+          echo "Heure de Paris : $h h"
+          if [ "${{ github.event_name }}" != "schedule" ] || [ "$h" -ge 22 ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
   deplacer-en-attente:
+    needs: heure
+    if: needs.heure.outputs.ok == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 

@@ -1,0 +1,48 @@
+name: Comparer moteurs de prepa
+
+# Compare, sur de vrais bons de commande récents, le binaire C de production
+# (prepa_drive_degrade, Drive) et son portage Python (prepa_drive_degrade.py).
+# N'affiche que des résumés anonymes (dépôt public). À relancer à la main
+# avant de basculer MOTEUR_PREPA=python, et après toute modification d'un des
+# deux moteurs.
+on:
+  workflow_dispatch:
+    inputs:
+      max:
+        description: "Nombre maximum de bons à comparer"
+        required: false
+        default: "150"
+
+concurrency:
+  group: comparer_moteurs
+  cancel-in-progress: true
+
+jobs:
+  comparer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python et dépendances
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer poppler-utils
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: poppler-utils
+          version: 1.0
+
+      - name: Installer les dépendances pip
+        run: pip install -r requirements.txt
+
+      - name: Comparer les deux moteurs
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          MAX_BONS:               ${{ inputs.max || '150' }}
+        run: python3 bootstrap.py comparer_moteurs.py --max "$MAX_BONS"

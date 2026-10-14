@@ -13,6 +13,8 @@ import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import confidentiel
+
 _TZ = ZoneInfo("Europe/Paris")
 
 _BASE    = os.path.dirname(os.path.abspath(__file__))
@@ -1134,7 +1136,7 @@ def envoyer_email_pdf(pdf_ecarts, pdf_stock_bas, pdf_a_deloter, date_j1, nb_ecar
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         svc.users().messages().send(userId='me', body={'raw': raw}).execute()
-        print(f"  Email envoyé → {EMAIL_DESTINATAIRE} (cc: {EMAIL_COPIE_STOCK})")
+        print("  Email envoyé.")
     except Exception as e:
         print(f"  Email échoué : {e}")
 
@@ -1169,7 +1171,7 @@ def envoyer_email_lgv(pdf_lgv, nb, semaine_suivante):
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         svc.users().messages().send(userId='me', body={'raw': raw}).execute()
-        print(f"  Email LGV à commander envoyé → {EMAIL_DESTINATAIRE}")
+        print("  Email LGV à commander envoyé.")
     except Exception as e:
         print(f"  Email LGV échoué : {e}")
 
@@ -1204,7 +1206,7 @@ def _charger_config():
         done = False
         while not done:
             _, done = dl.next_chunk()
-        cfg = json.loads(buf.getvalue().decode())
+        cfg = confidentiel.masquer_config(json.loads(buf.getvalue().decode()))
         DRIVE_CONTROLE_FOLDER_ID = cfg["drive_controle_folder_id"]
         DRIVE_BDC_FOLDER_ID      = cfg["drive_bdc_folder_id"]
         EMAIL_DESTINATAIRE       = cfg["email_destinataire"]
@@ -1660,7 +1662,7 @@ def envoyer_email_corrections_bon_prepa(resultats, date_str=None):
         msg.attach(MIMEText(corps, 'plain', 'utf-8'))
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         svc.users().messages().send(userId='me', body={'raw': raw}).execute()
-        print(f"  Email de correction envoyé → {EMAIL_DESTINATAIRE}")
+        print("  Email de correction envoyé.")
     except Exception as e:
         print(f"  Email de correction échoué : {e}")
 

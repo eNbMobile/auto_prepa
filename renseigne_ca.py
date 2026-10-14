@@ -32,9 +32,8 @@ from datetime import date, datetime
 
 import controle_stocks as cs
 
-# ID du classeur "CA DRIVE 2026.xlsx" (drive.google.com/file/d/<id>).
-# Utilisé si absent de config.json (clé "ca_drive_spreadsheet_id").
-CA_SPREADSHEET_ID_DEFAUT = "1Z4Ao7OVzRhKLIUNeot1jfQwljDGi2mCo"
+# L'ID du classeur "CA DRIVE <année>.xlsx" est lu dans config.json (clé
+# "ca_drive_spreadsheet_id").
 ONGLET_REALISATION = "RÉALISATION"
 
 # Colonnes du lundi (index 0) au samedi (index 5).
@@ -251,10 +250,11 @@ def _id_classeur_ca(drive_svc):
         done = False
         while not done:
             _, done = dl.next_chunk()
-        cfg = json.loads(buf.getvalue().decode())
-        return cfg.get("ca_drive_spreadsheet_id", "").strip() or CA_SPREADSHEET_ID_DEFAUT
-    except Exception:
-        return CA_SPREADSHEET_ID_DEFAUT
+        cfg = confidentiel.masquer_config(json.loads(buf.getvalue().decode()))
+    except Exception as e:
+        print(f"ERREUR chargement config.json : {e}")
+        sys.exit(1)
+    return confidentiel.cle_obligatoire(cfg, "ca_drive_spreadsheet_id")
 
 
 def id_classeur_ca(drive_svc, annee):
