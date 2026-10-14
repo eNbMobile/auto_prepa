@@ -31,6 +31,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.Flow;
 import java.util.function.Consumer;
 
@@ -85,16 +86,26 @@ public class Controles extends ControlsProviderService {
     private static final class Editeur implements Flow.Publisher<Control> {
         interface Source { void lancer(Sortie s); }
 
+        private static final AtomicInteger COMPTEUR = new AtomicInteger();
+
         final List<String> ids;
         final Set<Abonnement> abonnements = new CopyOnWriteArraySet<>();
         private final Source source;
+        private final Context ctx;
+        final String nom;
 
-        Editeur(List<String> ids, Source source) { this.ids = ids; this.source = source; }
+        Editeur(Context ctx, List<String> ids, Source source) {
+            this.ctx = ctx;
+            this.ids = ids;
+            this.source = source;
+            this.nom = "E" + COMPTEUR.incrementAndGet();
+        }
 
         @Override
         public void subscribe(Flow.Subscriber<? super Control> s) {
             Abonnement a = new Abonnement(s);
             abonnements.add(a);
+            Journal.note(ctx, nom + " subscribe → " + a.nom);
             s.onSubscribe(a);
         }
 
@@ -102,36 +113,68 @@ public class Controles extends ControlsProviderService {
             private final Flow.Subscriber<? super Control> abonne;
             private volatile boolean annule;
             private boolean lance;
+            final String nom = Editeur.this.nom + "/A" + COMPTEUR.incrementAndGet();
 
             Abonnement(Flow.Subscriber<? super Control> abonne) { this.abonne = abonne; }
 
             @Override public void request(long n) {
+                Journal.note(ctx, nom + " request(" + n + ")" + (lance ? " (déjà lancé)" : "") + (annule ? " (annulé)" : ""));
                 synchronized (this) {
                     if (lance || annule) return;
                     lance = true;
                 }
                 // Cache local seulement : fil dédié, jamais bloqué par le réseau.
                 AFFICHAGE.execute(() -> {
-                    try { source.lancer(this); } catch (RuntimeException ignore) { }
+                    try {
+                        source.lancer(this);
+                    } catch (RuntimeException ex) {
+                        Journal.note(ctx, nom + " ERREUR lancer : " + ex);
+                    }
                 });
             }
 
             @Override public void cancel() {
+                Journal.note(ctx, nom + " cancel");
                 annule = true;
                 abonnements.remove(this);
                 if (abonnements.isEmpty()) ACTIFS.remove(Editeur.this);
             }
 
-            @Override public synchronized void publier(Control c) { if (!annule) abonne.onNext(c); }
-            @Override public synchronized void finir() { if (!annule) abonne.onComplete(); }
+            @Override public synchronized void publier(Control c) {
+                if (annule) { Journal.note(ctx, nom + " publier ignoré (annulé) " + c.getControlId()); return; }
+                try {
+                    abonne.onNext(c);
+                    Journal.note(ctx, nom + " onNext " + c.getControlId() + " statut=" + c.getStatus()
+                            + " « " + c.getStatusText() + " »");
+                } catch (RuntimeException ex) {
+                    Journal.note(ctx, nom + " ERREUR onNext " + c.getControlId() + " : " + ex);
+                }
+            }
+            @Override public synchronized void finir() {
+                Journal.note(ctx, nom + " onComplete");
+                if (!annule) abonne.onComplete();
+            }
         }
     }
 
     /* ------------------------------------------------------ liste complète */
 
     @Override
+    public void onCreate() {
+        super.onCreate();
+        Journal.note(this, "service Controles créé");
+    }
+
+    @Override
+    public void onDestroy() {
+        Journal.note(this, "service Controles détruit");
+        super.onDestroy();
+    }
+
+    @Override
     public Flow.Publisher<Control> createPublisherForAllAvailable() {
-        return new Editeur(null, e -> RELECTURE.execute(() -> {
+        Journal.note(this, "createPublisherForAllAvailable");
+        return new Editeur(this, null, e -> RELECTURE.execute(() -> {
             e.publier(controleApp(this, false));
             try {
                 for (JSONObject a : chargerAppareils(this)) {
@@ -164,7 +207,8 @@ public class Controles extends ControlsProviderService {
     @Override
     public Flow.Publisher<Control> createPublisherFor(List<String> ids) {
         List<String> copie = new ArrayList<>(ids);
-        Editeur ed = new Editeur(copie, s -> rafraichir(s, copie));
+        Editeur ed = new Editeur(this, copie, s -> rafraichir(s, copie));
+        Journal.note(this, "createPublisherFor " + ed.nom + " " + copie);
         ACTIFS.add(ed);
         return ed;
     }
@@ -232,6 +276,7 @@ public class Controles extends ControlsProviderService {
                 Maison.prefs(this).edit().putString("etat." + id, main.toString()).apply();
                 c = avecEtat(this, a, main, null);
             } catch (Exception ex) {
+                Journal.note(this, "relecture " + id + " échouée : " + ex);
                 c = erreurVisible ? avecEtat(this, a, null,
                         ex instanceof Maison.ErreurHttp ? ex.getMessage() : "Hors ligne") : null;
             } finally {
@@ -249,6 +294,7 @@ public class Controles extends ControlsProviderService {
 
     @Override
     public void performControlAction(String id, ControlAction action, Consumer<Integer> reponse) {
+        Journal.note(this, "action " + id + " " + action.getClass().getSimpleName());
         ACTIONS.execute(() -> {
             try {
                 if (id.startsWith("t:")) {
@@ -268,6 +314,7 @@ public class Controles extends ControlsProviderService {
                 }
                 reponse.accept(ControlAction.RESPONSE_OK);
             } catch (Exception e) {
+                Journal.note(this, "action " + id + " échouée : " + e);
                 reponse.accept(ControlAction.RESPONSE_FAIL);
             }
             if (id.startsWith("d:")) {
