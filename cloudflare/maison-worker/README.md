@@ -17,7 +17,7 @@ pratique avec One UI 9) :
   des boutons télé. Ils sont enregistrés dans le KV, donc partagés entre
   téléphone et tablette.
 
-URL : `https://maison.controle-stocks.workers.dev`
+URL : `https://maison.coopu.workers.dev`
 
 ## Fonctionnement
 
@@ -60,7 +60,7 @@ maison.
 npx @smartthings/cli apps:create
 #  type           : OAuth-In App
 #  scopes         : r:devices:* x:devices:* r:locations:* r:scenes:* x:scenes:*
-#  redirect URI   : https://maison.controle-stocks.workers.dev/oauth/retour
+#  redirect URI   : https://maison.coopu.workers.dev/oauth/retour
 ```
 
 Reporte ensuite l'« OAuth Client Id » et le « OAuth Client Secret » affichés
