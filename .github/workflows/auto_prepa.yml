@@ -347,8 +347,11 @@ jobs:
           GH_PAT:                 ${{ secrets.GH_PAT }}
           GITHUB_TOKEN:           ${{ github.token }}
           WORK_DIR: "v 4.0.0"
-          # Vide ou "c" : binaire C ; "python" : portage prepa_drive_degrade.py
-          MOTEUR_PREPA:           ${{ vars.MOTEUR_PREPA }}
+          # Moteur de génération : portage Python (prepa_drive_degrade.py) par
+          # défaut depuis le 14/10/2026 (identique au C sur toutes les commandes
+          # comparées en mode ombre, ≈ 6 fois plus rapide). Variable de dépôt
+          # MOTEUR_PREPA=c pour revenir au binaire C.
+          MOTEUR_PREPA:           ${{ vars.MOTEUR_PREPA || 'python' }}
           MOTEUR_OMBRE:           ${{ vars.MOTEUR_OMBRE }}
           # Sortie non bufferisee : chaque ligne du log a son heure exacte.
           PYTHONUNBUFFERED:       "1"
