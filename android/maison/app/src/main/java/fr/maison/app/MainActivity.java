@@ -39,6 +39,8 @@ public class MainActivity extends Activity {
             }
         });
         setContentView(web);
+        // Télécommande automatique : relancée à chaque ouverture si elle est activée.
+        ServiceTele.relancerSiActif(this);
         if (etat != null) web.restoreState(etat);
         else web.loadUrl(Maison.BASE + "/" + fragment(getIntent()));
     }

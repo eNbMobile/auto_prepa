@@ -3,6 +3,9 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:label="Maison"
@@ -68,6 +71,22 @@
                 android:name="android.service.controls.META_DATA_PANEL_ACTIVITY"
                 android:value="fr.maison.app.PanneauActivity" />
         </service>
+
+        <!-- Télécommande automatique : affichée tant que la télé est allumée. -->
+        <service
+            android:name=".ServiceTele"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Affiche la télécommande quand la télé est allumée" />
+        </service>
+        <receiver android:name=".ServiceTele$Demarrage" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- Appuis sur les boutons de la télécommande du volet (notification). -->
         <receiver android:name=".NotifTele$Recepteur" android:exported="false" />

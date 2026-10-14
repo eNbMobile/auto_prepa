@@ -16,7 +16,6 @@ import android.service.notification.StatusBarNotification;
 import android.widget.RemoteViews;
 import android.widget.Toast;
 
-import org.json.JSONObject;
 
 /**
  * Télécommande affichée en notification épinglée : tous les boutons sont
@@ -52,19 +51,6 @@ public final class NotifTele {
 
     static void masquer(Context c) {
         c.getSystemService(NotificationManager.class).cancel(ID);
-    }
-
-    /** Cherche la télé (réseau si besoin) puis affiche la notification. À appeler hors du fil principal. */
-    static void afficherDepuisReseau(Context c) {
-        try {
-            JSONObject tv = Tele.premiere(c);
-            if (tv == null) { message(c, "Aucune télé trouvée sur le compte SmartThings"); return; }
-            Maison.prefs(c).edit().putString("tele.id", tv.optString("id"))
-                    .putString("tele.nom", tv.optString("nom")).apply();
-            new Handler(Looper.getMainLooper()).post(() -> afficher(c));
-        } catch (Exception e) {
-            message(c, e instanceof Maison.ErreurHttp ? e.getMessage() : "Hors ligne");
-        }
     }
 
     static void afficher(Context c) {
