@@ -102,26 +102,26 @@ jobs:
             exit 1
           fi
           nom="maison-$(date +%s)"
-          corps=$(jq -n --arg nom "$nom" --arg retour "$URL/oauth/retour" '{
-            appName: $nom,
-            displayName: "Maison",
-            description: "PWA perso de pilotage SmartThings",
-            appType: "API_ONLY",
-            classifications: ["CONNECTED_SERVICE"],
-            singleInstance: true,
-            apiOnly: {},
-            oauth: {
-              clientName: "Maison",
-              scope: ["r:devices:*", "x:devices:*", "r:locations:*", "r:scenes:*", "x:scenes:*"],
-              redirectUris: [$retour]
-            }
+          retour="$URL/oauth/retour"
+          # Corps d'une app « OAuth-In » (API_ONLY) ; la 2e variante, minimale,
+          # sert de secours si SmartThings refuse un des champs facultatifs.
+          complet=$(jq -n --arg nom "$nom" --arg retour "$retour" '{
+            appName: $nom, displayName: "Maison", description: "PWA perso de pilotage SmartThings",
+            appType: "API_ONLY", classifications: ["CONNECTED_SERVICE"], singleInstance: true,
+            oauth: { clientName: "Maison",
+                     scope: ["r:devices:*", "x:devices:*", "r:locations:*", "r:scenes:*", "x:scenes:*"],
+                     redirectUris: [$retour] }
           }')
-          code=$(curl -sS -o reponse.json -w '%{http_code}' -X POST \
-            'https://api.smartthings.com/v1/apps?signatureType=ST_PADLOCK&requireConfirmation=true' \
-            -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json' -d "$corps")
+          minimal=$(jq 'del(.classifications, .singleInstance)' <<<"$complet")
+          for corps in "$complet" "$minimal"; do
+            code=$(curl -sS -o reponse.json -w '%{http_code}' -X POST 'https://api.smartthings.com/v1/apps' \
+              -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json' -d "$corps")
+            [ "$code" -lt 300 ] && break
+            echo "::warning::Création refusée par SmartThings (HTTP $code)"
+            jq 'del(.oauthClientSecret, .oauthClientId)' reponse.json || cat reponse.json
+          done
           if [ "$code" -ge 300 ]; then
-            echo "::error::Création refusée par SmartThings (HTTP $code)"
-            jq 'del(.oauthClientSecret, .oauthClientId)' reponse.json || true
+            echo "::error::SmartThings refuse la création de l'app OAuth (voir les réponses ci-dessus)."
             exit 1
           fi
           id=$(jq -r '.oauthClientId // empty' reponse.json)
