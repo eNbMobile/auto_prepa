@@ -1,0 +1,47 @@
+name: Purger anciens runs
+
+# Supprime les runs d'avant le 14/10/2026 08:29 UTC (merge de la PR #273) des
+# workflows qui manipulent des données clients : leurs logs, publics,
+# pouvaient afficher nom et prénom. Voir purger_runs.py. Le job s'arrête
+# avant 6 h et se relance tout seul tant qu'il reste des runs à supprimer.
+on:
+  workflow_dispatch:
+    inputs:
+      simulation:
+        description: "Simulation (compter sans supprimer)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: purger_runs
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  purger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Supprimer les anciens runs
+        id: purge
+        env:
+          GH_TOKEN:   ${{ secrets.GH_PAT || github.token }}
+          SIMULATION: ${{ inputs.simulation }}
+        run: |
+          if [ "$SIMULATION" = "true" ]; then
+            python3 purger_runs.py --simulation
+          else
+            python3 purger_runs.py
+          fi
+
+      - name: Relancer s'il reste des runs
+        if: steps.purge.outputs.termine == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: gh workflow run purger_runs.yml --repo "${{ github.repository }}"
