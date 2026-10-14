@@ -2045,6 +2045,38 @@ def _envoyer_email_bon_absent(gmail_svc, numero, motif, detail=""):
         print(f"    Envoi alerte bon absent {numero} echoue : {e}")
         return False
 
+_SUJET_CLE_LIVRAISON = "cle livraison_spreadsheet_id absente de config.json"
+
+
+def _alerter_cle_livraison_manquante(gmail_svc):
+    """Une alerte par jour au plus quand config.json n'a pas l'ID du classeur
+    LIVRAISON DRIVE : les bons sont generes, mais aucune livraison n'est
+    inscrite (ni km, ni promotion EN ATTENTE) tant que la cle manque."""
+    from email.mime.text import MIMEText
+    if not EMAIL_ANTICIPATION:
+        return
+    try:
+        deja = gmail_svc.users().messages().list(
+            userId="me", q=f'in:sent subject:"{_SUJET_CLE_LIVRAISON}" newer_than:1d',
+            maxResults=1).execute().get("messages")
+        if deja:
+            return
+        msg = MIMEText(
+            "Bonjour,\n\nLa cle « livraison_spreadsheet_id » est absente de config.json "
+            "(dossier Drive de config). Les bons de preparation sont generes normalement, "
+            "mais les commandes en LIVRAISON ne sont plus inscrites dans LIVRAISON DRIVE "
+            "(ni km Shopopop, ni promotion EN ATTENTE).\n\nAjouter la cle avec l'ID du "
+            "classeur, puis relancer les commandes concernees si besoin (rattrapage_livraison).\n",
+            "plain", "utf-8")
+        msg["to"] = EMAIL_ANTICIPATION
+        msg["subject"] = f"ALERTE aut_prep - {_SUJET_CLE_LIVRAISON}"
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
+        print("    Alerte cle livraison manquante envoyee.")
+    except Exception as e:
+        print(f"    Alerte cle livraison manquante echouee : {e}")
+
+
 def _envoyer_email_km_manquant(gmail_svc, numero, nom, prenom, date_cde_str):
     """Alerte par email quand la distance (colonne km) n'a definitivement pas
     pu etre recuperee sur Shopopop pour une commande LIVRAISON (identifiants/
@@ -2394,7 +2426,13 @@ def _charger_config(drive_svc):
         DRIVE_BDC_FOLDER_ID  = cfg["drive_bdc_folder_id"]
         EMAIL_ANTICIPATION   = cfg.get("email_destinataire", "")
         EMAIL_ANTICIPATION_2 = cfg.get("email_destinataire_2", "")
-        LIVRAISON_SPREADSHEET_ID = confidentiel.cle_obligatoire(cfg, "livraison_spreadsheet_id")
+        # Pas d'arret si la cle manque : la preparation des commandes ne doit
+        # pas dependre du classeur LIVRAISON. Les etapes livraison sont alors
+        # sautees et une alerte part (une fois par jour, cf. _main).
+        LIVRAISON_SPREADSHEET_ID = str(cfg.get("livraison_spreadsheet_id", "") or "").strip()
+        if not LIVRAISON_SPREADSHEET_ID:
+            print("ERREUR : cle « livraison_spreadsheet_id » absente de config.json : "
+                  "LIVRAISON DRIVE non renseigne, les bons sont quand meme generes.")
     except Exception as e:
         print(f"ERREUR chargement config Drive : {e}")
         sys.exit(1)
@@ -2574,7 +2612,7 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
     with open(bon_prepa_path, 'r', encoding='utf-8') as f:
         lignes = f.readlines()
 
-    if len(lignes) > 1 and ',Livraison,' in lignes[1]:
+    if len(lignes) > 1 and ',Livraison,' in lignes[1] and LIVRAISON_SPREADSHEET_ID:
         if not shopopop_connecte:
             shopopop_token, shopopop_drive_id = livraison_drive.connecter_shopopop(drive_svc)
             shopopop_connecte = True
@@ -2745,43 +2783,46 @@ def _main():
     # effectivement quelque chose a retenter ; le token obtenu ici est
     # reutilise plus bas si une nouvelle commande LIVRAISON est aussi
     # rencontree dans ce run (pas de 2e connexion).
-    km_manquants = livraison_drive.lister_km_manquants(sheets_svc, LIVRAISON_SPREADSHEET_ID)
-    km_rattrapes = {}
-    if livraison_drive.km_manquants_en_attente(
-            sheets_svc, LIVRAISON_SPREADSHEET_ID, manquants=km_manquants):
-        shopopop_token, shopopop_drive_id = livraison_drive.connecter_shopopop(drive_svc)
-        shopopop_connecte = True
-        km_manquants = livraison_drive.retenter_km_manquants(
-            sheets_svc, LIVRAISON_SPREADSHEET_ID, shopopop_token, shopopop_drive_id,
-            manquants=km_manquants, rattrapees=km_rattrapes)
+    if not LIVRAISON_SPREADSHEET_ID:
+        _alerter_cle_livraison_manquante(gmail_svc)
+    else:
+        km_manquants = livraison_drive.lister_km_manquants(sheets_svc, LIVRAISON_SPREADSHEET_ID)
+        km_rattrapes = {}
+        if livraison_drive.km_manquants_en_attente(
+                sheets_svc, LIVRAISON_SPREADSHEET_ID, manquants=km_manquants):
+            shopopop_token, shopopop_drive_id = livraison_drive.connecter_shopopop(drive_svc)
+            shopopop_connecte = True
+            km_manquants = livraison_drive.retenter_km_manquants(
+                sheets_svc, LIVRAISON_SPREADSHEET_ID, shopopop_token, shopopop_drive_id,
+                manquants=km_manquants, rattrapees=km_rattrapes)
 
-    # Signalement des commandes inscrites sans km depuis plus de quelques
-    # minutes : passe ce delai, Shopopop ne fournira probablement plus la
-    # distance et il faut la saisir a la main le jour meme. Signaler des le
-    # premier echec serait premature (une commande tout juste passee n'est
-    # souvent pas encore synchronisee cote Shopopop, la retentative ci-dessus
-    # la rattrape); la liste utilisee est celle qui reste apres cette
-    # retentative. Aucune connexion Shopopop necessaire ici. Le meme passage
-    # cloture les alertes devenues caduques : distance finalement arrivee
-    # (email de levee) ou saisie a la main (surlignage orange retire).
-    livraison_drive.signaler_km_manquants(
-        sheets_svc, drive_svc, LIVRAISON_SPREADSHEET_ID,
-        lambda numero, nom, prenom, date_str: _envoyer_email_km_manquant(
-            gmail_svc, numero, nom, prenom, date_str),
-        manquants=km_manquants,
-        envoyer_levee=lambda numero, nom, prenom, km: _envoyer_email_km_recupere(
-            gmail_svc, numero, nom, prenom, km),
-        rattrapees=km_rattrapes)
+        # Signalement des commandes inscrites sans km depuis plus de quelques
+        # minutes : passe ce delai, Shopopop ne fournira probablement plus la
+        # distance et il faut la saisir a la main le jour meme. Signaler des le
+        # premier echec serait premature (une commande tout juste passee n'est
+        # souvent pas encore synchronisee cote Shopopop, la retentative ci-dessus
+        # la rattrape); la liste utilisee est celle qui reste apres cette
+        # retentative. Aucune connexion Shopopop necessaire ici. Le meme passage
+        # cloture les alertes devenues caduques : distance finalement arrivee
+        # (email de levee) ou saisie a la main (surlignage orange retire).
+        livraison_drive.signaler_km_manquants(
+            sheets_svc, drive_svc, LIVRAISON_SPREADSHEET_ID,
+            lambda numero, nom, prenom, date_str: _envoyer_email_km_manquant(
+                gmail_svc, numero, nom, prenom, date_str),
+            manquants=km_manquants,
+            envoyer_levee=lambda numero, nom, prenom, km: _envoyer_email_km_recupere(
+                gmail_svc, numero, nom, prenom, km),
+            rattrapees=km_rattrapes)
 
-    # Garde-fou : le workflow dedie "Livraison Drive - En attente" (declenche
-    # a 14h pile) peut etre saute par GitHub Actions en cas de forte charge
-    # (declenchements 'schedule' a l'heure ronde). Rattrapage ici a chaque
-    # execution d'auto_prepa.py une fois 14h passees, tant qu'il reste
-    # effectivement quelque chose a promouvoir (lecture seule sinon).
-    if (datetime.now(_TZ).hour >= 14
-            and livraison_drive.promotion_en_attente_necessaire(sheets_svc, LIVRAISON_SPREADSHEET_ID)):
-        print("  Rattrapage EN ATTENTE (workflow 14h non detecte pour aujourd'hui).")
-        livraison_drive.traiter_en_attente(sheets_svc, LIVRAISON_SPREADSHEET_ID)
+        # Garde-fou : le workflow dedie "Livraison Drive - En attente" (declenche
+        # a 15h pile) peut etre saute par GitHub Actions en cas de forte charge
+        # (declenchements 'schedule' a l'heure ronde). Rattrapage ici a chaque
+        # execution d'auto_prepa.py une fois 15h passees, tant qu'il reste
+        # effectivement quelque chose a promouvoir (lecture seule sinon).
+        if (datetime.now(_TZ).hour >= livraison_drive.HEURE_PROMOTION
+                and livraison_drive.promotion_en_attente_necessaire(sheets_svc, LIVRAISON_SPREADSHEET_ID)):
+            print("  Rattrapage EN ATTENTE (workflow 15h non detecte pour aujourd'hui).")
+            livraison_drive.traiter_en_attente(sheets_svc, LIVRAISON_SPREADSHEET_ID)
 
     shopopop_token, shopopop_drive_id, shopopop_connecte = traiter_modifications_clients(
         drive_svc, gmail_svc, sheets_svc,

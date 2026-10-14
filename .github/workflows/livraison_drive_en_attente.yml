@@ -2,14 +2,14 @@ name: Livraison Drive - En attente
 
 on:
   schedule:
-    - cron: '3 12 * * 1-6'  # 14h03 Paris en heure d'ete (CEST = UTC+2)
-    - cron: '3 13 * * 1-6'  # 14h03 Paris en heure d'hiver (CET = UTC+1) ; du lundi au samedi, decale de
+    - cron: '3 13 * * 1-6'  # 15h03 Paris en heure d'ete (CEST = UTC+2)
+    - cron: '3 14 * * 1-6'  # 15h03 Paris en heure d'hiver (CET = UTC+1) ; du lundi au samedi, decale de
                             # l'heure ronde pour limiter le risque de declenchement
                             # 'schedule' saute par GitHub Actions en cas de forte charge
                             # (cf. garde-fou dans auto_prepa.py :
                             # promotion_en_attente_necessaire). Pas de run le dimanche :
                             # les commandes EN ATTENTE visant le lundi sont deja
-                            # remontees par le run du samedi 14h (_lendemain_ouvre(samedi)
+                            # remontees par le run du samedi 15h (_lendemain_ouvre(samedi)
                             # = lundi), donc rien n'est jamais en attente pour le
                             # dimanche.
   workflow_dispatch:
@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   # Deux horaires planifiés (heure d'été UTC+2 / heure d'hiver UTC+1) : seul
-  # celui qui tombe à 14h à Paris laisse passer le job principal.
+  # celui qui tombe à 15h à Paris laisse passer le job principal.
   heure:
     runs-on: ubuntu-latest
     outputs:
@@ -30,7 +30,7 @@ jobs:
         run: |
           h=$(TZ=Europe/Paris date +%-H)
           echo "Heure de Paris : $h h"
-          if [ "${{ github.event_name }}" != "schedule" ] || [ "$h" = "14" ]; then
+          if [ "${{ github.event_name }}" != "schedule" ] || [ "$h" = "15" ]; then
             echo "ok=true" >> "$GITHUB_OUTPUT"
           else
             echo "ok=false" >> "$GITHUB_OUTPUT"

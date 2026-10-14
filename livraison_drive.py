@@ -12,7 +12,7 @@ Règle (demande utilisateur) :
 - commande pour le lendemain ouvré (le
   lendemain, sauf si on est samedi -> alors
   le lundi, le dimanche étant fermé), s'il
-  est déjà 14h ou plus le jour même         -> renseignée directement (onglet
+  est déjà 15h ou plus le jour même         -> renseignée directement (onglet
                                                du mois, date du lendemain ouvré)
 - tous les autres cas                       -> onglet "EN ATTENTE" (nom
                                                prénom en CAPS, jour au format
@@ -39,7 +39,7 @@ et un second email annonce qu'il n'y a plus rien à saisir.
 auto_prepa.py appelle traiter_commande_livraison() pour chaque commande en
 LIVRAISON détectée (présence de ',Livraison,' sur la 2e ligne de
 bon_prepa.txt). Le workflow "Livraison Drive - En attente" (déclenché à
-14h) appelle traiter_en_attente() pour renseigner les commandes de
+15h) appelle traiter_en_attente() pour renseigner les commandes de
 EN ATTENTE prévues pour le lendemain.
 """
 import re
@@ -54,6 +54,11 @@ import controle_stocks as cs
 import shopopop
 
 _TZ = ZoneInfo("Europe/Paris")
+
+# Heure a partir de laquelle les commandes LIVRAISON du lendemain ouvre sont
+# renseignees dans l'onglet du mois (avant : onglet EN ATTENTE, promu a cette
+# heure-la par le workflow "Livraison Drive - En attente").
+HEURE_PROMOTION = 15
 
 # L'ID du classeur "LIVRAISON DRIVE 2026" est lu dans config.json (clé
 # "livraison_spreadsheet_id", à mettre à jour les années suivantes) : plus
@@ -227,7 +232,7 @@ def _creer_onglet_mois(sheets_svc, spreadsheet_id, cible):
     """Cree l'onglet du mois de `cible` quand il n'existe pas encore (le
     02/10/2026, l'onglet OCTOBRE manquait : chaque commande du mois etait
     perdue sur "onglet introuvable", et les commandes EN ATTENTE promues a
-    14h aussi). L'onglet est une copie du mois precedent le plus recent
+    15h aussi). L'onglet est une copie du mois precedent le plus recent
     (en-tete, formule Frais, encadre de facture), place juste apres lui,
     dont les donnees des colonnes A:E (N° cde, Date, Nom, Prenom, Distance)
     et leur surlignage (vert livree, orange km) sont effaces. Sans mois
@@ -673,7 +678,7 @@ def traiter_commande_livraison(sheets_svc, spreadsheet_id, nom, prenom, date_cde
             print(f"    Pas de token Shopopop, km non recherche pour la commande {numero_commande}.")
         nom_maj, prenom_maj = nom.strip().upper(), prenom.strip().upper()
         if date_cde == aujourdhui or (
-                date_cde == _lendemain_ouvre(aujourdhui) and maintenant.hour >= 14):
+                date_cde == _lendemain_ouvre(aujourdhui) and maintenant.hour >= HEURE_PROMOTION):
             _inscrire_commande(sheets_svc, spreadsheet_id, date_cde, nom_maj, prenom_maj,
                                 numero_commande, km)
         else:
@@ -1117,8 +1122,8 @@ def promotion_en_attente_necessaire(sheets_svc, spreadsheet_id, maintenant=None)
     est le lendemain ouvre (par rapport a `maintenant`), c'est-a-dire une
     ligne que traiter_en_attente() devrait promouvoir dans l'onglet du mois.
     Ne fait qu'une lecture (aucune ecriture) : sert de garde-fou, appele a
-    chaque execution d'auto_prepa.py une fois 14h passees, pour rattraper la
-    promotion si le workflow dedie declenche a 14h a ete manque (les
+    chaque execution d'auto_prepa.py une fois 15h passees, pour rattraper la
+    promotion si le workflow dedie declenche a 15h a ete manque (les
     declenchements 'schedule' GitHub Actions pile a l'heure ronde peuvent
     etre retardes voire sautes en cas de forte charge)."""
     onglet = _trouver_onglet(sheets_svc, spreadsheet_id, ONGLET_EN_ATTENTE)
@@ -1142,7 +1147,7 @@ def traiter_en_attente(sheets_svc, spreadsheet_id, maintenant=None):
     """Renseigne dans l'onglet du mois les commandes de EN ATTENTE prevues
     pour le lendemain ouvre (par rapport a `maintenant` ; le lendemain, sauf
     le samedi ou c'est le lundi, le dimanche etant ferme), et les retire de
-    EN ATTENTE. Appelee par le workflow declenche a 14h, et en garde-fou par
+    EN ATTENTE. Appelee par le workflow declenche a 15h, et en garde-fou par
     auto_prepa.py (cf. promotion_en_attente_necessaire) si ce declenchement a
     ete manque. Le km, deja recupere sur Shopopop au moment ou la commande a
     ete mise en EN ATTENTE (colonne E), est simplement reporte tel quel — pas

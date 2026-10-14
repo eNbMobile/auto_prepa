@@ -12,6 +12,7 @@ Le topic Pub/Sub est lu dans config.json (clé « gmail_pubsub_topic », de la
 forme projects/<projet>/topics/<topic>). Tant qu'elle est absente, le script
 ne fait rien : aut_prep continue alors d'être déclenché par cron.
 """
+import re
 import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -29,6 +30,12 @@ def main():
     topic = str(ld._charger_config_dict(drive_svc).get("gmail_pubsub_topic", "")).strip()
     if not topic:
         print("gmail_pubsub_topic absent de config.json : notification Gmail non configurée.")
+        return
+    if not re.fullmatch(r"projects/[A-Za-z0-9_.:-]+/topics/[A-Za-z0-9_.~%+-]+", topic):
+        # Ex. « projects/<ID_DU_PROJET>/topics/... » recopié du README sans
+        # remplacer l'ID du projet Google Cloud.
+        print("gmail_pubsub_topic invalide dans config.json (ID du projet Google Cloud à "
+              "renseigner, forme projects/<id>/topics/<topic>) : notification Gmail non activée.")
         return
     rep = gmail_svc.users().watch(userId="me", body={
         "topicName": topic,
