@@ -50,8 +50,14 @@ public class MainActivity extends Activity {
         if (!f.isEmpty()) web.evaluateJavascript("location.hash='" + f + "'", null);
     }
 
-    private static String fragment(Intent i) {
+    /** Vue ouverte quand l'intent n'en précise pas (PanneauActivity : le panneau). */
+    protected String vueParDefaut() {
+        return null;
+    }
+
+    private String fragment(Intent i) {
         String vue = i == null ? null : i.getStringExtra("vue");
+        if (vue == null) vue = vueParDefaut();
         return vue != null && vue.matches("[a-z]+") ? "#" + vue : "";
     }
 
