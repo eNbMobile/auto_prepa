@@ -301,6 +301,7 @@ jobs:
           WORK_DIR: "v 4.0.0"
           # Vide ou "c" : binaire C ; "python" : portage prepa_drive_degrade.py
           MOTEUR_PREPA:           ${{ vars.MOTEUR_PREPA }}
+          MOTEUR_OMBRE:           ${{ vars.MOTEUR_OMBRE }}
         run: |
           set +e
           python3 bootstrap.py auto_prepa.py
