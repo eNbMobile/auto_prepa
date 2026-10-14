@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Produits non adresses : relevé au fil de la journée, PDF envoyé le soir.
 
-Un produit est « non adressé » quand prepa_drive_degrade ne trouve pas sa
-place dans le chemin de préparation : il apparaît alors dans le bon de
-préparation avec la mention ADRESSE INCONNUE (adresse absente de
-gencod_adresses.csv, ou présente mais hors chemin, et nomenclature sans
-correspondance) ou AUCUNE ADRESSE;AUCUNE ADRESSE (nomenclature hors chemin),
-c'est-à-dire dans la zone des produits non adressés de l'appli.
+Un produit est « non adressé » quand il n'a pas d'adresse valide dans
+gencod_adresses.csv, qu'il ait été replacé ou non par sa nomenclature. Dans le
+bon de préparation, c'est une ligne dont l'adresse vaut :
+- AUCUNE ADRESSE : placé d'après sa nomenclature (adresse absente de
+  gencod_adresses.csv, ou présente mais hors chemin) ;
+- ADRESSE INCONNUE : adresse hors chemin et nomenclature sans correspondance ;
+- M1-ZZ-0-0 : ni adresse ni nomenclature connue.
+Les rayons fruits (R), légumes (S) et BVP (U) du chemin de préparation sont
+exclus : leurs produits ne sont pas adressés produit par produit.
 
 - En cours de journée, auto_prepa.py appelle noter_produits_non_adresses()
   pour chaque bon généré : gencod, libellé, adresse actuelle et n° de commande
@@ -44,6 +47,10 @@ JOURS_HISTORIQUE = 14
 # adresse ni nomenclature connue.
 ADRESSE_ABSENTE = "M1-ZZ-0-0"
 
+# Lettres de rayon (dernière colonne de chemin_prepa_mono.csv) jamais
+# relevées : fruits, légumes, BVP.
+RAYONS_EXCLUS = {"R", "S", "U"}
+
 
 # ─────────────────────────────────────────────────────────────────
 # Extraction depuis le bon de préparation
@@ -51,10 +58,13 @@ ADRESSE_ABSENTE = "M1-ZZ-0-0"
 
 def extraire_produits_non_adresses(lignes_bon_prepa):
     """[(gencod, libelle, adresse)] des produits non adressés d'un
-    bon_prepa.txt (liste de lignes, en-tête compris). `adresse` vaut "" quand
-    le produit n'a aucune adresse connue (ni dans gencod_adresses.csv ni par
-    sa nomenclature), sinon l'adresse actuelle, qui ne figure pas dans le
-    chemin de préparation."""
+    bon_prepa.txt (liste de lignes, en-tête compris), hors rayons exclus.
+    `adresse` vaut "" quand le produit n'a aucune adresse connue, sinon
+    l'adresse actuelle, qui ne figure pas dans le chemin de préparation.
+
+    Fin de ligne du bon : ...;adresse;libellé du chemin;lettre de rayon;
+    position;DLC (ADRESSE INCONNUE;W ou AUCUNE ADRESSE;L tiennent lieu de
+    libellé et de lettre quand le produit n'a pas de place)."""
     produits = []
     for ligne in lignes_bon_prepa[1:]:
         champs = ligne.rstrip("\r\n").split(";")
@@ -67,12 +77,20 @@ def extraire_produits_non_adresses(lignes_bon_prepa):
         if "ADRESSE INCONNUE" in champs:
             idx = champs.index("ADRESSE INCONNUE")
             adresse = champs[idx - 1] if idx > 0 else ""
+            rayon = ""
         elif "AUCUNE ADRESSE" in champs:
             idx = champs.index("AUCUNE ADRESSE")
-            if idx + 1 >= len(champs) or champs[idx + 1] != "AUCUNE ADRESSE":
-                continue  # replacé via sa nomenclature : il a bien une place
             adresse = ""
+            rayon = champs[idx + 2].strip() if idx + 2 < len(champs) else ""
+            if idx + 1 < len(champs) and champs[idx + 1] == "AUCUNE ADRESSE":
+                rayon = ""  # nomenclature hors chemin : aucune place
+        elif ADRESSE_ABSENTE in champs[2:]:
+            idx = champs.index(ADRESSE_ABSENTE, 2)
+            adresse = ""
+            rayon = champs[idx + 2].strip() if idx + 2 < len(champs) else ""
         else:
+            continue
+        if rayon in RAYONS_EXCLUS:
             continue
         if adresse == ADRESSE_ABSENTE or adresse == "AUCUNE ADRESSE":
             adresse = ""
@@ -269,9 +287,8 @@ def envoyer_email(gmail_svc, destinataire, copie, pdfs):
     msg.attach(MIMEText(
         f"Bonjour,\n\n{total} produit{'s' if total > 1 else ''} commandé"
         f"{'s' if total > 1 else ''} sur le Drive n'"
-        f"{'ont' if total > 1 else 'a'} pas d'adresse dans le chemin de "
-        f"préparation ({jours}).\nIl{'s sont' if total > 1 else ' est'} "
-        f"passé{'s' if total > 1 else ''} en zone non adressée de l'appli.\n\n"
+        f"{'ont' if total > 1 else 'a'} pas d'adresse valide dans "
+        f"gencod_adresses.csv ({jours}, hors fruits, légumes et BVP).\n\n"
         f"La liste (code-barres, libellé, adresse actuelle, commandes) est en "
         f"pièce jointe, à traiter demain matin : adresser ces produits dans "
         f"gencod_adresses.csv / chemin_prepa_mono.csv.\n", "plain", "utf-8"))

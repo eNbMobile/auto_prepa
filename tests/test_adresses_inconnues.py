@@ -25,6 +25,11 @@ BON = [
     ligne("3033490004743", "YAOURT NATURE", "AUCUNE ADRESSE", "AUCUNE ADRESSE;L"),
     ligne("3017620422003", "PATE A TARTINER", "AUCUNE ADRESSE", "EPICERIE SUCREE;F"),
     "-3;" + ligne("3045320094084", "CAFE MOULU", "M2-QQ-1-1", "ADRESSE INCONNUE;W"),
+    ligne("3700000000025", "SANS ADRESSE NI NOMENCLATURE", "M1-ZZ-0-0", "NON ADRESSÉ;V"),
+    ligne("0200123000004", "POMMES GALA VRAC", "AUCUNE ADRESSE", "FRUITS;R"),
+    ligne("0200456000007", "CAROTTES VRAC", "AUCUNE ADRESSE", "LEGUMES;S"),
+    ligne("3250390000013", "BAGUETTE", "AUCUNE ADRESSE", "BVP;U"),
+    ligne("3250390000020", "PAIN DE MIE", "M2-MM-3-1", "PAIN DE MIE1;U"),
 ]
 
 
@@ -70,11 +75,15 @@ class FauxDrive:
 
 class TestExtraction(unittest.TestCase):
     def test_seuls_les_non_adresses_sont_retenus(self):
+        # Replacés via leur nomenclature compris ; fruits (R), légumes (S)
+        # et BVP (U) exclus.
         self.assertEqual(ai.extraire_produits_non_adresses(BON), [
             ("3168930001911", "BUGLES CACAHUETE 85G", "M1-AB-9-9"),
             ("3760000000017", "PRODUIT SANS FICHE", ""),
             ("3033490004743", "YAOURT NATURE", ""),
+            ("3017620422003", "PATE A TARTINER", ""),
             ("3045320094084", "CAFE MOULU", "M2-QQ-1-1"),
+            ("3700000000025", "SANS ADRESSE NI NOMENCLATURE", ""),
         ])
 
     def test_regroupement_par_gencod(self):
