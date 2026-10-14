@@ -61,9 +61,21 @@ export default {
     }
     if (!corps || !corps.message) return new Response('Bad request', { status: 400 });
 
+    // Trace de chaque notification (logs Cloudflare, privés) : publishTime
+    // très antérieur à l'heure de réception = message redistribué par
+    // Pub/Sub, pas un nouvel événement Gmail.
+    let historyId = '';
+    try {
+      historyId = JSON.parse(atob(corps.message.data || '')).historyId || '';
+    } catch {}
+    const trace = `notification ${corps.message.messageId || corps.message.message_id || '?'} ` +
+      `publiée ${corps.message.publishTime || corps.message.publish_time || '?'} ` +
+      `historyId ${historyId} tentative ${corps.deliveryAttempt || '?'}`;
+
     // Réponse non-2xx = Pub/Sub retentera plus tard : rien ne se perd si
     // GitHub est momentanément indisponible.
     const ok = await lancer(env, 'auto_prepa.yml', { force: 'true', source: 'gmail' });
+    console.log(`${trace} → ${ok ? 'run lancé' : 'échec du lancement'}`);
     return new Response(null, { status: ok ? 204 : 502 });
   },
 
