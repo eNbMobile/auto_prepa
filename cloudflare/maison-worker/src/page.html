@@ -124,28 +124,18 @@
   .choix button { flex: 1; padding: 12px 6px; border-radius: 12px; background: var(--carte); }
   .choix button.actif { background: var(--accent); color: var(--accent-texte); font-weight: 650; }
 
-  /* --- panneau Contrôle appareil (même allure que les cartes SmartThings) --- */
+  /* --- panneau Contrôle appareil : la carte télé, même allure que SmartThings --- */
   body.mode-panneau { padding-bottom: env(safe-area-inset-bottom); }
   body.mode-panneau header, body.mode-panneau nav { display: none; }
   .entete-p { display: flex; justify-content: space-between; align-items: center; padding: 14px 6px 10px; }
   .entete-p span { font-size: 26px; font-weight: 700; }
   .entete-p button { font-size: 17px; color: var(--doux); padding: 8px; }
   .carte-p { background: var(--carte); border-radius: 30px; padding: 18px; margin-bottom: 14px; }
-  .carte-p.on { background: color-mix(in srgb, var(--allume) 22%, var(--carte)); }
   .haut-p { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
   .piece-p { color: var(--doux); font-size: 16px; }
   .nom-p { font-size: 19px; font-weight: 650; }
   .etat-p { color: var(--doux); font-size: 16px; margin-top: 2px; }
   .ico-p { width: 70px; height: 70px; border-radius: 20px; background: var(--carte2); font-size: 34px; flex: none; }
-  .carte-p.on .ico-p { background: var(--allume); }
-  .glisse-p { -webkit-appearance: none; appearance: none; width: 100%; height: 44px; margin: 16px 0 10px;
-    border-radius: 22px; background: linear-gradient(90deg, var(--carte2) var(--pct), transparent var(--pct)),
-    color-mix(in srgb, var(--carte2) 45%, transparent); }
-  .carte-p.on .glisse-p { background: linear-gradient(90deg, var(--allume) var(--pct), transparent var(--pct)),
-    color-mix(in srgb, var(--carte2) 45%, transparent); }
-  .glisse-p::-webkit-slider-thumb { -webkit-appearance: none; width: 8px; height: 44px; background: transparent; }
-  .presets-p { display: flex; gap: 8px; }
-  .presets-p button { flex: 1; padding: 10px 0; border-radius: 18px; background: var(--carte2); font-size: 16px; }
   .tele-p .tele { margin-top: 14px; }
   /* Dans la carte, les boutons doivent se détacher du fond de la carte. */
   .tele-p .tb, .tele-p .croix, .tele-p .bascule { background: var(--carte2); }
@@ -493,52 +483,19 @@ function sourceEnCours(tv) {
 
 /**
  * Vue affichée dans le panneau « Contrôle appareil » de l'app Android :
- * mêmes cartes que SmartThings (interrupteur, glissière, 20…100 %), et la
- * carte télé avec la télécommande en grand.
+ * uniquement la télé, avec la télécommande en grand.
  */
 function vuePanneau() {
   const el = $('#vue-panneau');
-  if (document.activeElement && document.activeElement.classList.contains('glisse-p')) return;
-  const favs = config.favoris.map(appareil).filter((d) => d && !estTele(d));
   const tv = appareil(config.tele) || appareils.find(estTele);
   if (tv && !config.tele) config.tele = tv.deviceId;
-  const cartes = favs.map((d) => {
-    const id = d.deviceId, c = caps(d);
-    const on = val(id, 'switch', 'switch') === 'on';
-    const niveau = val(id, 'switchLevel', 'level');
-    return `<div class="carte-p${on ? ' on' : ''}">
-      <div class="haut-p">
-        <div><div class="piece-p">${esc(pieces[d.roomId] || '')}</div><div class="nom-p">${esc(nomAppareil(d))}</div>
-          <div class="etat-p">${c.has('switch') ? (on ? 'Activé' : 'Désactivé') : esc(texteEtat(d))}</div></div>
-        <button class="ico-p" ${c.has('switch') ? `data-basculer="${esc(id)}"` : `data-detail="${esc(id)}"`}>${iconeAppareil(d)}</button>
-      </div>
-      ${c.has('switchLevel') ? `
-      <input type="range" class="glisse-p" min="1" max="100" value="${niveau ?? 50}" data-niveau="${esc(id)}"
-        style="--pct:${niveau ?? 50}%">
-      <div class="presets-p">${[20, 40, 60, 80, 100].map((n) =>
-        `<button data-preset="${esc(id)}" data-n="${n}">${n}</button>`).join('')}</div>` : ''}
-    </div>`;
-  }).join('');
-  const carteTele = tv ? `<div class="carte-p tele-p">
+  el.innerHTML = `<div class="entete-p"><span>Télécommande</span><button data-reglages-p>✎ Modifier</button></div>`
+    + (tv ? `<div class="carte-p tele-p">
       <div class="haut-p"><div><div class="piece-p">${esc(pieces[tv.roomId] || '')}</div>
         <div class="nom-p">${esc(nomAppareil(tv))}</div><div class="etat-p">${esc(sourceEnCours(tv))}</div></div>
         <button class="ico-p" data-vue-tele>📺</button></div>
       ${telecommandeHtml(tv, false)}
-    </div>` : '';
-  el.innerHTML = `<div class="entete-p"><span>Maison</span><button data-reglages-p>✎ Modifier</button></div>`
-    + (cartes || carteTele ? cartes + carteTele
-      : '<div class="vide">Choisis tes favoris dans Modifier.</div>');
-}
-
-async function reglerNiveau(id, n) {
-  statuts[id] = statuts[id] || {};
-  statuts[id].switchLevel = { level: { value: n } };
-  if (val(id, 'switch', 'switch') !== 'on') {
-    statuts[id].switch = { switch: { value: 'on' } };
-    await commande(id, 'switch', 'on');
-  }
-  rafraichirVue();
-  return commande(id, 'switchLevel', 'setLevel', [n]);
+    </div>` : `<div class="vide">${appareils.length ? 'Aucune télé trouvée.' : 'Chargement…'}</div>`);
 }
 
 function sourcesTele(id, c) {
@@ -779,10 +736,6 @@ document.addEventListener('click', (e) => {
   if (nav) return afficher(nav.dataset.vue);
 
   // Panneau Contrôle appareil
-  const bas = cible.closest('[data-basculer]');
-  if (bas) { const p = basculer(bas.dataset.basculer); rafraichirVue(); return p.then(rafraichirVue); }
-  const pre = cible.closest('[data-preset]');
-  if (pre) { vibre(); return reglerNiveau(pre.dataset.preset, Number(pre.dataset.n)); }
   if (cible.closest('[data-vue-tele]')) return afficher('tele');
   if (cible.closest('[data-reglages-p]')) return afficher('reglages');
   if (cible.closest('[data-retour-panneau]')) return afficher('panneau');
@@ -856,7 +809,6 @@ document.addEventListener('change', (e) => {
     return sauverConfig();
   }
   if (c.id === 'choix-tele') { config.tele = c.value; sauverConfig(); chargerStatut(c.value).then(rafraichirVue); return rafraichirVue(); }
-  if (c.dataset.niveau) return reglerNiveau(c.dataset.niveau, Number(c.value));
   if (c.dataset.reglage) {
     const id = ouvrirFeuille.id, v = Number(c.value);
     if (c.dataset.reglage === 'niveau') return commande(id, 'switchLevel', 'setLevel', [v]);
@@ -872,7 +824,6 @@ document.addEventListener('input', (e) => {
     config.echelleTele = Number(c.value);
     const t = $('.tele'); if (t) t.style.setProperty('--echelle', c.value);
   }
-  if (c.classList.contains('glisse-p')) c.style.setProperty('--pct', c.value + '%');
   const affiche = { niveau: ['#v-niveau', ' %'], temp: ['#v-temp', ' K'], volume: ['#v-volume', ''] }[c.dataset.reglage];
   if (affiche && $(affiche[0])) $(affiche[0]).textContent = c.value + affiche[1];
 });
