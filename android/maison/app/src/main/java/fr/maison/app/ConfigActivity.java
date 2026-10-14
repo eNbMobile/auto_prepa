@@ -95,6 +95,17 @@ public class ConfigActivity extends Activity {
         texte("Android impose une petite notification « Télécommande automatique » pendant la "
                 + "surveillance : appui long dessus → Désactiver les notifications de ce canal "
                 + "pour la masquer, la surveillance continue.", 13);
+        titre("Diagnostic");
+        texte("Journal de ce que « Contrôle appareil » demande à l'app (pour trouver pourquoi "
+                + "des cartes restent sur « Chargement… »). Ouvre le panneau, attends, puis partage-le.", 13);
+        bouton("Partager le journal", () -> startActivity(Intent.createChooser(
+                new Intent(Intent.ACTION_SEND).setType("text/plain")
+                        .putExtra(Intent.EXTRA_SUBJECT, "Journal Maison")
+                        .putExtra(Intent.EXTRA_TEXT, Journal.texte(this)), "Partager le journal")));
+        bouton("Effacer le journal", () -> {
+            Journal.effacer(this);
+            Toast.makeText(this, "Journal effacé", Toast.LENGTH_SHORT).show();
+        });
         titre("Contrôle appareil");
         texte("Volet → Contrôle appareil → ⋮ (en haut à droite) → choisis l'app « Maison » "
                 + "à la place de SmartThings. Tes appareils et scènes y apparaissent, "
