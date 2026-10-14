@@ -15,3 +15,9 @@ crons = ["*/10 * * * *", "17 3 * * *"]
 # Secrets (jamais en clair ici) :
 #   GH_TOKEN      token GitHub autorisé à lancer les workflows du dépôt
 #   PUBSUB_TOKEN  jeton secret présent dans l'URL de l'abonnement Pub/Sub
+
+# Logs conservés dans le tableau de bord Cloudflare (Observability → Logs) :
+# sans ça, un échec du lancement GitHub (jeton refusé…) est invisible.
+[observability]
+enabled = true
+head_sampling_rate = 1
