@@ -1,0 +1,139 @@
+name: Deployer Maison (SmartThings)
+
+# Déploie le worker Cloudflare « maison » (cloudflare/maison-worker) : la PWA
+# qui remplace l'accès rapide de l'app SmartThings.
+#
+# Secrets du dépôt :
+#   CLOUDFLARE_API_TOKEN   (déjà utilisés par les autres workers)
+#   CLOUDFLARE_ACCOUNT_ID
+#   MAISON_CLE_ACCES       mot de passe demandé à l'ouverture de la PWA
+#   ST_CLIENT_ID           identifiants de l'app OAuth SmartThings ; facultatifs
+#   ST_CLIENT_SECRET       si l'app est créée par l'option ci-dessous
+#   ST_PAT                 jeton personnel SmartThings, seulement pour l'option
+#                          « créer l'app OAuth » (il expire après 24 h)
+#
+# Chaque secret présent est (ré)installé sur le worker ; un secret absent
+# laisse en place celui déjà configuré.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cloudflare/maison-worker/**'
+      - '.github/workflows/deploy_maison.yml'
+  workflow_dispatch:
+    inputs:
+      creer_app_oauth:
+        description: "Créer l'app OAuth SmartThings avec le secret ST_PAT (une seule fois)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy_maison
+  cancel-in-progress: false
+
+jobs:
+  deployer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: cloudflare/maison-worker
+    env:
+      CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WRANGLER: npx --yes wrangler@3.114.0
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Vérifier les secrets Cloudflare
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::Secrets CLOUDFLARE_API_TOKEN et/ou CLOUDFLARE_ACCOUNT_ID absents du dépôt."
+            exit 1
+          fi
+
+      - name: Déployer le worker
+        id: deploy
+        run: |
+          $WRANGLER deploy | tee deploy.log
+          url=$(grep -oE 'https://maison\.[a-z0-9-]+\.workers\.dev' deploy.log | head -1)
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+          echo "PWA : ${url}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Installer la clé d'accès
+        env:
+          CLE: ${{ secrets.MAISON_CLE_ACCES }}
+        run: |
+          if [ -n "$CLE" ]; then
+            printf '%s' "$CLE" | $WRANGLER secret put CLE_ACCES
+          else
+            echo "::warning::Secret MAISON_CLE_ACCES absent : la PWA refusera toute connexion tant que CLE_ACCES n'est pas défini sur le worker."
+          fi
+
+      - name: Installer les identifiants OAuth SmartThings
+        if: ${{ !inputs.creer_app_oauth }}
+        env:
+          ID:     ${{ secrets.ST_CLIENT_ID }}
+          SECRET: ${{ secrets.ST_CLIENT_SECRET }}
+        run: |
+          if [ -n "$ID" ] && [ -n "$SECRET" ]; then
+            printf '%s' "$ID" | $WRANGLER secret put ST_CLIENT_ID
+            printf '%s' "$SECRET" | $WRANGLER secret put ST_CLIENT_SECRET
+          else
+            echo "Secrets ST_CLIENT_ID/ST_CLIENT_SECRET absents du dépôt : ceux du worker sont conservés."
+          fi
+
+      # Crée l'app « OAuth-In » SmartThings sans passer par le CLI, et installe
+      # directement son client id / secret sur le worker (jamais affichés).
+      - name: Créer l'app OAuth SmartThings
+        if: ${{ inputs.creer_app_oauth }}
+        env:
+          PAT: ${{ secrets.ST_PAT }}
+          URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          if [ -z "$PAT" ]; then
+            echo "::error::Secret ST_PAT absent : crée un jeton sur https://account.smartthings.com/tokens et ajoute-le aux secrets du dépôt."
+            exit 1
+          fi
+          if [ -z "$URL" ]; then
+            echo "::error::URL du worker introuvable dans la sortie de wrangler."
+            exit 1
+          fi
+          nom="maison-$(date +%s)"
+          corps=$(jq -n --arg nom "$nom" --arg retour "$URL/oauth/retour" '{
+            appName: $nom,
+            displayName: "Maison",
+            description: "PWA perso de pilotage SmartThings",
+            appType: "API_ONLY",
+            classifications: ["CONNECTED_SERVICE"],
+            singleInstance: true,
+            apiOnly: {},
+            oauth: {
+              clientName: "Maison",
+              scope: ["r:devices:*", "x:devices:*", "r:locations:*", "r:scenes:*", "x:scenes:*"],
+              redirectUris: [$retour]
+            }
+          }')
+          code=$(curl -sS -o reponse.json -w '%{http_code}' -X POST \
+            'https://api.smartthings.com/v1/apps?signatureType=ST_PADLOCK&requireConfirmation=true' \
+            -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json' -d "$corps")
+          if [ "$code" -ge 300 ]; then
+            echo "::error::Création refusée par SmartThings (HTTP $code)"
+            jq 'del(.oauthClientSecret, .oauthClientId)' reponse.json || true
+            exit 1
+          fi
+          id=$(jq -r '.oauthClientId // empty' reponse.json)
+          secret=$(jq -r '.oauthClientSecret // empty' reponse.json)
+          echo "::add-mask::$id"
+          echo "::add-mask::$secret"
+          rm -f reponse.json
+          if [ -z "$id" ] || [ -z "$secret" ]; then
+            echo "::error::Réponse SmartThings sans identifiants OAuth."
+            exit 1
+          fi
+          printf '%s' "$id" | $WRANGLER secret put ST_CLIENT_ID
+          printf '%s' "$secret" | $WRANGLER secret put ST_CLIENT_SECRET
+          echo "App OAuth SmartThings « $nom » créée et installée sur le worker." >> "$GITHUB_STEP_SUMMARY"
+          echo "Tu peux maintenant supprimer le secret ST_PAT du dépôt." >> "$GITHUB_STEP_SUMMARY"
