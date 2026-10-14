@@ -298,6 +298,17 @@ jobs:
           fi
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
+      # Config d'adressage (gencod_*, chemin_prepa_*, binaire) gardée entre
+      # les runs : auto_prepa.py ne retélécharge que ce qui a changé sur Drive
+      # (empreinte md5) et demande l'enregistrement du cache seulement alors.
+      - name: Restaurer la config d'adressage
+        if: steps.check_pdfs.outputs.has_new == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: config_cache
+          key: config-adressage-${{ github.run_id }}
+          restore-keys: config-adressage-
+
       - name: Exécuter auto_prepa
         if: steps.check_pdfs.outputs.has_new == 'true'
         id: run_auto_prepa
@@ -314,10 +325,18 @@ jobs:
           PYTHONUNBUFFERED:       "1"
           # Scripts du dépôt uniquement : pas de téléchargement de scripts/ sur Drive.
           BOOTSTRAP_LOCAL:        "1"
+          CONFIG_CACHE_DIR:       ${{ github.workspace }}/config_cache
         run: |
           set +e
           python3 bootstrap.py auto_prepa.py
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Enregistrer la config d'adressage
+        if: steps.run_auto_prepa.outputs.config_maj == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: config_cache
+          key: config-adressage-${{ github.run_id }}
 
       # Un run planté isolément n'a rien d'alarmant (aléa réseau, API externe,
       # etc.) : le job ci-dessus ne fait donc jamais échouer le step lui-même

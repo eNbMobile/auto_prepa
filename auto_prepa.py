@@ -12,6 +12,7 @@ import csv
 import tempfile
 import time
 import fcntl
+import hashlib
 import urllib.request
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -671,13 +672,56 @@ CONFIG_REQUISE = (["gencod_adresses.csv", "gencod_nomenclatures.csv"]
 CONFIG_TENTATIVES = 3
 
 
+def _md5_fichier(chemin):
+    h = hashlib.md5()
+    with open(chemin, "rb") as fh:
+        for bloc in iter(lambda: fh.read(1 << 20), b""):
+            h.update(bloc)
+    return h.hexdigest()
+
+
+def _empreintes_config_drive(drive_svc, noms):
+    """{nom: md5Checksum} des fichiers de config sur Drive, en une requete."""
+    try:
+        res = drive_svc.files().list(
+            q=f"'{DRIVE_CONFIG_FOLDER_ID}' in parents and trashed=false",
+            fields="files(name,md5Checksum)", pageSize=200,
+        ).execute()
+    except Exception as e:
+        print(f"  Empreintes de la config Drive indisponibles ({e}) : tout est retelecharge.")
+        return {}
+    return {f["name"]: f.get("md5Checksum") for f in res.get("files", [])
+            if f.get("name") in noms and f.get("md5Checksum")}
+
+
 def telecharger_config_drive(drive_svc, attente=2):
     """Telecharge les CSV de config et le binaire depuis Drive vers WORK_DIR.
 
     Une erreur Drive (500 passager, coupure reseau) est retentee jusqu'a
-    CONFIG_TENTATIVES fois, avec une attente croissante entre deux essais."""
-    for filename in CONFIG_FILES + ["prepa_drive_degrade"]:
+    CONFIG_TENTATIVES fois, avec une attente croissante entre deux essais.
+
+    Avec CONFIG_CACHE_DIR (workflow aut_prep, cache GitHub entre les runs) :
+    un fichier dont la copie en cache a la meme empreinte md5 que sur Drive
+    n'est pas retelecharge. Une mise a jour faite sur Drive (ex. le chemin de
+    ramasse, mensuel) change l'empreinte et est donc reprise au run suivant.
+    Si au moins un fichier a ete retelecharge, config_maj=true est ecrit dans
+    GITHUB_OUTPUT pour que le workflow enregistre le nouveau cache."""
+    noms = CONFIG_FILES + ["prepa_drive_degrade"]
+    cache = os.environ.get("CONFIG_CACHE_DIR", "").strip()
+    empreintes = {}
+    if cache:
+        os.makedirs(cache, exist_ok=True)
+        empreintes = _empreintes_config_drive(drive_svc, noms)
+    maj = False
+    for filename in noms:
         dest = os.path.join(WORK_DIR, filename)
+        copie = os.path.join(cache, filename) if cache else ""
+        if (copie and empreintes.get(filename) and os.path.exists(copie)
+                and _md5_fichier(copie) == empreintes[filename]):
+            shutil.copy2(copie, dest)
+            if filename == "prepa_drive_degrade":
+                os.chmod(dest, 0o755)
+            continue
         for tentative in range(1, CONFIG_TENTATIVES + 1):
             try:
                 res = drive_svc.files().list(
@@ -691,11 +735,20 @@ def telecharger_config_drive(drive_svc, attente=2):
                 download_pdf(drive_svc, files[0]["id"], dest)
                 if filename == "prepa_drive_degrade":
                     os.chmod(dest, 0o755)
+                if copie and os.path.getsize(dest) > 0:
+                    shutil.copy2(dest, copie)
+                    maj = True
                 break
             except Exception as e:
                 print(f"  ERREUR config {filename} (essai {tentative}/{CONFIG_TENTATIVES}) : {e}")
                 if tentative < CONFIG_TENTATIVES:
                     time.sleep(attente * tentative)
+    if maj:
+        print("  Config d'adressage mise a jour dans le cache.")
+        sortie = os.environ.get("GITHUB_OUTPUT")
+        if sortie:
+            with open(sortie, "a") as fh:
+                fh.write("config_maj=true\n")
 
 
 def config_manquante():
@@ -2781,36 +2834,16 @@ def _charger_gmail_filters(drive_svc):
         print(f"ERREUR chargement gmail_filters.json : {e}")
         sys.exit(1)
 
-def _main():
-    heure_cron = datetime.now(_TZ).strftime("%Hh%M")
+def _rattrapages_livraison(drive_svc, gmail_svc, sheets_svc,
+                           shopopop_token, shopopop_drive_id, shopopop_connecte):
+    """Rattrapages LIVRAISON DRIVE de chaque run : km Shopopop a retenter,
+    signalement des km manquants, promotion EN ATTENTE apres 15h.
 
-    os.makedirs(WORK_DIR, exist_ok=True)
-    os.makedirs(CACHE_DIR, exist_ok=True)
-
-    # Jalons : chaque ligne du log GitHub porte l'heure exacte (sortie non
-    # bufferisee, PYTHONUNBUFFERED dans le workflow) ; ils montrent ou part
-    # le temps entre le demarrage et le depot du bon.
-    print("[jalon] demarrage auto_prepa")
-    creds = get_credentials()
-    drive_svc = build("drive", "v3", credentials=creds)
-    gmail_svc = build("gmail", "v1", credentials=creds)
-    sheets_svc = build("sheets", "v4", credentials=creds)
-
-    print("[jalon] connexion Google OK")
-    _charger_config(drive_svc)
-    _charger_gmail_filters(drive_svc)
-    print("[jalon] config.json et filtres Gmail charges")
-    telecharger_config_drive(drive_svc)
-    print("[jalon] config d'adressage et binaire telecharges")
-    # chemin_prepa_ramasse.csv n'est plus renvoye sur Drive a chaque run :
-    # il vient d'en etre telecharge et n'est modifie qu'a la main (mensuel).
-
-    # Connexion Shopopop differee : uniquement quand une commande LIVRAISON
-    # est effectivement rencontree plus bas (5 a 10 fois/jour), ou quand il y
-    # a des km en attente de retentative (voir juste ci-dessous) — pas a
-    # chaque run.
-    shopopop_token, shopopop_drive_id, shopopop_connecte = None, None, False
-
+    Fait APRES les nouvelles commandes (plusieurs lectures Sheets, ≈ 5 s) :
+    ils ne retardent plus le bon d'une commande qui vient d'arriver. Le jeton
+    Shopopop eventuellement ouvert pour une nouvelle commande LIVRAISON est
+    reutilise ici.
+    """
     # Retentative des km Shopopop non recuperes lors d'un run precedent (la
     # commande n'etait pas encore synchronisee cote Shopopop au moment du
     # premier essai, cf. livraison_drive.traiter_commande_livraison). Faite a
@@ -2820,8 +2853,8 @@ def _main():
     # email (fichier livraison_drive.FICHIER_KM_EN_ATTENTE, teste par
     # aut_prep.yml). Une connexion Shopopop dediee n'est ouverte que s'il y a
     # effectivement quelque chose a retenter ; le token obtenu ici est
-    # reutilise plus bas si une nouvelle commande LIVRAISON est aussi
-    # rencontree dans ce run (pas de 2e connexion).
+    # partage avec le traitement des nouvelles commandes du meme run (pas de
+    # 2e connexion).
     if not LIVRAISON_SPREADSHEET_ID:
         _alerter_cle_livraison_manquante(gmail_svc)
     else:
@@ -2863,6 +2896,39 @@ def _main():
             print("  Rattrapage EN ATTENTE (workflow 15h non detecte pour aujourd'hui).")
             livraison_drive.traiter_en_attente(sheets_svc, LIVRAISON_SPREADSHEET_ID)
 
+    return shopopop_token, shopopop_drive_id, shopopop_connecte
+
+
+def _main():
+    heure_cron = datetime.now(_TZ).strftime("%Hh%M")
+
+    os.makedirs(WORK_DIR, exist_ok=True)
+    os.makedirs(CACHE_DIR, exist_ok=True)
+
+    # Jalons : chaque ligne du log GitHub porte l'heure exacte (sortie non
+    # bufferisee, PYTHONUNBUFFERED dans le workflow) ; ils montrent ou part
+    # le temps entre le demarrage et le depot du bon.
+    print("[jalon] demarrage auto_prepa")
+    creds = get_credentials()
+    drive_svc = build("drive", "v3", credentials=creds)
+    gmail_svc = build("gmail", "v1", credentials=creds)
+    sheets_svc = build("sheets", "v4", credentials=creds)
+
+    print("[jalon] connexion Google OK")
+    _charger_config(drive_svc)
+    _charger_gmail_filters(drive_svc)
+    print("[jalon] config.json et filtres Gmail charges")
+    telecharger_config_drive(drive_svc)
+    print("[jalon] config d'adressage et binaire telecharges")
+    # chemin_prepa_ramasse.csv n'est plus renvoye sur Drive a chaque run :
+    # il vient d'en etre telecharge et n'est modifie qu'a la main (mensuel).
+
+    # Connexion Shopopop differee : uniquement quand une commande LIVRAISON
+    # est effectivement rencontree plus bas (5 a 10 fois/jour), ou quand il y
+    # a des km en attente de retentative (voir juste ci-dessous) — pas a
+    # chaque run.
+    shopopop_token, shopopop_drive_id, shopopop_connecte = None, None, False
+
     shopopop_token, shopopop_drive_id, shopopop_connecte = traiter_modifications_clients(
         drive_svc, gmail_svc, sheets_svc,
         shopopop_token, shopopop_drive_id, shopopop_connecte)
@@ -2870,14 +2936,29 @@ def _main():
     # Sans binaire ni config d'adressage, aucun bon ne peut etre genere. Les
     # emails de confirmation sont libellises des leur telechargement et ne
     # repassent jamais : on ne les touche pas, le run suivant les reprendra.
-    print("[jalon] km Shopopop et modifications clients traites")
+    print("[jalon] modifications clients traitees")
     manquants = config_manquante()
     if manquants:
         print(f"ERREUR : {', '.join(manquants)} indisponible(s) apres "
               f"{CONFIG_TENTATIVES} essais : commandes laissees en attente "
               f"pour le run suivant.")
+        _rattrapages_livraison(drive_svc, gmail_svc, sheets_svc,
+                               shopopop_token, shopopop_drive_id, shopopop_connecte)
         sys.exit(1)
 
+    try:
+        shopopop_token, shopopop_drive_id, shopopop_connecte = _traiter_nouvelles_commandes(
+            drive_svc, gmail_svc, sheets_svc, heure_cron,
+            shopopop_token, shopopop_drive_id, shopopop_connecte)
+    finally:
+        _rattrapages_livraison(drive_svc, gmail_svc, sheets_svc,
+                               shopopop_token, shopopop_drive_id, shopopop_connecte)
+
+
+def _traiter_nouvelles_commandes(drive_svc, gmail_svc, sheets_svc, heure_cron,
+                                 shopopop_token, shopopop_drive_id, shopopop_connecte):
+    """Recupere et traite les nouvelles commandes (emails et depots manuels).
+    Retourne (shopopop_token, shopopop_drive_id, shopopop_connecte)."""
     nouveaux = telecharger_bons_email(gmail_svc, CACHE_DIR)
 
     # Bons deposes a la main sur Drive (commande sans email de confirmation) :
@@ -2905,7 +2986,7 @@ def _main():
 
     if not nouveaux:
         print("Pas de nouvelle commande.")
-        return
+        return shopopop_token, shopopop_drive_id, shopopop_connecte
 
     print(f"{len(nouveaux)} nouvelle(s) commande(s) detectee(s) :")
     for pdf in sorted(nouveaux):
@@ -2924,6 +3005,7 @@ def _main():
             _archiver_depot_manuel(drive_svc, depots_manuels[pdf], pdf, "commande traitee")
         if statut == "stop":
             break
+    return shopopop_token, shopopop_drive_id, shopopop_connecte
 
 if __name__ == "__main__":
     main()
