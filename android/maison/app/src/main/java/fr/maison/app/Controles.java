@@ -197,32 +197,6 @@ public class Controles extends ControlsProviderService {
         });
     }
 
-    /** Même logique que la télécommande de la PWA (page.html, toucheTele). */
-    private void envoyerTouche(String tv, String cle) throws Exception {
-        switch (cle) {
-            case "VOL+": commande(tv, "audioVolume", "volumeUp", ""); break;
-            case "VOL-": commande(tv, "audioVolume", "volumeDown", ""); break;
-            case "CH+": commande(tv, "tvChannel", "channelUp", ""); break;
-            case "CH-": commande(tv, "tvChannel", "channelDown", ""); break;
-            case "MUTE": {
-                boolean muet = "muted".equals(valeur(statut(tv), "audioMute", "mute"));
-                commande(tv, "audioMute", muet ? "unmute" : "mute", "");
-                break;
-            }
-            case "PLAY": {
-                boolean lecture = "playing".equals(valeur(statut(tv), "mediaPlayback", "playbackStatus"));
-                commande(tv, "mediaPlayback", lecture ? "pause" : "play", "");
-                break;
-            }
-            default: commande(tv, "samsungvd.remoteControl", "send", "\"" + cle + "\"");
-        }
-    }
-
-    private JSONObject statut(String dev) throws Exception {
-        return new JSONObject(Maison.st(this, "devices/" + dev + "/status", null))
-                .getJSONObject("components").getJSONObject("main");
-    }
-
     private void commande(String dev, String cap, String cmd, String args) throws Exception {
         Maison.st(this, "devices/" + dev + "/commands", "{\"commands\":[{\"component\":\"main\",\"capability\":\""
                 + cap + "\",\"command\":\"" + cmd + "\",\"arguments\":[" + args + "]}]}");
@@ -327,7 +301,6 @@ public class Controles extends ControlsProviderService {
         }
         return b.setStatus(Control.STATUS_OK).setControlTemplate(t).setStatusText(texte).build();
     }
-
 
     /* --------------------------------------------- liste des appareils */
 
