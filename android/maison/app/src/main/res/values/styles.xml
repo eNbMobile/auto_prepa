@@ -18,6 +18,16 @@
         <item name="android:colorAccent">@color/accent</item>
     </style>
 
+    <!-- Télécommande flottante : fenêtre type feuille, fond assombri derrière. -->
+    <style name="Theme.Maison.Flottante" parent="@android:style/Theme.Material.Dialog.NoActionBar">
+        <item name="android:windowBackground">@drawable/fond_flottant</item>
+        <item name="android:windowMinWidthMajor">100%</item>
+        <item name="android:windowMinWidthMinor">100%</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:windowAnimationStyle">@android:style/Animation.InputMethod</item>
+        <item name="android:colorAccent">@color/accent</item>
+    </style>
+
     <style name="BoutonNotif">
         <item name="android:layout_width">0dp</item>
         <item name="android:layout_height">match_parent</item>

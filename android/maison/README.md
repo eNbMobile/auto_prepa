@@ -23,7 +23,13 @@ choix (SmartThings par défaut). Maison en fournit aussi :
 - Volet → **Contrôle appareil** → **⋮** → choisir **Maison**.
 - Les appareils avec interrupteur (lumières, prises, télé) et les scènes sont
   proposés ; un appui allume/éteint, glisser règle la luminosité.
-- Toucher la **télé** ouvre la télécommande Maison dans une fenêtre.
+- Carte **Télécommande** (dans le groupe de la pièce de la télé, à cocher dans
+  la sélection) : la toucher ouvre la **grande télécommande flottante** par-dessus
+  le volet ; toucher à côté la referme. Toucher la carte télé fait de même.
+  One UI n'affiche pas d'écran d'app dans ce panneau, seulement des cartes : la
+  télécommande ne peut donc pas y être intégrée directement.
+- Le dernier état connu de chaque appareil s'affiche immédiatement à la
+  réouverture du panneau, puis il est relu en arrière-plan.
 - Pour chaque télé, des **touches de télécommande** à ajouter au panneau :
   volume ±, muet, chaînes ±, flèches, OK, retour, accueil, lecture/pause.
   Un appui envoie la touche directement (seules les touches que la télé
