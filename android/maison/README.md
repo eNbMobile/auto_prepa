@@ -12,6 +12,10 @@ choix (SmartThings par défaut). Maison en fournit aussi :
 - Les appareils avec interrupteur (lumières, prises, télé) et les scènes sont
   proposés ; un appui allume/éteint, glisser règle la luminosité.
 - Toucher la **télé** ouvre la télécommande Maison dans une fenêtre.
+- Pour chaque télé, des **touches de télécommande** à ajouter au panneau :
+  volume ±, muet, chaînes ±, flèches, OK, retour, accueil, lecture/pause.
+  Un appui envoie la touche directement (seules les touches que la télé
+  accepte sont proposées).
 - Sur Android 14+, le système peut proposer d'afficher **l'app Maison entière**
   dans ce panneau (PanneauActivity, déclarée comme `META_DATA_PANEL_ACTIVITY`).
 

@@ -42,6 +42,15 @@ import java.util.function.Consumer;
 public class Controles extends ControlsProviderService {
 
     private static final String APP = "app";
+
+    /** Touches de télécommande : {code, libellé, capacité requise (drapeau du cache)}. */
+    private static final String[][] TOUCHES = {
+        { "VOL+", "Volume +", "volume" }, { "VOL-", "Volume −", "volume" }, { "MUTE", "Muet", "muet" },
+        { "CH+", "Chaîne +", "chaines" }, { "CH-", "Chaîne −", "chaines" },
+        { "UP", "Haut ▲", "fleches" }, { "DOWN", "Bas ▼", "fleches" }, { "LEFT", "Gauche ◀", "fleches" },
+        { "RIGHT", "Droite ▶", "fleches" }, { "OK", "OK", "fleches" }, { "BACK", "Retour", "fleches" },
+        { "HOME", "Accueil", "fleches" }, { "PLAY", "Lecture / pause", "lecture" },
+    };
     private static final Set<Editeur> ACTIFS = new CopyOnWriteArraySet<>();
 
     /* ----------------------------------------------------------- éditeurs */
@@ -84,7 +93,10 @@ public class Controles extends ControlsProviderService {
         return new Editeur(null, e -> {
             e.publier(controleApp(this, false));
             try {
-                for (JSONObject a : chargerAppareils(this)) e.publier(sansEtat(this, a));
+                for (JSONObject a : chargerAppareils(this)) {
+                    e.publier(sansEtat(this, a));
+                    for (String[] t : touches(a)) e.publier(toucheSansEtat(this, a, t));
+                }
                 JSONArray scenes = new JSONObject(Maison.st(this, "scenes", null)).optJSONArray("items");
                 for (int i = 0; scenes != null && i < scenes.length(); i++) {
                     JSONObject s = scenes.getJSONObject(i);
@@ -126,6 +138,13 @@ public class Controles extends ControlsProviderService {
         for (String id : ids) {
             if (APP.equals(id)) { e.publier(controleApp(this, true)); continue; }
             if (id.startsWith("s:")) { e.publier(controleScene(id)); continue; }
+            if (id.startsWith("t:")) {
+                String[] p = id.split(":", 3);
+                JSONObject tv = p.length == 3 ? appareils.get(p[1]) : null;
+                String[] t = tv == null ? null : touche(p[2]);
+                if (t != null) e.publier(toucheAvecEtat(this, tv, t));
+                continue;
+            }
             JSONObject a = appareils.get(id.substring(2));
             if (a == null) continue;
             try {
@@ -152,7 +171,10 @@ public class Controles extends ControlsProviderService {
     public void performControlAction(String id, ControlAction action, Consumer<Integer> reponse) {
         Maison.RESEAU.execute(() -> {
             try {
-                if (id.startsWith("s:")) {
+                if (id.startsWith("t:")) {
+                    String[] p = id.split(":", 3);
+                    envoyerTouche(p[1], p[2]);
+                } else if (id.startsWith("s:")) {
                     Maison.st(this, "scenes/" + id.substring(2) + "/execute", "{}");
                 } else if (id.startsWith("d:")) {
                     String dev = id.substring(2);
@@ -173,6 +195,32 @@ public class Controles extends ControlsProviderService {
                 republier(id);
             }
         });
+    }
+
+    /** Même logique que la télécommande de la PWA (page.html, toucheTele). */
+    private void envoyerTouche(String tv, String cle) throws Exception {
+        switch (cle) {
+            case "VOL+": commande(tv, "audioVolume", "volumeUp", ""); break;
+            case "VOL-": commande(tv, "audioVolume", "volumeDown", ""); break;
+            case "CH+": commande(tv, "tvChannel", "channelUp", ""); break;
+            case "CH-": commande(tv, "tvChannel", "channelDown", ""); break;
+            case "MUTE": {
+                boolean muet = "muted".equals(valeur(statut(tv), "audioMute", "mute"));
+                commande(tv, "audioMute", muet ? "unmute" : "mute", "");
+                break;
+            }
+            case "PLAY": {
+                boolean lecture = "playing".equals(valeur(statut(tv), "mediaPlayback", "playbackStatus"));
+                commande(tv, "mediaPlayback", lecture ? "pause" : "play", "");
+                break;
+            }
+            default: commande(tv, "samsungvd.remoteControl", "send", "\"" + cle + "\"");
+        }
+    }
+
+    private JSONObject statut(String dev) throws Exception {
+        return new JSONObject(Maison.st(this, "devices/" + dev + "/status", null))
+                .getJSONObject("components").getJSONObject("main");
     }
 
     private void commande(String dev, String cap, String cmd, String args) throws Exception {
@@ -207,6 +255,36 @@ public class Controles extends ControlsProviderService {
                 .setTitle(nom).setSubtitle("Scène").setStructure("Maison").setZone("Scènes")
                 .setDeviceType(DeviceTypes.TYPE_ROUTINE).setStatus(Control.STATUS_OK)
                 .setControlTemplate(new StatelessTemplate("lancer")).setStatusText("Lancer").build();
+    }
+
+    private static String[] touche(String cle) {
+        for (String[] t : TOUCHES) if (t[0].equals(cle)) return t;
+        return null;
+    }
+
+    private static List<String[]> touches(JSONObject a) {
+        List<String[]> l = new ArrayList<>();
+        if (!a.optBoolean("tele")) return l;
+        for (String[] t : TOUCHES) if (a.optBoolean(t[2])) l.add(t);
+        return l;
+    }
+
+    // Type « télécommande » et non « TV » : un appui envoie la touche au lieu
+    // d'ouvrir l'app dans une fenêtre.
+    private static Control toucheSansEtat(Context c, JSONObject tv, String[] t) {
+        return new Control.StatelessBuilder("t:" + tv.optString("id") + ":" + t[0], intention(c, "tele", 1))
+                .setTitle(t[1]).setSubtitle(tv.optString("nom"))
+                .setStructure("Maison").setZone("Télécommande " + tv.optString("nom"))
+                .setDeviceType(DeviceTypes.TYPE_REMOTE_CONTROL).build();
+    }
+
+    private static Control toucheAvecEtat(Context c, JSONObject tv, String[] t) {
+        return new Control.StatefulBuilder("t:" + tv.optString("id") + ":" + t[0], intention(c, "tele", 1))
+                .setTitle(t[1]).setSubtitle(tv.optString("nom"))
+                .setStructure("Maison").setZone("Télécommande " + tv.optString("nom"))
+                .setDeviceType(DeviceTypes.TYPE_REMOTE_CONTROL)
+                .setStatus(Control.STATUS_OK).setControlTemplate(new StatelessTemplate(t[0]))
+                .setStatusText("").build();
     }
 
     private static int type(JSONObject a) {
@@ -286,6 +364,11 @@ public class Controles extends ControlsProviderService {
                     .put("piece", pieces.containsKey(d.optString("roomId")) ? pieces.get(d.optString("roomId")) : "Maison")
                     .put("tele", caps.contains("samsungvd.remoteControl") || caps.contains("tvChannel"))
                     .put("variateur", caps.contains("switchLevel"))
+                    .put("volume", caps.contains("audioVolume"))
+                    .put("muet", caps.contains("audioMute"))
+                    .put("chaines", caps.contains("tvChannel"))
+                    .put("fleches", caps.contains("samsungvd.remoteControl"))
+                    .put("lecture", caps.contains("mediaPlayback"))
                     .put("lumiere", caps.contains("switchLevel") || caps.contains("colorControl")
                             || bas.matches(".*(lampe|lumi|light|ampoule|led|plafonnier|spot).*"))
                     .put("prise", bas.matches(".*(prise|plug|outlet).*"));
