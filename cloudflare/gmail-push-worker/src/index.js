@@ -10,9 +10,10 @@
  * aut_prep lui-même) ne posent pas de problème : le groupe de concurrence du
  * workflow garde un run en cours et un seul en attente, le reste est annulé.
  *
- * Déclencheurs planifiés (wrangler.toml) : filet de sécurité toutes les
- * 10 minutes et
- * renouvellement quotidien de la surveillance Gmail (gmail_watch.yml).
+ * Déclencheurs planifiés (wrangler.toml) : renouvellement quotidien de la
+ * surveillance Gmail (gmail_watch.yml). Le filet de sécurité toutes les
+ * 10 minutes est désactivé (cron retiré de wrangler.toml) mais reste géré
+ * ici s'il est réactivé.
  */
 const REPO = 'eNbMobile/auto_prepa';
 const REF = 'main';

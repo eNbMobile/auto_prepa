@@ -47,7 +47,10 @@ _debut_execution = datetime.now(timezone.utc)
 
 
 def api(methode, chemin):
-    """Appel à l'API GitHub ; attend si la limite de requêtes approche."""
+    """Appel à l'API GitHub ; attend si la limite de requêtes approche.
+
+    Marge de 500 requêtes : le token est partagé avec aut_prep, qui doit
+    pouvoir continuer à appeler l'API pendant la purge."""
     req = urllib.request.Request(
         f"https://api.github.com{chemin}", method=methode,
         headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}",
@@ -58,7 +61,7 @@ def api(methode, chemin):
         try:
             with urllib.request.urlopen(req, timeout=60) as rep:
                 restant = int(rep.headers.get("X-RateLimit-Remaining", "1000"))
-                if restant < 50:
+                if restant < 500:
                     attente = max(0, int(rep.headers.get("X-RateLimit-Reset", "0")) - time.time()) + 5
                     print(f"  Limite API proche : pause de {int(attente)} s.", flush=True)
                     time.sleep(attente)
