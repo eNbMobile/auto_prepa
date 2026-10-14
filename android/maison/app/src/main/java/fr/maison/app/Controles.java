@@ -25,9 +25,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.Flow;
 import java.util.function.Consumer;
 
@@ -58,8 +61,16 @@ public class Controles extends ControlsProviderService {
 
     /* ----------------------------------------------------------- éditeurs */
 
-    /** Réseau des commandes : plusieurs appareils relus en parallèle. */
-    private static final ExecutorService POOL = Executors.newFixedThreadPool(4);
+    /**
+     * Files séparées : la relecture des états ne doit jamais retarder les
+     * actions, ni l'affichage des cartes (publiées tout de suite depuis le cache).
+     */
+    private static final ExecutorService RELECTURE = Executors.newFixedThreadPool(3);
+    private static final ExecutorService ACTIONS = Executors.newFixedThreadPool(2);
+    private static final ExecutorService AFFICHAGE = Executors.newSingleThreadExecutor();
+    private static final ScheduledExecutorService PLANIF = Executors.newSingleThreadScheduledExecutor();
+    /** Appareils en cours de relecture, pour ne jamais lancer deux fois la même. */
+    private static final Set<String> EN_COURS = ConcurrentHashMap.newKeySet();
 
     /** Destination des commandes publiées (un abonnement du système). */
     interface Sortie {
@@ -99,7 +110,10 @@ public class Controles extends ControlsProviderService {
                     if (lance || annule) return;
                     lance = true;
                 }
-                POOL.execute(() -> source.lancer(this));
+                // Cache local seulement : fil dédié, jamais bloqué par le réseau.
+                AFFICHAGE.execute(() -> {
+                    try { source.lancer(this); } catch (RuntimeException ignore) { }
+                });
             }
 
             @Override public void cancel() {
@@ -117,7 +131,7 @@ public class Controles extends ControlsProviderService {
 
     @Override
     public Flow.Publisher<Control> createPublisherForAllAvailable() {
-        return new Editeur(null, e -> {
+        return new Editeur(null, e -> RELECTURE.execute(() -> {
             e.publier(controleApp(this, false));
             try {
                 for (JSONObject a : chargerAppareils(this)) {
@@ -142,7 +156,7 @@ public class Controles extends ControlsProviderService {
                 // Pas connecté ou hors ligne : seule la commande « Maison » est proposée.
             }
             e.finir();
-        });
+        }));
     }
 
     /* ------------------------------------------------ commandes affichées */
@@ -155,60 +169,87 @@ public class Controles extends ControlsProviderService {
         return ed;
     }
 
-    private void rafraichir(Sortie e, List<String> ids) {
-        Map<String, JSONObject> appareils = new HashMap<>();
+    /** Appareils mémorisés, sans réseau (vide si la liste n'a jamais été chargée). */
+    private Map<String, JSONObject> appareilsMemorises() {
+        Map<String, JSONObject> m = new HashMap<>();
         try {
-            for (JSONObject a : appareilsEnCache(this)) appareils.put(a.optString("id"), a);
+            JSONArray a = new JSONArray(Maison.prefs(this).getString("appareils", "[]"));
+            for (int i = 0; i < a.length(); i++) m.put(a.getJSONObject(i).optString("id"), a.getJSONObject(i));
         } catch (Exception ignore) { }
+        return m;
+    }
+
+    /**
+     * Publie aussitôt ce qui est connu localement, puis lance la relecture
+     * réseau des appareils (une seule à la fois par appareil).
+     */
+    private void rafraichir(Sortie e, List<String> ids) {
+        rafraichir(e, ids, true);
+    }
+
+    private void rafraichir(Sortie e, List<String> ids, boolean chargerSiInconnu) {
+        Map<String, JSONObject> appareils = appareilsMemorises();
+        boolean inconnu = false;
         for (String id : ids) {
             if (APP.equals(id)) { e.publier(controleApp(this, true)); continue; }
             if (id.startsWith("s:")) { e.publier(controleScene(id)); continue; }
             if (id.startsWith("r:")) {
                 JSONObject tv = appareils.get(id.substring(2));
-                if (tv != null) e.publier(telecommandeAvecEtat(this, tv));
+                if (tv != null) e.publier(telecommandeAvecEtat(this, tv)); else inconnu = true;
                 continue;
             }
             if (id.startsWith("t:")) {
                 String[] p = id.split(":", 3);
                 JSONObject tv = p.length == 3 ? appareils.get(p[1]) : null;
-                String[] t = tv == null ? null : touche(p[2]);
-                if (t != null) e.publier(toucheAvecEtat(this, tv, t));
+                String[] t = touche(p.length == 3 ? p[2] : "");
+                if (tv != null && t != null) e.publier(toucheAvecEtat(this, tv, t)); else inconnu = true;
                 continue;
             }
             JSONObject a = appareils.get(id.substring(2));
-            if (a == null) continue;
-            // Dernier état connu affiché tout de suite (pas de « Chargement… »),
-            // puis relecture réseau en parallèle.
+            if (a == null) { inconnu = true; continue; }
             String memo = Maison.prefs(this).getString("etat." + id, null);
             if (memo != null) {
                 try { e.publier(avecEtat(this, a, new JSONObject(memo), null)); } catch (Exception ignore) { }
             }
-            POOL.execute(() -> {
-                try {
-                    JSONObject main = Tele.statut(this, a.getString("id"));
-                    Maison.prefs(this).edit().putString("etat." + id, main.toString()).apply();
-                    e.publier(avecEtat(this, a, main, null));
-                } catch (Exception ex) {
-                    if (memo == null) e.publier(avecEtat(this, a, null,
-                            ex instanceof Maison.ErreurHttp ? ex.getMessage() : "Hors ligne"));
-                }
+            relire(id, a, memo == null);
+        }
+        // Appareil absent de la liste mémorisée : on la recharge une fois, puis on republie.
+        if (inconnu && chargerSiInconnu) {
+            RELECTURE.execute(() -> {
+                try { chargerAppareils(this); } catch (Exception ignore) { }
+                rafraichir(e, ids, false);
             });
         }
     }
 
-    /** Relit un appareil après une action et le republie chez ceux qui l'affichent. */
-    private void republier(String controlId) {
-        for (Editeur e : ACTIFS) {
-            if (!e.ids.contains(controlId)) continue;
-            for (Editeur.Abonnement ab : e.abonnements) rafraichir(ab, List.of(controlId));
-        }
+    /** Relit l'état d'un appareil et le publie à tous les abonnés qui l'affichent. */
+    private void relire(String id, JSONObject a, boolean erreurVisible) {
+        if (!EN_COURS.add(id)) return;
+        RELECTURE.execute(() -> {
+            Control c;
+            try {
+                JSONObject main = Tele.statut(this, a.getString("id"));
+                Maison.prefs(this).edit().putString("etat." + id, main.toString()).apply();
+                c = avecEtat(this, a, main, null);
+            } catch (Exception ex) {
+                c = erreurVisible ? avecEtat(this, a, null,
+                        ex instanceof Maison.ErreurHttp ? ex.getMessage() : "Hors ligne") : null;
+            } finally {
+                EN_COURS.remove(id);
+            }
+            if (c == null) return;
+            for (Editeur ed : ACTIFS) {
+                if (!ed.ids.contains(id)) continue;
+                for (Editeur.Abonnement ab : ed.abonnements) ab.publier(c);
+            }
+        });
     }
 
     /* -------------------------------------------------------------- actions */
 
     @Override
     public void performControlAction(String id, ControlAction action, Consumer<Integer> reponse) {
-        POOL.execute(() -> {
+        ACTIONS.execute(() -> {
             try {
                 if (id.startsWith("t:")) {
                     String[] p = id.split(":", 3);
@@ -230,8 +271,8 @@ public class Controles extends ControlsProviderService {
                 reponse.accept(ControlAction.RESPONSE_FAIL);
             }
             if (id.startsWith("d:")) {
-                try { Thread.sleep(800); } catch (InterruptedException ignore) { }
-                republier(id);
+                JSONObject a = appareilsMemorises().get(id.substring(2));
+                if (a != null) PLANIF.schedule(() -> relire(id, a, false), 800, TimeUnit.MILLISECONDS);
             }
         });
     }
