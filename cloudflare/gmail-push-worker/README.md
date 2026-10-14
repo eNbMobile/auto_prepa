@@ -17,7 +17,7 @@ Email reçu dans Gmail
 - **Filet de sécurité** : le worker relance aussi `aut_prep` toutes les 10 minutes
   (cron Cloudflare, `source=filet`). Ça couvre
   les bons déposés à la main dans « Traitement manuel », les km Shopopop à retenter,
-  le rattrapage 14h « EN ATTENTE », les alertes d'anticipation en attente, et une
+  le rattrapage 15h « EN ATTENTE », les alertes d'anticipation en attente, et une
   notification qui se perdrait.
 - **Renouvellement** : Gmail coupe les notifications au bout de 7 jours. Le worker
   lance chaque nuit (03h17 UTC) le workflow `gmail_watch.yml`, qui les réactive

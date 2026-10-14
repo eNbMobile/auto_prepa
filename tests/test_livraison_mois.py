@@ -141,7 +141,7 @@ class TestEnAttenteNonPerdue(unittest.TestCase):
         sheets = _FakeSheets(classeur)
         with mock.patch.object(ld, "_inscrire_commande", return_value=False):
             ld.traiter_en_attente(sheets, SPREADSHEET_ID,
-                                  maintenant=datetime(2026, 10, 1, 14, 3, tzinfo=ld._TZ))
+                                  maintenant=datetime(2026, 10, 1, 15, 3, tzinfo=ld._TZ))
         reecrit = sheets.spreadsheets().values().updates[-1][1]
         self.assertEqual(sorted(r[3] for r in reecrit), ["55700000", "55700001"])
 
