@@ -29,9 +29,8 @@ choix (SmartThings par défaut). Maison en fournit aussi :
   Un appui envoie la touche directement (seules les touches que la télé
   accepte sont proposées).
 - Sur Android 14+, le panneau peut afficher **l'écran Maison** à la place des
-  commandes (PanneauActivity, déclarée comme `META_DATA_PANEL_ACTIVITY`) : cartes
-  des favoris (interrupteur, glissière, 20…100 %) et carte télé avec la
-  **télécommande en grand** (vue `#panneau` de la PWA, « ✎ Modifier » pour les réglages).
+  commandes (PanneauActivity, déclarée comme `META_DATA_PANEL_ACTIVITY`) : la
+  carte télé avec la **télécommande en grand** (vue `#panneau` de la PWA, « ✎ Modifier » pour les réglages).
 
 ## Tuiles
 
