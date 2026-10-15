@@ -13,7 +13,7 @@ INTERDITS = re.compile(
     r"client|destinataire|destinataire_2|destinataire_cc|email|EMAIL_DESTINATAIRE|"
     r"EMAIL_COPIE_STOCK|EMAIL_ANTICIPATION|EMAIL_ANTICIPATION_2)$")
 # Fichiers ou `nom` designe un nom de fichier Drive, jamais une personne.
-NOM_FICHIER = {"adresses_inconnues.py", "controle_stocks.py", "creer_ca_drive_annee.py",
+NOM_FICHIER = {"adresses_inconnues.py", "controle_stocks.py",
                "diff_stocks.py", "upload_config.py", "auto_prepa.py"}
 
 
