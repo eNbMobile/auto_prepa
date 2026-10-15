@@ -6,7 +6,7 @@ l'archive Drive BDC/MM_AAAA/JJ_MM.
 Pourquoi : un client qui oublie de venir chercher sa commande, ou qui doit la
 decaler, la laisse dans le dossier du jour prevu. Les ventes du jour (calculees
 a partir des BonDeCommande de ce dossier : generer_ventes, controle_stocks,
-cumul_ventes_semaine, renseigne_ca) seraient alors faussees, et le controle de
+cumul_ventes_semaine) seraient alors faussees, et le controle de
 stock du lendemain aussi. Deplacer le PDF dans le dossier du jour reel de
 retrait remet les compteurs d'aplomb.
 
@@ -19,7 +19,7 @@ dans un marqueur Drive (GITHUB/DeplacementsEnAttente/deplacer_NUMERO.txt,
 contenant la date cible deja resolue) et c'est deplacer_commandes_attente.py,
 lance chaque soir a 22h par cron, qui effectue le deplacement physique. Raison
 du differe : les ventes du jour (generer_ventes, controle_stocks,
-cumul_ventes_semaine, renseigne_ca) tournent dans la journee, et un
+cumul_ventes_semaine) tournent dans la journee, et un
 deplacement immediat d'un jour a l'autre leur faisait perdre une commande deja
 preparee. --forcer deplace immediatement, comme avant (a utiliser quand la
 commande n'a pas encore ete preparee).
@@ -497,13 +497,13 @@ def main():
     if suppr and forcer:
         print("\nBons mis a la corbeille Drive (restaurables). Si les ventes / le CA "
               "du jour concerne ont deja ete calcules, relancer les workflows "
-              "correspondants (generer_ventes, renseigne_ca, controle_stocks).")
+              "correspondants (generer_ventes, controle_stocks).")
     elif suppr:
         print("\nLa suppression aura lieu ce soir a 22h (workflow 'Deplacer commandes "
               "en attente'). Cocher aussi --forcer pour supprimer tout de suite.")
     elif forcer:
         print("\nSi les ventes / le CA d'un des jours concernes ont deja ete calcules, "
-              "relancer les workflows correspondants (generer_ventes, renseigne_ca, "
+              "relancer les workflows correspondants (generer_ventes, "
               "controle_stocks) pour ces jours.")
     else:
         print("\nLe deplacement physique aura lieu ce soir a 22h (workflow "

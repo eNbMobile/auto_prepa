@@ -6,7 +6,7 @@ name: Deplacer commandes en attente
 # GITHUB/DeplacementsEnAttente/ par deplacer_commande.py (mettre_en_attente),
 # et c'est ce workflow qui effectue le deplacement physique une fois les
 # ventes et le CA du jour deja calcules — sinon une commande deplacee d'un
-# jour a l'autre disparaissait du CA quotidien (renseigne_ca) alors qu'elle
+# jour a l'autre disparaissait des ventes du jour alors qu'elle
 # avait bien ete preparee. Traite aussi les suppressions demandees sans
 # forcage (marqueur SUPPRIMER). Voir deplacer_commandes_attente.py.
 

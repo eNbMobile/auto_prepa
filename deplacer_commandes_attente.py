@@ -10,7 +10,7 @@ SUPPRIMER, depose par deplacer_commande.mettre_en_attente_suppression) : les
 exemplaires archives de la commande sont alors mis a la corbeille Drive.
 
 Pourquoi differe : les ventes du jour (generer_ventes, controle_stocks,
-cumul_ventes_semaine, renseigne_ca) tournent dans la journee a partir des
+cumul_ventes_semaine) tournent dans la journee a partir des
 BonDeCommande presents dans BDC/MM_AAAA/JJ_MM ; un deplacement immediat d'une
 commande du jour vers le lendemain la faisait disparaitre du CA quotidien
 alors qu'elle avait bien ete preparee. En attendant le soir, une fois ces
@@ -76,7 +76,7 @@ def main():
 
     _resume(resultats)
     print("\nSi les ventes / le CA d'un des jours concernes ont deja ete calcules, "
-          "relancer les workflows correspondants (generer_ventes, renseigne_ca, "
+          "relancer les workflows correspondants (generer_ventes, "
           "controle_stocks) pour ces jours.")
     if echecs:
         sys.exit(1)

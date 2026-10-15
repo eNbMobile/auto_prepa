@@ -18,7 +18,7 @@ on:
         default: false
 
 concurrency:
-  group: renseigne_ca
+  group: creer_ca_drive_annee
   cancel-in-progress: false
 
 jobs:

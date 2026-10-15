@@ -27,6 +27,7 @@ Usage :
       Même transformation, en local (sans Drive).
 """
 import io
+import json
 import sys
 from collections import Counter
 from copy import copy
@@ -623,9 +624,59 @@ def transformer(contenu, annee):
 # Drive
 # ─────────────────────────────────────────────────────────────────
 
+def _id_classeur_ca(drive_svc):
+    import confidentiel
+    import controle_stocks as cs
+    from googleapiclient.http import MediaIoBaseDownload
+    try:
+        res = drive_svc.files().list(
+            q=f"name='config.json' and '{cs.DRIVE_CONFIG_FOLDER_ID}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        buf = io.BytesIO()
+        dl = MediaIoBaseDownload(buf, drive_svc.files().get_media(fileId=res["files"][0]["id"]))
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        cfg = confidentiel.masquer_config(json.loads(buf.getvalue().decode()))
+    except Exception as e:
+        print(f"ERREUR chargement config.json : {e}")
+        sys.exit(1)
+    return confidentiel.cle_obligatoire(cfg, "ca_drive_spreadsheet_id")
+
+
+def id_classeur_ca(drive_svc, annee):
+    """ID de « CA DRIVE <annee>.xlsx » : le classeur configuré s'il porte cette
+    année, sinon celui du même nom dans son dossier (ou, dossier invisible
+    pour un fichier partagé, n'importe où sur le Drive) ; None si introuvable."""
+    defaut = _id_classeur_ca(drive_svc)
+    meta = drive_svc.files().get(fileId=defaut, fields="name,parents",
+                                 supportsAllDrives=True).execute()
+    if str(annee) in meta.get("name", ""):
+        return defaut
+    q = f"name='CA DRIVE {annee}.xlsx' and trashed=false"
+    for dossier in meta.get("parents") or [None]:
+        res = drive_svc.files().list(
+            q=q + (f" and '{dossier}' in parents" if dossier else ""),
+            fields="files(id)", supportsAllDrives=True, includeItemsFromAllDrives=True,
+        ).execute().get("files", [])
+        if res:
+            return res[0]["id"]
+    return None
+
+
+def _telecharger(drive_svc, file_id):
+    from googleapiclient.http import MediaIoBaseDownload
+    buf = io.BytesIO()
+    dl = MediaIoBaseDownload(buf, drive_svc.files().get_media(fileId=file_id))
+    done = False
+    while not done:
+        _, done = dl.next_chunk()
+    return buf.getvalue()
+
+
 def _drive_creer(annee, remplacer):
     import controle_stocks as cs
-    import renseigne_ca as rc
     from googleapiclient.http import MediaIoBaseUpload
 
     cs._charger_config()
@@ -633,7 +684,7 @@ def _drive_creer(annee, remplacer):
     if not drive:
         print("ERREUR : Drive inaccessible.")
         sys.exit(1)
-    source = rc.id_classeur_ca(drive, annee - 1)
+    source = id_classeur_ca(drive, annee - 1)
     meta = drive.files().get(fileId=source, fields="name,parents",
                              supportsAllDrives=True).execute()
     if str(annee - 1) not in meta["name"]:
@@ -643,14 +694,14 @@ def _drive_creer(annee, remplacer):
     # Classeur partagé dont le dossier est invisible : racine du Drive.
     dossier = (meta.get("parents") or [None])[0]
     nom = f"CA DRIVE {annee}.xlsx"
-    existant = rc.id_classeur_ca(drive, annee)
+    existant = id_classeur_ca(drive, annee)
     existants = [{"id": existant}] if existant else []
     if existants and not remplacer:
         print(f"ERREUR : {nom} existe déjà sur Drive (relancer avec --remplacer).")
         sys.exit(1)
 
     print(f"Source : {meta['name']} → {nom}")
-    contenu = transformer(rc._telecharger(drive, source), annee)
+    contenu = transformer(_telecharger(drive, source), annee)
     media = MediaIoBaseUpload(io.BytesIO(contenu), mimetype=MIME_XLSX, resumable=False)
     if existants:
         f = drive.files().update(fileId=existants[0]["id"], media_body=media,
