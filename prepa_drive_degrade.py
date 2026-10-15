@@ -12,8 +12,7 @@ regles implicites (decalages, cas limites, ordre des tests) font le resultat
 actuel des bons. Chaque fonction ci-dessous reprend donc la fonction C du meme
 nom, dans le meme ordre, avec les memes etats, et les fichiers intermediaires
 du C (temp, gentemp.txt, base_client.txt...) sont remplaces par des tampons en
-memoire de meme comportement. La comparaison automatique C / Python sur de
-vrais bons (WF « Comparer moteurs de prepa ») sert de garde-fou.
+memoire de meme comportement.
 
 Ecarts volontaires avec le C, tous limites a des cas ou le C plante, boucle ou
 lit de la memoire hors de ses tableaux :

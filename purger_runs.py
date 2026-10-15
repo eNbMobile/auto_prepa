@@ -37,9 +37,9 @@ DUREE_MAX = timedelta(minutes=int(os.environ.get("DUREE_MAX_MIN", "330")))
 # historique est conservé.
 WORKFLOWS_CONSERVES = {
     "Contrôle Stocks", "Générer Ventes", "Analyse Mensuelle", "collecte_ean",
-    "Cumul Ventes Semaine", "Différence Stocks",
+    "Cumul Ventes Semaine",
     "Cumul Contrôle Stocks", "Deployer tableau de bord Cloudflare",
-    "Comparer moteurs de prepa", "Adresses inconnues", "Gmail watch",
+    "Adresses inconnues", "Gmail watch",
     "Classement Paniers", "Purger anciens runs",
 }
 
