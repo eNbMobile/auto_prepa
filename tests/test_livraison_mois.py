@@ -5,7 +5,7 @@ Tests de LIVRAISON DRIVE 2026 autour du 02/10/2026 :
 - une commande EN ATTENTE qui n'a pas pu etre promue n'est pas effacee ;
 - l'annulation d'une commande modifiee ne supprime pas la ligne de sa
   commande de remplacement (meme client, meme jour, autre numero) ;
-- rattrapage_livraison : lecture des dates, reconnaissance d'une livraison.
+- une livraison passee n'est jamais supprimee.
 
 Lancement : python3 -m unittest discover -s tests
 """
@@ -19,7 +19,6 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import livraison_drive as ld
-import rattrapage_livraison as rl
 
 SPREADSHEET_ID = "id_classeur"
 
@@ -180,49 +179,12 @@ class TestAnnulationCommandeModifiee(unittest.TestCase):
             sheets, SPREADSHEET_ID, "ROBERT", "NADINE", "03/10/2026", numero_commande="55256662"))
 
 
-class TestRattrapage(unittest.TestCase):
-    def test_lire_dates(self):
-        self.assertEqual(rl.lire_dates("02/10/2026, 03/10/2026 02/10/2026"),
-                         ["02/10/2026", "03/10/2026"])
-        with self.assertRaises(ValueError):
-            rl.lire_dates("31/02/2026")
-
-    def test_quota_gmail_retente(self):
-        from googleapiclient.errors import HttpError
-
-        class _Resp(dict):
-            status = 403
-            reason = "Forbidden"
-
-        class _Req:
-            def __init__(self):
-                self.n = 0
-
-            def execute(self):
-                self.n += 1
-                if self.n < 3:
-                    raise HttpError(_Resp(), b'{"error": {"errors": [{"reason": "rateLimitExceeded"}]}}')
-                return {"ok": True}
-
-        req = _Req()
-        with mock.patch.object(rl.time, "sleep"):
-            self.assertEqual(rl._executer(req), {"ok": True})
-        self.assertEqual(req.n, 3)
-
-    def test_lire_ajouts(self):
-        self.assertEqual(rl.lire_ajouts("55256662;22/09/2026;Robert;Nadine;4,74"),
-                         [("55256662", date(2026, 9, 22), "ROBERT", "NADINE", 4.74)])
-        self.assertEqual(rl.lire_ajouts(""), [])
-
+class TestLivraisonPassee(unittest.TestCase):
     def test_livraison_passee_jamais_supprimee(self):
         import auto_prepa as ap
         self.assertTrue(ap._livraison_passee("22/09/2026", date(2026, 10, 3)))
         self.assertFalse(ap._livraison_passee("03/10/2026", date(2026, 10, 3)))
         self.assertFalse(ap._livraison_passee("", date(2026, 10, 3)))
-
-    def test_est_livraison(self):
-        self.assertTrue(rl.est_livraison("mon mode de remise Je reçois mes courses\n chez moi"))
-        self.assertFalse(rl.est_livraison("mon mode de remise Je récupère mes courses au drive"))
 
 
 if __name__ == "__main__":

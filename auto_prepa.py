@@ -2120,7 +2120,7 @@ def _alerter_cle_livraison_manquante(gmail_svc):
             "(dossier Drive de config). Les bons de preparation sont generes normalement, "
             "mais les commandes en LIVRAISON ne sont plus inscrites dans LIVRAISON DRIVE "
             "(ni km Shopopop, ni promotion EN ATTENTE).\n\nAjouter la cle avec l'ID du "
-            "classeur, puis relancer les commandes concernees si besoin (rattrapage_livraison).\n",
+            "classeur, puis relancer les commandes concernees si besoin.\n",
             "plain", "utf-8")
         msg["to"] = EMAIL_ANTICIPATION
         msg["subject"] = f"ALERTE aut_prep - {_SUJET_CLE_LIVRAISON}"
