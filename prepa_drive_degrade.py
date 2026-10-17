@@ -1369,7 +1369,7 @@ class Moteur:
                         elif nom[:4] == b"0260":
                             lettre = b"B"
                         elif ((nom[:4] == b"0205" and g[:6] == b"200000") or gencod1 == b"3486850001645"
-                              or g[:6] == b"200000" or gencod1 == b"3289664281803"):
+                              or (g[:6] == b"200000" and nom[:5] != b"02303") or gencod1 == b"3289664281803"):
                             lettre = b"C"
                         elif nom[:5] == b"02655" and nom[5] in (49, 50):
                             lettre = b"D"
