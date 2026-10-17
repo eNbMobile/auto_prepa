@@ -1135,7 +1135,7 @@ def promotion_en_attente_necessaire(sheets_svc, spreadsheet_id, maintenant=None)
     lendemain = _lendemain_ouvre(aujourdhui)
 
     res = sheets_svc.spreadsheets().values().get(
-        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!B2:B{1 + _MAX_LIGNES}").execute()
+        spreadsheetId=spreadsheet_id, range=f"'{onglet}'!C2:C{1 + _MAX_LIGNES}").execute()
     for row in res.get("values", []):
         jour = row[0].strip() if row and row[0] else ""
         if jour and _parser_jour(jour, aujourdhui) == lendemain:
