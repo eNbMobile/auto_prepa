@@ -38,9 +38,14 @@ et un second email annonce qu'il n'y a plus rien à saisir.
 
 auto_prepa.py appelle traiter_commande_livraison() pour chaque commande en
 LIVRAISON détectée (présence de ',Livraison,' sur la 2e ligne de
-bon_prepa.txt). Le workflow "Livraison Drive - En attente" (déclenché à
-15h) appelle traiter_en_attente() pour renseigner les commandes de
-EN ATTENTE prévues pour le lendemain.
+bon_prepa.txt), et, a chaque execution une fois 15h passees, verifie via
+promotion_en_attente_necessaire() s'il reste des commandes EN ATTENTE
+prevues pour le lendemain et appelle traiter_en_attente() si besoin (plus
+de workflow dedie : un ancien workflow "Livraison Drive - En attente",
+declenche par cron a 15h, remplissait ce role, mais son declenchement
+'schedule' GitHub Actions etait trop souvent retarde de plusieurs heures
+par GitHub en cas de forte charge — supprime, aut_prepa.py tournant de
+toute facon tres frequemment).
 """
 import re
 import sys
@@ -57,7 +62,7 @@ _TZ = ZoneInfo("Europe/Paris")
 
 # Heure a partir de laquelle les commandes LIVRAISON du lendemain ouvre sont
 # renseignees dans l'onglet du mois (avant : onglet EN ATTENTE, promu a cette
-# heure-la par le workflow "Livraison Drive - En attente").
+# heure-la par auto_prepa.py, cf. promotion_en_attente_necessaire).
 HEURE_PROMOTION = 15
 
 # L'ID du classeur "LIVRAISON DRIVE 2026" est lu dans config.json (clé
@@ -174,13 +179,6 @@ def _charger_config_dict(drive_svc):
     while not done:
         _, done = dl.next_chunk()
     return confidentiel.masquer_config(json.loads(buf.getvalue().decode()))
-
-
-def _charger_config_livraison(drive_svc):
-    """Retourne l'ID du classeur LIVRAISON DRIVE 2026 depuis config.json
-    (clé "livraison_spreadsheet_id", obligatoire)."""
-    cfg = _charger_config_dict(drive_svc)
-    return confidentiel.cle_obligatoire(cfg, "livraison_spreadsheet_id")
 
 
 def connecter_shopopop(drive_svc):
@@ -1121,11 +1119,10 @@ def promotion_en_attente_necessaire(sheets_svc, spreadsheet_id, maintenant=None)
     """True s'il existe au moins une ligne dans EN ATTENTE dont la date cible
     est le lendemain ouvre (par rapport a `maintenant`), c'est-a-dire une
     ligne que traiter_en_attente() devrait promouvoir dans l'onglet du mois.
-    Ne fait qu'une lecture (aucune ecriture) : sert de garde-fou, appele a
-    chaque execution d'auto_prepa.py une fois 15h passees, pour rattraper la
-    promotion si le workflow dedie declenche a 15h a ete manque (les
-    declenchements 'schedule' GitHub Actions pile a l'heure ronde peuvent
-    etre retardes voire sautes en cas de forte charge)."""
+    Ne fait qu'une lecture (aucune ecriture) : appelee a chaque execution
+    d'auto_prepa.py une fois 15h passees pour declencher traiter_en_attente()
+    si besoin — c'est le seul declencheur de cette promotion (plus de
+    workflow dedie, cf. docstring du module)."""
     onglet = _trouver_onglet(sheets_svc, spreadsheet_id, ONGLET_EN_ATTENTE)
     if not onglet:
         return False
@@ -1147,9 +1144,9 @@ def traiter_en_attente(sheets_svc, spreadsheet_id, maintenant=None):
     """Renseigne dans l'onglet du mois les commandes de EN ATTENTE prevues
     pour le lendemain ouvre (par rapport a `maintenant` ; le lendemain, sauf
     le samedi ou c'est le lundi, le dimanche etant ferme), et les retire de
-    EN ATTENTE. Appelee par le workflow declenche a 15h, et en garde-fou par
-    auto_prepa.py (cf. promotion_en_attente_necessaire) si ce declenchement a
-    ete manque. Le km, deja recupere sur Shopopop au moment ou la commande a
+    EN ATTENTE. Appelee par auto_prepa.py une fois 15h passees, quand
+    promotion_en_attente_necessaire() detecte qu'il y a quelque chose a
+    promouvoir. Le km, deja recupere sur Shopopop au moment ou la commande a
     ete mise en EN ATTENTE (colonne E), est simplement reporte tel quel — pas
     de nouvel appel Shopopop ici."""
     onglet = _trouver_onglet(sheets_svc, spreadsheet_id, ONGLET_EN_ATTENTE)
@@ -1198,26 +1195,3 @@ def traiter_en_attente(sheets_svc, spreadsheet_id, maintenant=None):
             spreadsheetId=spreadsheet_id, range=f"'{onglet}'!A2",
             valueInputOption="USER_ENTERED",
             body={"values": [list(r) for r in a_garder]}).execute()
-
-
-def main():
-    if not cs.DRIVE_CONFIG_FOLDER_ID:
-        print("ERREUR : secret DRIVE_CONFIG_FOLDER_ID manquant.")
-        sys.exit(1)
-
-    drive_svc = cs._get_drive_service()
-    if not drive_svc:
-        print("ERREUR : Drive inaccessible.")
-        sys.exit(1)
-    sheets_svc = _get_sheets_service()
-    if not sheets_svc:
-        print("ERREUR : Sheets inaccessible.")
-        sys.exit(1)
-
-    spreadsheet_id = _charger_config_livraison(drive_svc)
-    print(f"Traitement de l'onglet '{ONGLET_EN_ATTENTE}' de LIVRAISON DRIVE 2026 …")
-    traiter_en_attente(sheets_svc, spreadsheet_id)
-
-
-if __name__ == "__main__":
-    main()

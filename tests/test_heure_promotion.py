@@ -73,9 +73,8 @@ class _SheetsOnglet:
 class TestPromotionEnAttenteNecessaire(unittest.TestCase):
     """promotion_en_attente_necessaire doit regarder la colonne Jour (C) de
     EN ATTENTE, pas Prenom (B) : sinon elle ne detecte jamais rien a
-    promouvoir et le garde-fou d'auto_prepa.py (cf. docstring de la fonction)
-    ne rattrape plus jamais un workflow 'Livraison Drive - En attente'
-    saute/retarde."""
+    promouvoir et auto_prepa.py ne declenche plus jamais traiter_en_attente()
+    (seul declencheur de cette promotion, cf. docstring du module)."""
 
     def test_ligne_pour_demain_detectee(self):
         sheets = _SheetsOnglet(["12/10", "20/10"])
