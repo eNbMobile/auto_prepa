@@ -38,6 +38,35 @@ lancement de la manche. Il garde sa place et ses cartes s'il revient avec le
 code de la salle ; quand il ne reste plus personne à qui donner la main, la
 manche est comptée.
 
+## Compteur de points Flip 7 (`/flip7`)
+
+Le même worker sert aussi un **compteur de points pour Flip 7**, joué avec les
+vraies cartes : `https://skyjoenligne.controle-stocks.workers.dev/flip7` (un
+lien y mène depuis l'accueil du Skyjo).
+
+1. Choisir le nombre de joueurs (2 à 12), leurs noms (mêmes joueurs
+   enregistrés que le Skyjo) et le score de fin (200 par défaut).
+2. À la fin de chaque manche, toucher pour chacun ses numéros (0 à 12), son
+   ×2 et ses bonus (+2 à +10), ou « Sauté » s'il a tiré un doublon. Le score
+   s'affiche au fil de la saisie, puis « Valider la manche ».
+3. Calcul : somme des numéros, doublée par le ×2 (qui ne touche que les
+   numéros), plus les bonus, plus 15 pour sept numéros différents (★ dans le
+   tableau). Un joueur sauté marque 0.
+4. La partie s'arrête à la fin de la manche où quelqu'un atteint la limite ;
+   le plus gros total gagne. En cas d'égalité en tête, on rejoue une manche.
+
+« Annuler la dernière manche » corrige une saisie ratée, « Nouvelle partie »
+remet les scores à zéro. Même liste de noms = même partie : rouvrir le lien
+`/flip7?joueurs=Dylan,Erwan,Léa&limite=200` reprend la feuille, depuis
+n'importe quel téléphone (les dernières parties sont listées sur `/flip7`).
+Si deux téléphones saisissent en même temps, la seconde validation est refusée
+et la feuille rechargée, pour ne jamais compter deux fois la même manche.
+
+Les feuilles vivent dans la table D1 `flip7`, créée automatiquement au premier
+passage : rien à faire sur la base. Routes : `GET /api/flip7/etat?joueurs=…`,
+`POST /api/flip7/manche`, `POST /api/flip7/annuler`, `POST /api/flip7/nouvelle`
+(corps `{"joueurs": […], "limite": 200, "n": <manches connues>, "mains": […]}`).
+
 ## Pourquoi D1 et pas le KV
 
 Le KV est en cohérence différée : une lecture juste après une écriture peut
@@ -95,6 +124,7 @@ Si la base devait être recréée un jour :
 CREATE TABLE IF NOT EXISTS salles (code TEXT PRIMARY KEY, version INTEGER NOT NULL DEFAULT 1, etat TEXT NOT NULL, maj TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS joueurs (nom TEXT PRIMARY KEY);
 CREATE INDEX IF NOT EXISTS idx_salles_maj ON salles (maj);
+CREATE TABLE IF NOT EXISTS flip7 (cle TEXT PRIMARY KEY, etat TEXT NOT NULL, maj TEXT NOT NULL);
 ```
 
 ## Routes

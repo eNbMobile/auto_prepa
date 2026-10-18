@@ -980,6 +980,12 @@ const JS_APP_BASE = `
     gestion.appendChild(ligne);
     vue.appendChild(gestion);
 
+    var flip7 = el('div', 'aide');
+    var lienFlip7 = el('a', null, 'Compter les points d\\'une partie de Flip 7');
+    lienFlip7.href = '/flip7';
+    flip7.appendChild(lienFlip7);
+    vue.appendChild(flip7);
+
     app.textContent = '';
     app.appendChild(vue);
     rendreJoueursConnus();
@@ -1502,6 +1508,728 @@ const JS_TABLE = `
 
 const JS_APP = JS_APP_BASE + JS_TABLE;
 
+/* ---------------------------------------------------------------- flip 7 */
+
+/*
+ * Compteur de points pour une partie de Flip 7 jouée avec les vraies cartes,
+ * sur /flip7. Rien à voir avec les salles de Skyjo : une feuille de scores par
+ * groupe de joueurs (même liste de noms = même partie), rangée dans la table
+ * D1 `flip7`, créée au premier passage.
+ */
+
+const FLIP7_LIMITE_DEFAUT = 200;
+const FLIP7_LIMITE_MIN = 50;
+const FLIP7_LIMITE_MAX = 1000;
+const FLIP7_MAX_JOUEURS = 12;
+const FLIP7_NUMERO_MAX = 12;
+const FLIP7_CARTES_FLIP = 7;
+const FLIP7_PRIME = 15;
+const FLIP7_BONUS = [2, 4, 6, 8, 10];
+const FLIP7_PARTIES_LISTEES = 10;
+
+let flip7TablePrete = false;
+
+async function preparerFlip7(env) {
+  if (flip7TablePrete) return;
+  await bdd(env)
+    .prepare('CREATE TABLE IF NOT EXISTS flip7 (cle TEXT PRIMARY KEY, etat TEXT NOT NULL, maj TEXT NOT NULL)')
+    .run();
+  flip7TablePrete = true;
+}
+
+/** Les noms de la partie, dans l'ordre du tour de table. */
+function flip7Noms(valeur) {
+  const brut = Array.isArray(valeur) ? valeur : String(valeur || '').split(',');
+  const noms = brut.map(nomValide).filter(Boolean);
+  if (noms.length < MIN_JOUEURS) refuser('Il faut au moins deux joueurs.');
+  if (noms.length > FLIP7_MAX_JOUEURS) refuser(FLIP7_MAX_JOUEURS + ' joueurs au maximum.');
+  const minuscules = noms.map((n) => n.toLowerCase());
+  if (new Set(minuscules).size !== noms.length) refuser('Deux joueurs portent le même nom.');
+  return noms;
+}
+
+function flip7Cle(noms) {
+  return noms.map((n) => n.toLowerCase()).join('|');
+}
+
+function flip7Limite(valeur) {
+  const limite = parseInt(valeur, 10);
+  if (!Number.isFinite(limite)) return FLIP7_LIMITE_DEFAUT;
+  return Math.min(FLIP7_LIMITE_MAX, Math.max(FLIP7_LIMITE_MIN, limite));
+}
+
+/**
+ * Les points d'une main : somme des numéros, doublée par le x2, puis les
+ * bonus +2 à +10, puis 15 de prime pour sept numéros différents (le x2 ne
+ * touche ni les bonus ni la prime). Un joueur sauté marque zéro.
+ */
+function scoreFlip7(main) {
+  const source = main && typeof main === 'object' ? main : {};
+  const numeros = (Array.isArray(source.numeros) ? source.numeros : []).map((n) => parseInt(n, 10));
+  if (numeros.some((n) => !Number.isInteger(n) || n < 0 || n > FLIP7_NUMERO_MAX)) {
+    refuser('Numéro de carte inconnu.');
+  }
+  if (new Set(numeros).size !== numeros.length) {
+    refuser('Un numéro en double fait sauter le joueur : coche « Sauté ».');
+  }
+  if (numeros.length > FLIP7_CARTES_FLIP) refuser('Sept numéros au plus : la manche s\'arrête au Flip 7.');
+
+  const bonus = (Array.isArray(source.bonus) ? source.bonus : []).map((b) => parseInt(b, 10));
+  if (bonus.some((b) => !FLIP7_BONUS.includes(b)) || new Set(bonus).size !== bonus.length) {
+    refuser('Carte bonus inconnue.');
+  }
+
+  const detail = {
+    numeros: numeros.sort((a, b) => a - b),
+    x2: !!source.x2,
+    bonus: bonus.sort((a, b) => a - b),
+    saute: !!source.saute,
+    flip7: numeros.length === FLIP7_CARTES_FLIP,
+    score: 0,
+  };
+  if (detail.saute) {
+    detail.flip7 = false;
+    return detail;
+  }
+
+  let score = numeros.reduce((s, n) => s + n, 0);
+  if (detail.x2) score *= 2;
+  score += bonus.reduce((s, b) => s + b, 0);
+  if (detail.flip7) score += FLIP7_PRIME;
+  detail.score = score;
+  return detail;
+}
+
+function nouvelleFeuille(noms, limite) {
+  return { joueurs: noms, limite, manches: [], creee: new Date().toISOString() };
+}
+
+function totauxFlip7(feuille) {
+  return feuille.joueurs.map((_, index) =>
+    feuille.manches.reduce((somme, manche) => somme + manche[index].score, 0));
+}
+
+/**
+ * La partie s'arrête à la fin de la manche où quelqu'un atteint la limite ;
+ * le plus gros total gagne, et une égalité en tête se départage en rejouant.
+ */
+function vueFlip7(feuille, enregistree) {
+  const totaux = totauxFlip7(feuille);
+  const maxi = totaux.length ? Math.max(...totaux) : 0;
+  const enTete = feuille.joueurs.filter((_, i) => feuille.manches.length > 0 && totaux[i] === maxi);
+  const atteinte = feuille.manches.length > 0 && maxi >= feuille.limite;
+  return {
+    joueurs: feuille.joueurs,
+    limite: feuille.limite,
+    manches: feuille.manches,
+    totaux,
+    enTete,
+    gagnant: atteinte && enTete.length === 1 ? enTete[0] : null,
+    egalite: atteinte && enTete.length > 1,
+    enregistree,
+  };
+}
+
+async function lireFeuille(env, cle) {
+  const ligne = await bdd(env).prepare('SELECT etat FROM flip7 WHERE cle = ?').bind(cle).first();
+  if (!ligne) return null;
+  try {
+    return JSON.parse(ligne.etat);
+  } catch (err) {
+    return null;
+  }
+}
+
+async function ecrireFeuille(env, feuille) {
+  await bdd(env)
+    .prepare('INSERT OR REPLACE INTO flip7 (cle, etat, maj) VALUES (?, ?, ?)')
+    .bind(flip7Cle(feuille.joueurs), JSON.stringify(feuille), new Date().toISOString())
+    .run();
+}
+
+async function partiesFlip7(env) {
+  const res = await bdd(env)
+    .prepare('SELECT etat, maj FROM flip7 ORDER BY maj DESC LIMIT ?')
+    .bind(FLIP7_PARTIES_LISTEES)
+    .all();
+  const parties = [];
+  for (const ligne of res.results || []) {
+    try {
+      const vue = vueFlip7(JSON.parse(ligne.etat), true);
+      parties.push({
+        joueurs: vue.joueurs,
+        limite: vue.limite,
+        manches: vue.manches.length,
+        totaux: vue.totaux,
+        gagnant: vue.gagnant,
+        maj: ligne.maj,
+      });
+    } catch (err) {
+      // Une ligne illisible ne doit pas priver la page des autres.
+    }
+  }
+  return parties;
+}
+
+/**
+ * Le client envoie le nombre de manches qu'il connaît : si un autre téléphone
+ * a validé ou annulé une manche entre-temps, on refuse plutôt que de compter
+ * deux fois la même.
+ */
+function verifierAJour(feuille, connues) {
+  const n = parseInt(connues, 10);
+  if (Number.isInteger(n) && n !== feuille.manches.length) {
+    refuser('La feuille a changé sur un autre téléphone : elle vient d\'être rechargée.');
+  }
+}
+
+async function routeFlip7(request, env, url, chemin) {
+  await preparerFlip7(env);
+
+  if (chemin === '/api/flip7/etat') {
+    const noms = flip7Noms(url.searchParams.get('joueurs'));
+    const feuille = await lireFeuille(env, flip7Cle(noms));
+    if (feuille) return json(vueFlip7(feuille, true));
+    return json(vueFlip7(nouvelleFeuille(noms, flip7Limite(url.searchParams.get('limite'))), false));
+  }
+
+  if (request.method !== 'POST') return erreur('Méthode non autorisée.', 405);
+  const corps = await corpsJson(request);
+  const noms = flip7Noms(corps.joueurs);
+  const existante = await lireFeuille(env, flip7Cle(noms));
+
+  if (chemin === '/api/flip7/manche') {
+    const feuille = existante || nouvelleFeuille(noms, flip7Limite(corps.limite));
+    verifierAJour(feuille, corps.n);
+    const vue = vueFlip7(feuille, true);
+    if (vue.gagnant) refuser('La partie est terminée : lance une nouvelle partie.');
+    const mains = Array.isArray(corps.mains) ? corps.mains : [];
+    if (mains.length !== noms.length) refuser('Il manque la main d\'un joueur.');
+    // Les noms ont pu être saisis avec d'autres majuscules : on garde ceux du jour.
+    feuille.joueurs = noms;
+    feuille.manches.push(mains.map(scoreFlip7));
+    await ajouterJoueursFlip7(env, noms);
+    await ecrireFeuille(env, feuille);
+    return json(vueFlip7(feuille, true));
+  }
+
+  if (chemin === '/api/flip7/annuler') {
+    if (!existante || existante.manches.length === 0) refuser('Aucune manche à annuler.');
+    verifierAJour(existante, corps.n);
+    existante.manches.pop();
+    await ecrireFeuille(env, existante);
+    return json(vueFlip7(existante, true));
+  }
+
+  if (chemin === '/api/flip7/nouvelle') {
+    const feuille = nouvelleFeuille(noms, flip7Limite(corps.limite));
+    await ecrireFeuille(env, feuille);
+    return json(vueFlip7(feuille, true));
+  }
+
+  return erreur('Route inconnue.', 404);
+}
+
+async function ajouterJoueursFlip7(env, noms) {
+  await bdd(env).batch(noms.map((nom) =>
+    bdd(env).prepare('INSERT OR IGNORE INTO joueurs (nom) VALUES (?)').bind(nom)));
+}
+
+const CSS_FLIP7 = `
+  .f7-joueur .tete{display:flex; justify-content:space-between; align-items:baseline;
+    gap:8px; margin-bottom:8px; font-weight:600;}
+  .f7-joueur .tete .total{color:var(--muted); font-weight:400; font-size:0.8rem;}
+  .f7-joueur .tete .score{color:var(--or); font-size:1.25rem; flex:0 0 auto;}
+  .f7-numeros{display:grid; grid-template-columns:repeat(7, 1fr); gap:5px;}
+  .f7-mods{display:grid; grid-template-columns:repeat(6, 1fr); gap:5px; margin-top:5px;}
+  .f7-btn{padding:9px 0; font-size:1rem; background:rgba(255,255,255,0.1); color:var(--panel);
+    border-radius:9px;}
+  .f7-btn.on{background:var(--or); color:#14213D;}
+  .f7-btn.mod{color:#FFB4A2;}
+  .f7-btn.mod.on{background:#E76F51; color:#fff;}
+  .f7-saute{margin-top:6px; width:100%; padding:8px;}
+  .f7-saute.on{background:#E76F51; color:#fff; border-color:#E76F51;}
+  .f7-joueur.saute .f7-numeros, .f7-joueur.saute .f7-mods{opacity:0.3;}
+  .f7-detail{font-size:0.72rem; color:var(--muted); margin-top:6px; min-height:14px; text-align:center;}
+  .defile{overflow-x:auto;}
+  td.tete-course{color:var(--or);}
+  .f7-partie{display:block; width:100%; text-align:left; background:rgba(255,255,255,0.06);
+    color:var(--panel); margin-top:6px; font-weight:400; font-size:0.85rem;}
+  .f7-partie .quand{color:var(--muted); font-size:0.72rem; display:block;}
+  .ligne-joueur{display:flex; gap:6px; align-items:center; margin-top:6px;}
+  .ligne-joueur > span{flex:0 0 22px; color:var(--muted); font-size:0.8rem; text-align:right;}
+  .ligne-joueur > div{flex:1;}
+`;
+
+const JS_FLIP7 = `
+  var app = document.getElementById('app');
+  var params = new URLSearchParams(location.search);
+  var NOMS = (params.get('joueurs') || '').split(',')
+    .map(function (n) { return n.trim(); })
+    .filter(Boolean);
+  var LIMITE = parseInt(params.get('limite'), 10) || LIMITE_DEFAUT;
+  var ETAT = null;
+  var MAINS = [];
+  var STATUT = '';
+  var ERREUR = false;
+  var enCours = false;
+
+  function el(balise, classe, texte) {
+    var noeud = document.createElement(balise);
+    if (classe) noeud.className = classe;
+    if (texte !== undefined && texte !== null) noeud.textContent = texte;
+    return noeud;
+  }
+
+  function dire(texte, estErreur) {
+    STATUT = texte || '';
+    ERREUR = !!estErreur;
+    var zone = document.getElementById('statut');
+    if (zone) {
+      zone.textContent = STATUT;
+      zone.className = 'statut' + (ERREUR ? ' erreur' : '');
+    }
+  }
+
+  function zoneStatut() {
+    var statut = el('div', 'statut' + (ERREUR ? ' erreur' : ''), STATUT);
+    statut.id = 'statut';
+    return statut;
+  }
+
+  function lireJson(r) {
+    return r.json().then(function (data) {
+      if (!r.ok) throw new Error(data && data.erreur ? data.erreur : 'Erreur ' + r.status);
+      return data;
+    });
+  }
+
+  function poster(chemin, corps) {
+    if (enCours) return Promise.resolve(null);
+    enCours = true;
+    corps.joueurs = NOMS;
+    corps.limite = LIMITE;
+    return fetch(chemin, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(corps)
+    }).then(lireJson).then(function (data) {
+      enCours = false;
+      dire('');
+      return data;
+    }).catch(function (err) {
+      enCours = false;
+      dire(err.message, true);
+      // La feuille a pu bouger ailleurs : on reprend la version du serveur.
+      return charger().then(function () { return null; });
+    });
+  }
+
+  function charger() {
+    var url = '/api/flip7/etat?joueurs=' + encodeURIComponent(NOMS.join(','))
+      + '&limite=' + LIMITE;
+    return fetch(url).then(lireJson).then(function (data) {
+      recevoir(data);
+    }).catch(function (err) {
+      dire(err.message, true);
+      if (!ETAT) ecranAccueil();
+    });
+  }
+
+  function mainVide() {
+    return { numeros: [], x2: false, bonus: [], saute: false };
+  }
+
+  /** Une nouvelle manche sur le serveur vide les mains en cours de saisie. */
+  function recevoir(data) {
+    var nouvelleManche = !ETAT || ETAT.manches.length !== data.manches.length;
+    ETAT = data;
+    LIMITE = data.limite;
+    if (nouvelleManche || MAINS.length !== data.joueurs.length) {
+      MAINS = data.joueurs.map(mainVide);
+    }
+    rendre();
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && ETAT) charger();
+  });
+
+  /* ------------------------------------------------------------- calcul */
+
+  function scoreMain(main) {
+    if (main.saute) return 0;
+    var score = main.numeros.reduce(function (s, n) { return s + n; }, 0);
+    if (main.x2) score *= 2;
+    score += main.bonus.reduce(function (s, b) { return s + b; }, 0);
+    if (main.numeros.length === CARTES_FLIP) score += PRIME;
+    return score;
+  }
+
+  function detailMain(main) {
+    if (main.saute) return 'Sauté : 0 point cette manche';
+    if (!main.numeros.length && !main.bonus.length) return 'Aucune carte';
+    var morceaux = [];
+    if (main.numeros.length) morceaux.push(main.x2 ? '(' + main.numeros.join('+') + ') × 2' : main.numeros.join(' + '));
+    main.bonus.forEach(function (b) { morceaux.push('+' + b); });
+    if (main.numeros.length === CARTES_FLIP) morceaux.push('Flip 7 +' + PRIME);
+    return morceaux.join('  ');
+  }
+
+  function basculer(liste, valeur) {
+    var i = liste.indexOf(valeur);
+    if (i === -1) liste.push(valeur); else liste.splice(i, 1);
+  }
+
+  /* ------------------------------------------------------------ accueil */
+
+  function choixJoueur(defaut) {
+    var bloc = el('div');
+    var select = el('select');
+    var vide = el('option', null, '— choisir —');
+    vide.value = '';
+    select.appendChild(vide);
+    JOUEURS.forEach(function (nom) {
+      var o = el('option', null, nom);
+      o.value = nom;
+      select.appendChild(o);
+    });
+    var nouveau = el('option', null, '+ Nouveau joueur…');
+    nouveau.value = '__nouveau__';
+    select.appendChild(nouveau);
+
+    var champ = el('input');
+    champ.type = 'text';
+    champ.maxLength = 20;
+    champ.placeholder = 'Nom du joueur';
+    champ.hidden = true;
+
+    if (defaut && JOUEURS.indexOf(defaut) !== -1) {
+      select.value = defaut;
+    } else if (defaut) {
+      select.value = '__nouveau__';
+      champ.hidden = false;
+      champ.value = defaut;
+    }
+    select.addEventListener('change', function () {
+      champ.hidden = select.value !== '__nouveau__';
+      if (!champ.hidden) champ.focus();
+    });
+
+    bloc.appendChild(select);
+    bloc.appendChild(champ);
+    bloc.lire = function () {
+      return (select.value === '__nouveau__' ? champ.value : select.value).trim();
+    };
+    return bloc;
+  }
+
+  function lienPartie(noms, limite) {
+    return '/flip7?joueurs=' + encodeURIComponent(noms.join(',')) + '&limite=' + limite;
+  }
+
+  function ecranAccueil() {
+    var precedents = [];
+    try { precedents = JSON.parse(localStorage.getItem('flip7:noms') || '[]'); } catch (e) {}
+    if (NOMS.length) precedents = NOMS;
+    var nombre = Math.max(MIN_JOUEURS, Math.min(MAX_JOUEURS, precedents.length || 3));
+
+    var vue = document.createDocumentFragment();
+    vue.appendChild(el('h1', null, 'Flip 7'));
+    vue.appendChild(el('div', 'subtitle', 'Compteur de points, avec les vraies cartes'));
+    vue.appendChild(zoneStatut());
+
+    var bloc = el('div', 'card');
+    bloc.appendChild(el('h2', null, 'Nouvelle partie'));
+    bloc.appendChild(el('label', null, 'Nombre de joueurs'));
+    var choixNombre = el('select');
+    for (var n = MIN_JOUEURS; n <= MAX_JOUEURS; n++) {
+      var o = el('option', null, String(n));
+      o.value = String(n);
+      choixNombre.appendChild(o);
+    }
+    choixNombre.value = String(nombre);
+    bloc.appendChild(choixNombre);
+
+    bloc.appendChild(el('label', null, 'Joueurs, dans l\\'ordre du tour'));
+    var lignes = el('div');
+    bloc.appendChild(lignes);
+    var champs = [];
+    function dessinerLignes() {
+      var deja = champs.map(function (c) { return c.lire(); });
+      lignes.textContent = '';
+      champs = [];
+      for (var i = 0; i < parseInt(choixNombre.value, 10); i++) {
+        var ligne = el('div', 'ligne-joueur');
+        ligne.appendChild(el('span', null, String(i + 1)));
+        var champ = choixJoueur(deja[i] || precedents[i] || '');
+        champs.push(champ);
+        ligne.appendChild(champ);
+        lignes.appendChild(ligne);
+      }
+    }
+    choixNombre.addEventListener('change', dessinerLignes);
+    dessinerLignes();
+
+    bloc.appendChild(el('label', null, 'Partie terminée à'));
+    var champLimite = el('input');
+    champLimite.type = 'number';
+    champLimite.min = String(LIMITE_MIN);
+    champLimite.max = String(LIMITE_MAX);
+    champLimite.value = String(LIMITE);
+    bloc.appendChild(champLimite);
+
+    var go = el('button', 'primary', 'Commencer');
+    go.addEventListener('click', function () {
+      var noms = champs.map(function (c) { return c.lire(); });
+      if (noms.some(function (n) { return !n; })) { dire('Choisis le nom de chaque joueur.', true); return; }
+      var minuscules = noms.map(function (n) { return n.toLowerCase(); });
+      if (minuscules.some(function (n, i) { return minuscules.indexOf(n) !== i; })) {
+        dire('Deux joueurs portent le même nom.', true);
+        return;
+      }
+      var limite = parseInt(champLimite.value, 10) || LIMITE_DEFAUT;
+      try { localStorage.setItem('flip7:noms', JSON.stringify(noms)); } catch (e) {}
+      location.href = lienPartie(noms, limite);
+    });
+    bloc.appendChild(go);
+    vue.appendChild(bloc);
+
+    if (PARTIES.length) {
+      var histo = el('div', 'card');
+      histo.appendChild(el('h2', null, 'Dernières parties'));
+      PARTIES.forEach(function (partie) {
+        var bouton = el('button', 'f7-partie');
+        bouton.type = 'button';
+        var resume = partie.joueurs.map(function (nom, i) { return nom + ' ' + partie.totaux[i]; }).join(' · ');
+        bouton.appendChild(el('span', null, resume));
+        var quand = new Date(partie.maj).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+        bouton.appendChild(el('span', 'quand', quand + ' — ' + partie.manches + ' manche'
+          + (partie.manches > 1 ? 's' : '')
+          + (partie.gagnant ? ' — ' + partie.gagnant + ' a gagné' : ' — en cours')));
+        bouton.addEventListener('click', function () {
+          location.href = lienPartie(partie.joueurs, partie.limite);
+        });
+        histo.appendChild(bouton);
+      });
+      vue.appendChild(histo);
+    }
+
+    var retour = el('div', 'aide');
+    var lien = el('a', null, 'Jouer à Skyjo en ligne');
+    lien.href = '/';
+    retour.appendChild(lien);
+    vue.appendChild(retour);
+
+    app.textContent = '';
+    app.appendChild(vue);
+  }
+
+  /* ------------------------------------------------------------- partie */
+
+  function tableauScores() {
+    var table = el('table');
+    var trh = el('tr');
+    trh.appendChild(el('th', null, 'Joueur'));
+    ETAT.manches.forEach(function (_, m) { trh.appendChild(el('th', null, 'M' + (m + 1))); });
+    trh.appendChild(el('th', null, 'Total'));
+    var thead = el('thead');
+    thead.appendChild(trh);
+    table.appendChild(thead);
+
+    var tbody = el('tbody');
+    ETAT.joueurs.forEach(function (nom, i) {
+      var tr = el('tr');
+      var cellule = el('td', null, nom);
+      cellule.style.textAlign = 'left';
+      tr.appendChild(cellule);
+      ETAT.manches.forEach(function (manche) {
+        var main = manche[i];
+        var texte = main.saute ? '✕' : String(main.score) + (main.flip7 ? '★' : '');
+        tr.appendChild(el('td', null, texte));
+      });
+      var total = el('td', ETAT.enTete.indexOf(nom) !== -1 ? 'tete-course' : null, String(ETAT.totaux[i]));
+      total.style.fontWeight = '700';
+      tr.appendChild(total);
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+
+    var defile = el('div', 'defile');
+    defile.appendChild(table);
+    return defile;
+  }
+
+  function blocJoueur(nom, i) {
+    var main = MAINS[i];
+    var bloc = el('div', 'card f7-joueur' + (main.saute ? ' saute' : ''));
+    var tete = el('div', 'tete');
+    var gauche = el('span', null, nom + ' ');
+    gauche.appendChild(el('span', 'total', 'total ' + ETAT.totaux[i]));
+    tete.appendChild(gauche);
+    tete.appendChild(el('span', 'score', '+' + scoreMain(main)));
+    bloc.appendChild(tete);
+
+    var plein = main.numeros.length >= CARTES_FLIP;
+    var numeros = el('div', 'f7-numeros');
+    for (var n = 0; n <= NUMERO_MAX; n++) {
+      (function (valeur) {
+        var choisi = main.numeros.indexOf(valeur) !== -1;
+        var bouton = el('button', 'f7-btn' + (choisi ? ' on' : ''), String(valeur));
+        bouton.type = 'button';
+        bouton.disabled = main.saute || (plein && !choisi);
+        bouton.addEventListener('click', function () {
+          basculer(main.numeros, valeur);
+          main.numeros.sort(function (a, b) { return a - b; });
+          rendre();
+        });
+        numeros.appendChild(bouton);
+      })(n);
+    }
+    bloc.appendChild(numeros);
+
+    var mods = el('div', 'f7-mods');
+    var x2 = el('button', 'f7-btn mod' + (main.x2 ? ' on' : ''), '×2');
+    x2.type = 'button';
+    x2.disabled = main.saute;
+    x2.addEventListener('click', function () { main.x2 = !main.x2; rendre(); });
+    mods.appendChild(x2);
+    BONUS.forEach(function (valeur) {
+      var choisi = main.bonus.indexOf(valeur) !== -1;
+      var bouton = el('button', 'f7-btn mod' + (choisi ? ' on' : ''), '+' + valeur);
+      bouton.type = 'button';
+      bouton.disabled = main.saute;
+      bouton.addEventListener('click', function () {
+        basculer(main.bonus, valeur);
+        main.bonus.sort(function (a, b) { return a - b; });
+        rendre();
+      });
+      mods.appendChild(bouton);
+    });
+    bloc.appendChild(mods);
+
+    var saute = el('button', 'ghost f7-saute' + (main.saute ? ' on' : ''),
+      main.saute ? 'Sauté (doublon) — 0 point' : 'Sauté sur un doublon ?');
+    saute.type = 'button';
+    saute.addEventListener('click', function () { main.saute = !main.saute; rendre(); });
+    bloc.appendChild(saute);
+
+    bloc.appendChild(el('div', 'f7-detail', detailMain(main)));
+    return bloc;
+  }
+
+  function ecranPartie() {
+    var vue = document.createDocumentFragment();
+    var entete = el('div', 'entete');
+    entete.appendChild(el('span', null, 'Flip 7'));
+    entete.appendChild(el('span', null, 'Manche ' + (ETAT.manches.length + 1) + ' — fin à ' + ETAT.limite));
+    vue.appendChild(entete);
+
+    if (ETAT.gagnant) {
+      vue.appendChild(el('div', 'bandeau fin', ETAT.gagnant + ' gagne la partie !'));
+    } else if (ETAT.egalite) {
+      vue.appendChild(el('div', 'bandeau moi',
+        'Égalité entre ' + ETAT.enTete.join(' et ') + ' : on rejoue une manche'));
+    }
+    vue.appendChild(zoneStatut());
+
+    if (ETAT.manches.length) {
+      var scores = el('div', 'card');
+      scores.appendChild(tableauScores());
+      vue.appendChild(scores);
+    }
+
+    if (!ETAT.gagnant) {
+      vue.appendChild(el('div', 'subtitle', 'Touche les cartes de chacun à la fin de la manche'));
+      ETAT.joueurs.forEach(function (nom, i) { vue.appendChild(blocJoueur(nom, i)); });
+      var valider = el('button', 'primary', 'Valider la manche ' + (ETAT.manches.length + 1));
+      valider.addEventListener('click', function () {
+        poster('/api/flip7/manche', { n: ETAT.manches.length, mains: MAINS }).then(function (data) {
+          if (data) recevoir(data);
+          window.scrollTo(0, 0);
+        });
+      });
+      vue.appendChild(valider);
+    }
+
+    var actions = el('div', 'card');
+    actions.style.marginTop = '12px';
+    if (ETAT.manches.length) {
+      var annuler = el('button', 'ghost', 'Annuler la dernière manche');
+      annuler.style.width = '100%';
+      annuler.addEventListener('click', function () {
+        if (!confirm('Annuler la manche ' + ETAT.manches.length + ' ?')) return;
+        poster('/api/flip7/annuler', { n: ETAT.manches.length }).then(function (data) {
+          if (data) recevoir(data);
+        });
+      });
+      actions.appendChild(annuler);
+    }
+    var nouvelle = el('button', ETAT.gagnant ? 'primary' : 'ghost', 'Nouvelle partie');
+    nouvelle.style.width = '100%';
+    nouvelle.style.marginTop = '8px';
+    nouvelle.addEventListener('click', function () {
+      if (!ETAT.gagnant && ETAT.manches.length && !confirm('Remettre les scores à zéro ?')) return;
+      poster('/api/flip7/nouvelle', {}).then(function (data) {
+        if (data) recevoir(data);
+      });
+    });
+    actions.appendChild(nouvelle);
+    var changer = el('button', 'ghost', 'Changer de joueurs');
+    changer.style.width = '100%';
+    changer.style.marginTop = '8px';
+    changer.addEventListener('click', function () { location.href = '/flip7'; });
+    actions.appendChild(changer);
+    vue.appendChild(actions);
+
+    var regle = el('div', 'aide',
+      'Numéros additionnés, ×2 sur les numéros seulement, puis les bonus, puis +'
+      + PRIME + ' pour sept numéros (★). Un doublon fait sauter : 0 point.');
+    vue.appendChild(regle);
+
+    app.textContent = '';
+    app.appendChild(vue);
+  }
+
+  function rendre() {
+    if (!ETAT) { ecranAccueil(); return; }
+    ecranPartie();
+  }
+
+  if (NOMS.length >= MIN_JOUEURS) {
+    try { localStorage.setItem('flip7:noms', JSON.stringify(NOMS)); } catch (e) {}
+    charger();
+  } else {
+    ecranAccueil();
+  }
+`;
+
+function pageFlip7Html(joueursConnus, parties) {
+  const constantes = {
+    JOUEURS: joueursConnus,
+    PARTIES: parties,
+    MIN_JOUEURS,
+    MAX_JOUEURS: FLIP7_MAX_JOUEURS,
+    LIMITE_DEFAUT: FLIP7_LIMITE_DEFAUT,
+    LIMITE_MIN: FLIP7_LIMITE_MIN,
+    LIMITE_MAX: FLIP7_LIMITE_MAX,
+    NUMERO_MAX: FLIP7_NUMERO_MAX,
+    CARTES_FLIP: FLIP7_CARTES_FLIP,
+    PRIME: FLIP7_PRIME,
+    BONUS: FLIP7_BONUS,
+  };
+  const declarations = Object.entries(constantes)
+    .map(([nom, valeur]) => 'var ' + nom + ' = ' + toScriptJson(valeur) + ';')
+    .join('');
+  return '<!doctype html><html lang="fr"><head><meta charset="utf-8">'
+    + '<meta name="viewport" content="width=device-width, initial-scale=1">'
+    + '<link rel="icon" href="/favicon.svg" type="image/svg+xml">'
+    + '<title>Flip 7 — points</title><style>' + CSS + CSS_FLIP7 + '</style></head>'
+    + '<body><div class="wrap"><div id="app"></div></div>'
+    + '<script>' + declarations + JS_FLIP7 + '</script>'
+    + '</body></html>';
+}
+
 /* ------------------------------------------------------------------ routes */
 
 async function corpsJson(request) {
@@ -1536,6 +2264,17 @@ export default {
     }
 
     try {
+      if (chemin.startsWith('/api/flip7/')) return await routeFlip7(request, env, url, chemin);
+
+      if (chemin === '/flip7') {
+        if (!bdd(env)) return erreur('Stockage non configuré (binding D1 « DB »).', 500);
+        await preparerFlip7(env);
+        const [connus, parties] = await Promise.all([lireJoueurs(env), partiesFlip7(env)]);
+        return new Response(pageFlip7Html(connus, parties), {
+          headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
+        });
+      }
+
       if (chemin === '/api/etat') {
         const code = normaliserCode(url.searchParams.get('code'));
         const jeton = jetonValide(url.searchParams.get('jeton'));
