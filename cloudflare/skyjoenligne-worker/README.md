@@ -46,13 +46,9 @@ lien y mène depuis l'accueil du Skyjo).
 
 1. Choisir le nombre de joueurs (2 à 12), leurs noms (mêmes joueurs
    enregistrés que le Skyjo) et le score de fin (200 par défaut).
-2. À la fin de chaque manche, toucher pour chacun ses numéros (0 à 12), son
-   ×2 et ses bonus (+2 à +10), ou « Sauté » s'il a tiré un doublon. Le score
-   s'affiche au fil de la saisie, puis « Valider la manche ».
-3. Calcul : somme des numéros, doublée par le ×2 (qui ne touche que les
-   numéros), plus les bonus, plus 15 pour sept numéros différents (★ dans le
-   tableau). Un joueur sauté marque 0.
-4. La partie s'arrête à la fin de la manche où quelqu'un atteint la limite ;
+2. À la fin de chaque manche, taper les points de chacun (une case vide vaut
+   0 ; « Entrée » passe au joueur suivant), puis « Valider la manche ».
+3. La partie s'arrête à la fin de la manche où quelqu'un atteint la limite ;
    le plus gros total gagne. En cas d'égalité en tête, on rejoue une manche.
 
 « Annuler la dernière manche » corrige une saisie ratée, « Nouvelle partie »
@@ -65,7 +61,7 @@ et la feuille rechargée, pour ne jamais compter deux fois la même manche.
 Les feuilles vivent dans la table D1 `flip7`, créée automatiquement au premier
 passage : rien à faire sur la base. Routes : `GET /api/flip7/etat?joueurs=…`,
 `POST /api/flip7/manche`, `POST /api/flip7/annuler`, `POST /api/flip7/nouvelle`
-(corps `{"joueurs": […], "limite": 200, "n": <manches connues>, "mains": […]}`).
+(corps `{"joueurs": […], "limite": 200, "n": <manches connues>, "mains": [<points de chacun>]}`).
 
 ## Pourquoi D1 et pas le KV
 

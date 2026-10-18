@@ -1512,7 +1512,7 @@ const JS_APP = JS_APP_BASE + JS_TABLE;
 
 /*
  * Compteur de points pour une partie de Flip 7 jouée avec les vraies cartes,
- * sur /flip7. Rien à voir avec les salles de Skyjo : une feuille de scores par
+ * sur /flip7 : on tape les points de chacun à la fin de la manche. Rien à voir avec les salles de Skyjo : une feuille de scores par
  * groupe de joueurs (même liste de noms = même partie), rangée dans la table
  * D1 `flip7`, créée au premier passage.
  */
@@ -1521,10 +1521,7 @@ const FLIP7_LIMITE_DEFAUT = 200;
 const FLIP7_LIMITE_MIN = 50;
 const FLIP7_LIMITE_MAX = 1000;
 const FLIP7_MAX_JOUEURS = 12;
-const FLIP7_NUMERO_MAX = 12;
-const FLIP7_CARTES_FLIP = 7;
-const FLIP7_PRIME = 15;
-const FLIP7_BONUS = [2, 4, 6, 8, 10];
+const FLIP7_POINTS_MAX = 500;
 const FLIP7_PARTIES_LISTEES = 10;
 
 let flip7TablePrete = false;
@@ -1558,46 +1555,14 @@ function flip7Limite(valeur) {
   return Math.min(FLIP7_LIMITE_MAX, Math.max(FLIP7_LIMITE_MIN, limite));
 }
 
-/**
- * Les points d'une main : somme des numéros, doublée par le x2, puis les
- * bonus +2 à +10, puis 15 de prime pour sept numéros différents (le x2 ne
- * touche ni les bonus ni la prime). Un joueur sauté marque zéro.
- */
-function scoreFlip7(main) {
-  const source = main && typeof main === 'object' ? main : {};
-  const numeros = (Array.isArray(source.numeros) ? source.numeros : []).map((n) => parseInt(n, 10));
-  if (numeros.some((n) => !Number.isInteger(n) || n < 0 || n > FLIP7_NUMERO_MAX)) {
-    refuser('Numéro de carte inconnu.');
+/** Les points marqués par un joueur sur une manche ; une case vide vaut 0. */
+function pointsFlip7(valeur) {
+  if (valeur === null || valeur === undefined || valeur === '') return { score: 0 };
+  const points = Number(valeur);
+  if (!Number.isInteger(points) || points < 0 || points > FLIP7_POINTS_MAX) {
+    refuser('Points invalides : un nombre entier entre 0 et ' + FLIP7_POINTS_MAX + '.');
   }
-  if (new Set(numeros).size !== numeros.length) {
-    refuser('Un numéro en double fait sauter le joueur : coche « Sauté ».');
-  }
-  if (numeros.length > FLIP7_CARTES_FLIP) refuser('Sept numéros au plus : la manche s\'arrête au Flip 7.');
-
-  const bonus = (Array.isArray(source.bonus) ? source.bonus : []).map((b) => parseInt(b, 10));
-  if (bonus.some((b) => !FLIP7_BONUS.includes(b)) || new Set(bonus).size !== bonus.length) {
-    refuser('Carte bonus inconnue.');
-  }
-
-  const detail = {
-    numeros: numeros.sort((a, b) => a - b),
-    x2: !!source.x2,
-    bonus: bonus.sort((a, b) => a - b),
-    saute: !!source.saute,
-    flip7: numeros.length === FLIP7_CARTES_FLIP,
-    score: 0,
-  };
-  if (detail.saute) {
-    detail.flip7 = false;
-    return detail;
-  }
-
-  let score = numeros.reduce((s, n) => s + n, 0);
-  if (detail.x2) score *= 2;
-  score += bonus.reduce((s, b) => s + b, 0);
-  if (detail.flip7) score += FLIP7_PRIME;
-  detail.score = score;
-  return detail;
+  return { score: points };
 }
 
 function nouvelleFeuille(noms, limite) {
@@ -1704,10 +1669,10 @@ async function routeFlip7(request, env, url, chemin) {
     const vue = vueFlip7(feuille, true);
     if (vue.gagnant) refuser('La partie est terminée : lance une nouvelle partie.');
     const mains = Array.isArray(corps.mains) ? corps.mains : [];
-    if (mains.length !== noms.length) refuser('Il manque la main d\'un joueur.');
+    if (mains.length !== noms.length) refuser('Il manque les points d\'un joueur.');
     // Les noms ont pu être saisis avec d'autres majuscules : on garde ceux du jour.
     feuille.joueurs = noms;
-    feuille.manches.push(mains.map(scoreFlip7));
+    feuille.manches.push(mains.map(pointsFlip7));
     await ajouterJoueursFlip7(env, noms);
     await ecrireFeuille(env, feuille);
     return json(vueFlip7(feuille, true));
@@ -1736,21 +1701,12 @@ async function ajouterJoueursFlip7(env, noms) {
 }
 
 const CSS_FLIP7 = `
-  .f7-joueur .tete{display:flex; justify-content:space-between; align-items:baseline;
-    gap:8px; margin-bottom:8px; font-weight:600;}
-  .f7-joueur .tete .total{color:var(--muted); font-weight:400; font-size:0.8rem;}
-  .f7-joueur .tete .score{color:var(--or); font-size:1.25rem; flex:0 0 auto;}
-  .f7-numeros{display:grid; grid-template-columns:repeat(7, 1fr); gap:5px;}
-  .f7-mods{display:grid; grid-template-columns:repeat(6, 1fr); gap:5px; margin-top:5px;}
-  .f7-btn{padding:9px 0; font-size:1rem; background:rgba(255,255,255,0.1); color:var(--panel);
-    border-radius:9px;}
-  .f7-btn.on{background:var(--or); color:#14213D;}
-  .f7-btn.mod{color:#FFB4A2;}
-  .f7-btn.mod.on{background:#E76F51; color:#fff;}
-  .f7-saute{margin-top:6px; width:100%; padding:8px;}
-  .f7-saute.on{background:#E76F51; color:#fff; border-color:#E76F51;}
-  .f7-joueur.saute .f7-numeros, .f7-joueur.saute .f7-mods{opacity:0.3;}
-  .f7-detail{font-size:0.72rem; color:var(--muted); margin-top:6px; min-height:14px; text-align:center;}
+  .f7-ligne{display:flex; align-items:center; gap:10px; margin:0; padding:6px 0;
+    color:var(--panel); font-size:1rem; border-bottom:1px solid rgba(255,255,255,0.08);}
+  .f7-ligne:last-child{border-bottom:none;}
+  .f7-ligne .nom{flex:1; min-width:0; font-weight:600;}
+  .f7-ligne .total{display:block; color:var(--muted); font-weight:400; font-size:0.75rem;}
+  .f7-ligne input{flex:0 0 96px; width:96px; font-size:1.15rem;}
   .defile{overflow-x:auto;}
   td.tete-course{color:var(--or);}
   .f7-partie{display:block; width:100%; text-align:left; background:rgba(255,255,255,0.06);
@@ -1837,10 +1793,10 @@ const JS_FLIP7 = `
   }
 
   function mainVide() {
-    return { numeros: [], x2: false, bonus: [], saute: false };
+    return '';
   }
 
-  /** Une nouvelle manche sur le serveur vide les mains en cours de saisie. */
+  /** Une nouvelle manche sur le serveur vide les points en cours de saisie. */
   function recevoir(data) {
     var nouvelleManche = !ETAT || ETAT.manches.length !== data.manches.length;
     ETAT = data;
@@ -1854,32 +1810,6 @@ const JS_FLIP7 = `
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden && ETAT) charger();
   });
-
-  /* ------------------------------------------------------------- calcul */
-
-  function scoreMain(main) {
-    if (main.saute) return 0;
-    var score = main.numeros.reduce(function (s, n) { return s + n; }, 0);
-    if (main.x2) score *= 2;
-    score += main.bonus.reduce(function (s, b) { return s + b; }, 0);
-    if (main.numeros.length === CARTES_FLIP) score += PRIME;
-    return score;
-  }
-
-  function detailMain(main) {
-    if (main.saute) return 'Sauté : 0 point cette manche';
-    if (!main.numeros.length && !main.bonus.length) return 'Aucune carte';
-    var morceaux = [];
-    if (main.numeros.length) morceaux.push(main.x2 ? '(' + main.numeros.join('+') + ') × 2' : main.numeros.join(' + '));
-    main.bonus.forEach(function (b) { morceaux.push('+' + b); });
-    if (main.numeros.length === CARTES_FLIP) morceaux.push('Flip 7 +' + PRIME);
-    return morceaux.join('  ');
-  }
-
-  function basculer(liste, valeur) {
-    var i = liste.indexOf(valeur);
-    if (i === -1) liste.push(valeur); else liste.splice(i, 1);
-  }
 
   /* ------------------------------------------------------------ accueil */
 
@@ -2044,9 +1974,7 @@ const JS_FLIP7 = `
       cellule.style.textAlign = 'left';
       tr.appendChild(cellule);
       ETAT.manches.forEach(function (manche) {
-        var main = manche[i];
-        var texte = main.saute ? '✕' : String(main.score) + (main.flip7 ? '★' : '');
-        tr.appendChild(el('td', null, texte));
+        tr.appendChild(el('td', null, String(manche[i].score)));
       });
       var total = el('td', ETAT.enTete.indexOf(nom) !== -1 ? 'tete-course' : null, String(ETAT.totaux[i]));
       total.style.fontWeight = '700';
@@ -2060,61 +1988,34 @@ const JS_FLIP7 = `
     return defile;
   }
 
-  function blocJoueur(nom, i) {
-    var main = MAINS[i];
-    var bloc = el('div', 'card f7-joueur' + (main.saute ? ' saute' : ''));
-    var tete = el('div', 'tete');
-    var gauche = el('span', null, nom + ' ');
-    gauche.appendChild(el('span', 'total', 'total ' + ETAT.totaux[i]));
-    tete.appendChild(gauche);
-    tete.appendChild(el('span', 'score', '+' + scoreMain(main)));
-    bloc.appendChild(tete);
-
-    var plein = main.numeros.length >= CARTES_FLIP;
-    var numeros = el('div', 'f7-numeros');
-    for (var n = 0; n <= NUMERO_MAX; n++) {
-      (function (valeur) {
-        var choisi = main.numeros.indexOf(valeur) !== -1;
-        var bouton = el('button', 'f7-btn' + (choisi ? ' on' : ''), String(valeur));
-        bouton.type = 'button';
-        bouton.disabled = main.saute || (plein && !choisi);
-        bouton.addEventListener('click', function () {
-          basculer(main.numeros, valeur);
-          main.numeros.sort(function (a, b) { return a - b; });
-          rendre();
-        });
-        numeros.appendChild(bouton);
-      })(n);
-    }
-    bloc.appendChild(numeros);
-
-    var mods = el('div', 'f7-mods');
-    var x2 = el('button', 'f7-btn mod' + (main.x2 ? ' on' : ''), '×2');
-    x2.type = 'button';
-    x2.disabled = main.saute;
-    x2.addEventListener('click', function () { main.x2 = !main.x2; rendre(); });
-    mods.appendChild(x2);
-    BONUS.forEach(function (valeur) {
-      var choisi = main.bonus.indexOf(valeur) !== -1;
-      var bouton = el('button', 'f7-btn mod' + (choisi ? ' on' : ''), '+' + valeur);
-      bouton.type = 'button';
-      bouton.disabled = main.saute;
-      bouton.addEventListener('click', function () {
-        basculer(main.bonus, valeur);
-        main.bonus.sort(function (a, b) { return a - b; });
-        rendre();
+  /** Une ligne par joueur : son total et la case où taper ses points. */
+  function saisieManche() {
+    var bloc = el('div', 'card');
+    bloc.appendChild(el('h2', null, 'Points de la manche ' + (ETAT.manches.length + 1)));
+    var champs = [];
+    ETAT.joueurs.forEach(function (nom, i) {
+      var ligne = el('label', 'f7-ligne');
+      var gauche = el('span', 'nom', nom);
+      gauche.appendChild(el('span', 'total', 'total ' + ETAT.totaux[i]));
+      ligne.appendChild(gauche);
+      var champ = el('input');
+      champ.type = 'number';
+      champ.inputMode = 'numeric';
+      champ.min = '0';
+      champ.max = String(POINTS_MAX);
+      champ.placeholder = '0';
+      champ.value = MAINS[i];
+      // Pas de rendu à chaque chiffre : le clavier se refermerait.
+      champ.addEventListener('input', function () { MAINS[i] = champ.value.trim(); });
+      champ.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        if (champs[i + 1]) champs[i + 1].focus(); else champ.blur();
       });
-      mods.appendChild(bouton);
+      champs.push(champ);
+      ligne.appendChild(champ);
+      bloc.appendChild(ligne);
     });
-    bloc.appendChild(mods);
-
-    var saute = el('button', 'ghost f7-saute' + (main.saute ? ' on' : ''),
-      main.saute ? 'Sauté (doublon) — 0 point' : 'Sauté sur un doublon ?');
-    saute.type = 'button';
-    saute.addEventListener('click', function () { main.saute = !main.saute; rendre(); });
-    bloc.appendChild(saute);
-
-    bloc.appendChild(el('div', 'f7-detail', detailMain(main)));
     return bloc;
   }
 
@@ -2140,8 +2041,7 @@ const JS_FLIP7 = `
     }
 
     if (!ETAT.gagnant) {
-      vue.appendChild(el('div', 'subtitle', 'Touche les cartes de chacun à la fin de la manche'));
-      ETAT.joueurs.forEach(function (nom, i) { vue.appendChild(blocJoueur(nom, i)); });
+      vue.appendChild(saisieManche());
       var valider = el('button', 'primary', 'Valider la manche ' + (ETAT.manches.length + 1));
       valider.addEventListener('click', function () {
         poster('/api/flip7/manche', { n: ETAT.manches.length, mains: MAINS }).then(function (data) {
@@ -2182,11 +2082,6 @@ const JS_FLIP7 = `
     actions.appendChild(changer);
     vue.appendChild(actions);
 
-    var regle = el('div', 'aide',
-      'Numéros additionnés, ×2 sur les numéros seulement, puis les bonus, puis +'
-      + PRIME + ' pour sept numéros (★). Un doublon fait sauter : 0 point.');
-    vue.appendChild(regle);
-
     app.textContent = '';
     app.appendChild(vue);
   }
@@ -2213,10 +2108,7 @@ function pageFlip7Html(joueursConnus, parties) {
     LIMITE_DEFAUT: FLIP7_LIMITE_DEFAUT,
     LIMITE_MIN: FLIP7_LIMITE_MIN,
     LIMITE_MAX: FLIP7_LIMITE_MAX,
-    NUMERO_MAX: FLIP7_NUMERO_MAX,
-    CARTES_FLIP: FLIP7_CARTES_FLIP,
-    PRIME: FLIP7_PRIME,
-    BONUS: FLIP7_BONUS,
+    POINTS_MAX: FLIP7_POINTS_MAX,
   };
   const declarations = Object.entries(constantes)
     .map(([nom, valeur]) => 'var ' + nom + ' = ' + toScriptJson(valeur) + ';')
