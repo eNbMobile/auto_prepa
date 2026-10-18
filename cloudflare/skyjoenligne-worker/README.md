@@ -98,6 +98,11 @@ lisibles et la page défile, comme avant.
 
 ## Déploiement
 
+Automatique : le workflow `Deployer Skyjo en ligne`
+(`.github/workflows/deploy_skyjoenligne.yml`) redéploie le worker à chaque
+modification de ce dossier poussée sur `main` (lançable aussi à la main). À la
+main si besoin :
+
 ```bash
 cd cloudflare/skyjoenligne-worker
 npx wrangler deploy

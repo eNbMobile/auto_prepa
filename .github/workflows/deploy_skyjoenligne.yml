@@ -1,0 +1,46 @@
+name: Deployer Skyjo en ligne
+
+# Déploie le worker Cloudflare « skyjoenligne » (cloudflare/skyjoenligne-worker,
+# Skyjo en ligne + compteur Flip 7 sur /flip7) à chaque modification poussée
+# sur main. La base D1 est déclarée dans wrangler.toml ; aucun secret worker.
+#
+# Secrets du dépôt nécessaires (les mêmes que deploy_tableau_de_bord) :
+#   CLOUDFLARE_API_TOKEN   token Cloudflare, modèle « Edit Cloudflare Workers »
+#   CLOUDFLARE_ACCOUNT_ID  identifiant du compte Cloudflare
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cloudflare/skyjoenligne-worker/**'
+      - '.github/workflows/deploy_skyjoenligne.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy_skyjoenligne
+  cancel-in-progress: false
+
+jobs:
+  deployer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Vérifier les secrets Cloudflare
+        env:
+          CF_TOKEN:   ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CF_TOKEN" ] || [ -z "$CF_ACCOUNT" ]; then
+            echo "::error::Secrets CLOUDFLARE_API_TOKEN et/ou CLOUDFLARE_ACCOUNT_ID absents du dépôt : déploiement impossible."
+            exit 1
+          fi
+
+      - name: Déployer
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/skyjoenligne-worker
