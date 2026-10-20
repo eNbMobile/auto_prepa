@@ -557,6 +557,24 @@ function toucheTele(cle) {
   }
 }
 
+// Quand une appli tourne, SmartThings remonte en général son identifiant Tizen
+// dans tvChannelName : de quoi régler M6+ sans Tizen Studio.
+async function releverAppliTele() {
+  const id = config.tele || (appareils.find(estTele) || {}).deviceId;
+  if (!id) return toast('Aucune télé trouvée');
+  toast('Lecture de la télé…');
+  try { await st('devices/' + id + '/commands', { body: { commands: [{ component: 'main', capability: 'refresh', command: 'refresh', arguments: [] }] } }); } catch {}
+  await new Promise((r) => setTimeout(r, 1500));
+  await chargerStatut(id);
+  const app = String(val(id, 'tvChannel', 'tvChannelName') ?? '').trim();
+  if (!app) return toast('La télé ne remonte pas l\'appli ouverte');
+  if (!confirm(`Appli ouverte sur la télé : « ${app} ». L'utiliser pour le bouton M6+ ?`)) return;
+  config.appM6 = app;
+  await sauverConfig();
+  toast('Bouton M6+ réglé');
+  rafraichirVue();
+}
+
 function ouvrirSources(id, c) {
   const sources = sourcesTele(id, c);
   ouvrirFeuille(`<h3>Source</h3>${sources.map((s) =>
@@ -687,7 +705,9 @@ function vueReglages() {
     <div class="controle"><div class="titre"><span>Taille</span><span>${Math.round(config.echelleTele * 100)} %</span></div>
       <input type="range" id="echelle-reglages" min="0.8" max="1.7" step="0.05" value="${config.echelleTele}"></div>
     <div class="controle"><div class="titre"><span>Identifiant Tizen de M6+</span></div>
-      <input type="text" id="app-m6" value="${esc(config.appM6)}" placeholder="ex. 3201…" autocomplete="off" spellcheck="false"></div>
+      <input type="text" id="app-m6" value="${esc(config.appM6)}" placeholder="ex. 3201…" autocomplete="off" spellcheck="false">
+      <button class="gros" id="relever-m6" style="margin-top:10px">Relever l'appli ouverte sur la télé</button>
+      <small style="color:var(--doux)">Lance M6+ sur la télé avec sa télécommande, puis appuie ici.</small></div>
     <h2>Favoris (dans l'ordre)</h2>
     <div class="liste">${favs.length ? favs.map((d, i) => `<div class="el">
       <span style="font-size:24px">${iconeAppareil(d)}</span>
@@ -812,6 +832,7 @@ document.addEventListener('click', (e) => {
     sauverConfig(); return rafraichirVue();
   }
   if (cible.id === 'actualiser') return toutCharger(true);
+  if (cible.id === 'relever-m6') return releverAppliTele();
   if (cible.id === 'delier') {
     if (!confirm('Délier le compte SmartThings ?')) return;
     return fetch('/api/deconnecter', { method: 'POST' }).then(() => location.reload());
