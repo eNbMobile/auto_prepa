@@ -75,7 +75,16 @@ final class Maison {
 
     /** Appel au relais SmartThings du worker : chemin relatif à /api/st/. */
     static String st(Context c, String chemin, String corpsJson) throws IOException {
-        HttpURLConnection cx = (HttpURLConnection) new URL(BASE + "/api/st/" + chemin).openConnection();
+        return api(c, "st/" + chemin, corpsJson);
+    }
+
+    /** Réglages de la PWA (/api/config), partagés via le KV du worker. */
+    static String config(Context c) throws IOException {
+        return api(c, "config", null);
+    }
+
+    private static String api(Context c, String chemin, String corpsJson) throws IOException {
+        HttpURLConnection cx = (HttpURLConnection) new URL(BASE + "/api/" + chemin).openConnection();
         try {
             cx.setConnectTimeout(5000);
             cx.setReadTimeout(8000);
