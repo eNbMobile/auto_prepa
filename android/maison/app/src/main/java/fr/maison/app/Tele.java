@@ -26,10 +26,15 @@ final class Tele {
                 commande(c, tv, "mediaPlayback", lecture ? "pause" : "play", "");
                 break;
             }
-            // Applis : identifiant Tizen connu pour Netflix ; M6+ lancé par son nom
-            // (pas d'identifiant public fiable), voir README.
+            // Applis : identifiant Tizen connu pour Netflix ; celui de M6+ n'est pas
+            // public, il se règle dans la PWA (config.appM6), voir README.
             case "NETFLIX": commande(c, tv, "custom.launchapp", "launchApp", "\"org.tizen.netflix-app\",\"Netflix\""); break;
-            case "M6PLUS": commande(c, tv, "custom.launchapp", "launchApp", "\"M6+\",\"M6+\""); break;
+            case "M6PLUS": {
+                String app = new JSONObject(Maison.config(c)).optString("appM6").trim();
+                if (app.isEmpty()) throw new Maison.ErreurHttp(0, "identifiant M6+ à régler dans Maison → Réglages");
+                commande(c, tv, "custom.launchapp", "launchApp", JSONObject.quote(app) + ",\"M6+\"");
+                break;
+            }
             case "POWER": {
                 boolean on = "on".equals(valeur(statut(c, tv), "switch", "switch"));
                 commande(c, tv, "switch", on ? "off" : "on", "");

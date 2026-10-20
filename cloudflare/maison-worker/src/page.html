@@ -201,7 +201,7 @@
 
 const TITRES = { favoris: 'Favoris', tele: 'Télécommande', scenes: 'Scènes', pieces: 'Pièces', reglages: 'Réglages', relier: 'Maison', panneau: 'Maison' };
 const TAILLES_TUILES = { m: 120, l: 150, xl: 190 };
-const CONFIG_DEFAUT = { favoris: [], tele: null, tailleTuiles: 'l', colonnes: 2, echelleTele: 1.15, scenesFavorites: [] };
+const CONFIG_DEFAUT = { favoris: [], tele: null, tailleTuiles: 'l', colonnes: 2, echelleTele: 1.15, scenesFavorites: [], appM6: '' };
 
 let config = { ...CONFIG_DEFAUT };
 let appareils = [];          // liste brute /devices
@@ -543,9 +543,12 @@ function toucheTele(cle) {
     case 'PLAY': return commande(id, 'mediaPlayback', val(id, 'mediaPlayback', 'playbackStatus') === 'playing' ? 'pause' : 'play');
     case 'REW': return commande(id, 'mediaPlayback', 'rewind');
     case 'FF': return commande(id, 'mediaPlayback', 'fastForward');
-    // Applis : identifiant Tizen connu pour Netflix ; M6+ lancé par son nom.
+    // Applis : identifiant Tizen connu pour Netflix ; celui de M6+ n'est pas
+    // public (et le lancement par nom ne marche pas), il se règle dans Réglages.
     case 'NETFLIX': return commande(id, 'custom.launchapp', 'launchApp', ['org.tizen.netflix-app', 'Netflix']);
-    case 'M6PLUS': return commande(id, 'custom.launchapp', 'launchApp', ['M6+', 'M6+']);
+    case 'M6PLUS':
+      if (!config.appM6) return toast('Renseigne l\'identifiant de M6+ dans Réglages');
+      return commande(id, 'custom.launchapp', 'launchApp', [config.appM6, 'M6+']);
     case 'SOURCE': return ouvrirSources(id, c);
     default:
       if (['UP', 'DOWN', 'LEFT', 'RIGHT', 'OK', 'BACK', 'HOME', 'MENU'].includes(cle)) {
@@ -683,6 +686,8 @@ function vueReglages() {
     <h2>Boutons de la télécommande</h2>
     <div class="controle"><div class="titre"><span>Taille</span><span>${Math.round(config.echelleTele * 100)} %</span></div>
       <input type="range" id="echelle-reglages" min="0.8" max="1.7" step="0.05" value="${config.echelleTele}"></div>
+    <div class="controle"><div class="titre"><span>Identifiant Tizen de M6+</span></div>
+      <input type="text" id="app-m6" value="${esc(config.appM6)}" placeholder="ex. 3201…" autocomplete="off" spellcheck="false"></div>
     <h2>Favoris (dans l'ordre)</h2>
     <div class="liste">${favs.length ? favs.map((d, i) => `<div class="el">
       <span style="font-size:24px">${iconeAppareil(d)}</span>
@@ -833,6 +838,7 @@ document.addEventListener('change', (e) => {
     if (c.dataset.reglage === 'temp') return commande(id, 'colorTemperature', 'setColorTemperature', [v]);
     if (c.dataset.reglage === 'volume') return commande(id, 'audioVolume', 'setVolume', [v]);
   }
+  if (c.id === 'app-m6') { config.appM6 = c.value.trim(); return sauverConfig(); }
   if (c.id === 'echelle' || c.id === 'echelle-reglages') { sauverConfig(); if (c.id === 'echelle-reglages') rafraichirVue(); }
 });
 
