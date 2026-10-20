@@ -85,5 +85,8 @@ Lancés avec la capacité SmartThings `custom.launchapp` (commande `launchApp`) 
 - M6+ : aucun identifiant public fiable n'existe (et SmartThings ne lance pas
   une appli par son seul nom). L'identifiant se règle dans la PWA, Réglages →
   « Identifiant Tizen de M6+ » ; il est rangé dans la config du KV et relu par
-  l'appli Android. Pour le trouver : Tizen Studio → Device Manager → clic droit
+  l'appli Android. Pour le trouver : lancer M6+ sur la télé puis, dans
+  Réglages, « Relever l'appli ouverte sur la télé » (lit `tvChannelName`, où
+  SmartThings remonte en général l'identifiant de l'appli au premier plan).
+  À défaut : Tizen Studio → Device Manager → clic droit
   sur la télé → « Installed Web App List », valeur « App ID - WAS ».
