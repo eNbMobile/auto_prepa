@@ -82,11 +82,11 @@ Code : Java sans dépendance (WebView, `TileService`), minSdk 26, targetSdk 35.
 Lancés avec la capacité SmartThings `custom.launchapp` (commande `launchApp`) :
 
 - Netflix : identifiant Tizen `org.tizen.netflix-app`.
-- M6+ : aucun identifiant public fiable n'existe (et SmartThings ne lance pas
-  une appli par son seul nom). L'identifiant se règle dans la PWA, Réglages →
-  « Identifiant Tizen de M6+ » ; il est rangé dans la config du KV et relu par
-  l'appli Android. Pour le trouver : lancer M6+ sur la télé puis, dans
-  Réglages, « Relever l'appli ouverte sur la télé » (lit `tvChannelName`, où
-  SmartThings remonte en général l'identifiant de l'appli au premier plan).
-  À défaut : Tizen Studio → Device Manager → clic droit
-  sur la télé → « Installed Web App List », valeur « App ID - WAS ».
+- M6+ : `3202207027908`, relevé sur la télé (The Frame 2022) avec
+  `sdb shell 0 vd_applist` (champ `app_id`) ; le lancement par nom ne marche
+  pas. Il peut être remplacé dans la PWA, Réglages → « Identifiant Tizen de
+  M6+ » (rangé dans la config du KV, relu par l'appli Android). Pour en relever
+  un autre : mode développeur de la télé (Applis → 12345, IP du PC, débrancher
+  la télé), puis `sdb connect IP_TELE` et `sdb shell 0 vd_applist` ; ou, sans
+  outil, Réglages → « Relever l'appli ouverte sur la télé » (lit
+  `tvChannelName`, pas fiable sur tous les modèles).

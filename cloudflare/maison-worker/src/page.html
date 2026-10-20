@@ -201,6 +201,7 @@
 
 const TITRES = { favoris: 'Favoris', tele: 'Télécommande', scenes: 'Scènes', pieces: 'Pièces', reglages: 'Réglages', relier: 'Maison', panneau: 'Maison' };
 const TAILLES_TUILES = { m: 120, l: 150, xl: 190 };
+const APP_M6_DEFAUT = '3202207027908'; // M6+ relevé sur The Frame 2022 (sdb vd_applist)
 const CONFIG_DEFAUT = { favoris: [], tele: null, tailleTuiles: 'l', colonnes: 2, echelleTele: 1.15, scenesFavorites: [], appM6: '' };
 
 let config = { ...CONFIG_DEFAUT };
@@ -543,12 +544,10 @@ function toucheTele(cle) {
     case 'PLAY': return commande(id, 'mediaPlayback', val(id, 'mediaPlayback', 'playbackStatus') === 'playing' ? 'pause' : 'play');
     case 'REW': return commande(id, 'mediaPlayback', 'rewind');
     case 'FF': return commande(id, 'mediaPlayback', 'fastForward');
-    // Applis : identifiant Tizen connu pour Netflix ; celui de M6+ n'est pas
-    // public (et le lancement par nom ne marche pas), il se règle dans Réglages.
+    // Applis : identifiant Tizen connu pour Netflix ; celui de M6+ a été relevé
+    // sur la télé (sdb vd_applist) et reste modifiable dans Réglages.
     case 'NETFLIX': return commande(id, 'custom.launchapp', 'launchApp', ['org.tizen.netflix-app', 'Netflix']);
-    case 'M6PLUS':
-      if (!config.appM6) return toast('Renseigne l\'identifiant de M6+ dans Réglages');
-      return commande(id, 'custom.launchapp', 'launchApp', [config.appM6, 'M6+']);
+    case 'M6PLUS': return commande(id, 'custom.launchapp', 'launchApp', [config.appM6 || APP_M6_DEFAUT, 'M6+']);
     case 'SOURCE': return ouvrirSources(id, c);
     default:
       if (['UP', 'DOWN', 'LEFT', 'RIGHT', 'OK', 'BACK', 'HOME', 'MENU'].includes(cle)) {
@@ -705,7 +704,7 @@ function vueReglages() {
     <div class="controle"><div class="titre"><span>Taille</span><span>${Math.round(config.echelleTele * 100)} %</span></div>
       <input type="range" id="echelle-reglages" min="0.8" max="1.7" step="0.05" value="${config.echelleTele}"></div>
     <div class="controle"><div class="titre"><span>Identifiant Tizen de M6+</span></div>
-      <input type="text" id="app-m6" value="${esc(config.appM6)}" placeholder="ex. 3201…" autocomplete="off" spellcheck="false">
+      <input type="text" id="app-m6" value="${esc(config.appM6)}" placeholder="${APP_M6_DEFAUT} (par défaut)" autocomplete="off" spellcheck="false">
       <button class="gros" id="relever-m6" style="margin-top:10px">Relever l'appli ouverte sur la télé</button>
       <small style="color:var(--doux)">Lance M6+ sur la télé avec sa télécommande, puis appuie ici.</small></div>
     <h2>Favoris (dans l'ordre)</h2>
