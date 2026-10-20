@@ -7,6 +7,9 @@ import org.json.JSONObject;
 /** Envoi des touches de télécommande, partagé par Contrôle appareil et la notification. */
 final class Tele {
 
+    /** M6+ relevé sur The Frame 2022 (sdb shell 0 vd_applist). */
+    static final String APP_M6_DEFAUT = "3202207027908";
+
     private Tele() {}
 
     /** Même logique que la télécommande de la PWA (page.html, toucheTele). */
@@ -26,12 +29,12 @@ final class Tele {
                 commande(c, tv, "mediaPlayback", lecture ? "pause" : "play", "");
                 break;
             }
-            // Applis : identifiant Tizen connu pour Netflix ; celui de M6+ n'est pas
-            // public, il se règle dans la PWA (config.appM6), voir README.
+            // Applis : identifiant Tizen connu pour Netflix ; celui de M6+ a été relevé
+            // sur la télé et peut être remplacé dans la PWA (config.appM6), voir README.
             case "NETFLIX": commande(c, tv, "custom.launchapp", "launchApp", "\"org.tizen.netflix-app\",\"Netflix\""); break;
             case "M6PLUS": {
                 String app = new JSONObject(Maison.config(c)).optString("appM6").trim();
-                if (app.isEmpty()) throw new Maison.ErreurHttp(0, "identifiant M6+ à régler dans Maison → Réglages");
+                if (app.isEmpty()) app = APP_M6_DEFAUT;
                 commande(c, tv, "custom.launchapp", "launchApp", JSONObject.quote(app) + ",\"M6+\"");
                 break;
             }
