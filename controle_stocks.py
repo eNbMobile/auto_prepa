@@ -38,6 +38,16 @@ CLASSEUR_DELOTAGE   = "DRIVE DELOTAGE"          # comparé normalisé (majuscule
 CLASSEUR_LGV        = "DRIVE LGV"               # idem, pour l'alerte "LGV à commander"
 CLASSEUR_A_ENLEVER  = "** DRIVE PRODUIT A ENLEVER **"  # idem, exclu des stocks insuffisants
 
+# Fichier promo (Drive : GITHUB/PROMOS/PROMOS.xlsx) : un bloc de gencods par
+# semaine de promo, la 1re ligne du bloc portant le thème "SXX ..." après les
+# colonnes nommées. Un produit LGV en promo la semaine en cours ou la suivante
+# se commande à 3×VMS au lieu de 2×VMS.
+DOSSIER_GITHUB      = "GITHUB"
+DOSSIER_PROMOS      = "PROMOS"
+FICHIER_PROMOS      = "PROMOS.xlsx"
+COEFF_VMS_LGV       = 2
+COEFF_VMS_LGV_PROMO = 3
+
 
 def _normaliser_classeur(texte):
     """Majuscules sans accents ni astérisques, pour comparer un classeur
@@ -113,13 +123,13 @@ def _rows_depuis_xlsx(chemin):
                 t    = c.get('t', '')
                 v_el = c.find(f'{{{NS}}}v')
                 val  = ''
-                if v_el is not None and v_el.text:
+                if t == 'inlineStr':
+                    # Texte en ligne (<is><t>), sans élément <v>.
+                    val = ''.join(e.text or '' for e in c.iter(f'{{{NS}}}t'))
+                elif v_el is not None and v_el.text:
                     if t == 's':
                         idx = int(v_el.text)
                         val = shared[idx] if idx < len(shared) else ''
-                    elif t == 'inlineStr':
-                        ie = c.find(f'.//{{{NS}}}t')
-                        val = ie.text if ie is not None else ''
                     else:
                         val = v_el.text
                 row.append(str(val).strip())
@@ -585,6 +595,96 @@ def calculer_vms(gencods, date_reference, nb_semaines=5):
 # ─────────────────────────────────────────────────────────────────
 # Téléchargement BDC depuis Drive (fallback)
 # ─────────────────────────────────────────────────────────────────
+
+def _normaliser_gencod(valeur):
+    """Gencod sur 13 chiffres (comme lire_stock), y compris quand le tableur
+    l'a stocké en nombre ("8.410076610737E12"). None si ce n'est pas un gencod."""
+    v = (valeur or '').strip()
+    if re.match(r'^\d+(\.\d+)?E\+?\d+$', v, re.IGNORECASE) or re.match(r'^\d+\.0+$', v):
+        try:
+            v = str(int(float(v)))
+        except ValueError:
+            return None
+    if not re.match(r'^\d{5,}$', v):
+        return None
+    return v.lstrip('0').zfill(13)
+
+
+def _semaines_theme_promo(texte):
+    """Semaines couvertes par un thème promo : "S43 TRAFIC HALLOWEEN" -> {43},
+    "S12 TRAFIC S12/13" ou "S33 TRAFIC S33/S34" -> {12, 13} / {33, 34}.
+    Ensemble vide si la cellule n'est pas un thème."""
+    m = re.match(r'^\s*S(\d{1,2})\b', texte or '', re.IGNORECASE)
+    if not m:
+        return set()
+    semaines = {int(m.group(1))}
+    semaines.update(int(n) for n in re.findall(r'/\s*S?(\d{1,2})\b', texte, re.IGNORECASE))
+    return semaines
+
+
+def lire_gencods_promo(chemin, semaines):
+    """Gencods du fichier promo en promo l'une des semaines (numéros ISO)
+    données. Chaque thème "SXX ..." ouvre un bloc qui court jusqu'au thème
+    suivant ; le thème est cherché après les colonnes nommées de l'en-tête."""
+    gencods = set()
+    idx_gencod = debut_themes = None
+    semaines_bloc = set()
+    for row in _rows_depuis_xlsx(chemin):
+        if idx_gencod is None:
+            row_norm = [c.strip().lower() for c in row]
+            if 'gencod' in row_norm:
+                idx_gencod = row_norm.index('gencod')
+                debut_themes = max(i for i, h in enumerate(row_norm) if h) + 1
+            continue
+        for cellule in row[debut_themes:]:
+            semaines_cellule = _semaines_theme_promo(cellule)
+            if semaines_cellule:
+                semaines_bloc = semaines_cellule
+                break
+        if semaines_bloc & set(semaines) and len(row) > idx_gencod:
+            gencod = _normaliser_gencod(row[idx_gencod])
+            if gencod:
+                gencods.add(gencod)
+    return gencods
+
+
+def charger_gencods_promo(semaines):
+    """Télécharge GITHUB/PROMOS/PROMOS.xlsx et retourne les gencods en promo
+    les semaines données. Ensemble vide si le fichier est inaccessible (les
+    produits LGV restent alors à 2×VMS)."""
+    try:
+        from googleapiclient.http import MediaIoBaseDownload
+        svc = _get_drive_service()
+        if not svc:
+            return set()
+        github_id = _trouver_dossier_drive(svc, "root", DOSSIER_GITHUB)
+        promos_id = _trouver_dossier_drive(svc, github_id, DOSSIER_PROMOS) if github_id else None
+        if not promos_id:
+            print(f"  Dossier {DOSSIER_GITHUB}/{DOSSIER_PROMOS} introuvable — promos ignorées.")
+            return set()
+        res = svc.files().list(
+            q=f"name='{FICHIER_PROMOS}' and '{promos_id}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        files = res.get("files", [])
+        if not files:
+            print(f"  {FICHIER_PROMOS} introuvable — promos ignorées.")
+            return set()
+        buf = io.BytesIO()
+        dl = MediaIoBaseDownload(buf, svc.files().get_media(fileId=files[0]["id"]))
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        with open(FICHIER_PROMOS, "wb") as f:
+            f.write(buf.getvalue())
+        gencods = lire_gencods_promo(FICHIER_PROMOS, semaines)
+        print(f"  {len(gencods)} gencod(s) en promo "
+              f"{'/'.join(f'S{s:02d}' for s in sorted(semaines))} dans {FICHIER_PROMOS}.")
+        return gencods
+    except Exception as e:
+        print(f"  Lecture de {FICHIER_PROMOS} échouée : {e} — promos ignorées.")
+        return set()
+
 
 def _get_drive_service():
     try:
@@ -1064,8 +1164,8 @@ def generer_pdf_a_deloter(a_deloter, date_courante, vms_map=None):
 
 def generer_pdf_lgv(a_commander, date_courante, vms_map, semaine_suivante):
     """Génère un PDF listant les produits du classeur DRIVE LGV dont le stock
-    est insuffisant au regard de leurs ventes (Stock UC < 2×VMS) ou en rupture
-    (Stock UC <= 0). Retourne le
+    est insuffisant au regard de leurs ventes (Stock UC < 2×VMS, 3×VMS pour
+    ceux en promo) ou en rupture (Stock UC <= 0). Retourne le
     chemin ou None."""
     if not a_commander:
         return None
@@ -1141,9 +1241,10 @@ def envoyer_email_pdf(pdf_ecarts, pdf_stock_bas, pdf_a_deloter, date_j1, nb_ecar
         print(f"  Email échoué : {e}")
 
 
-def envoyer_email_lgv(pdf_lgv, nb, semaine_suivante):
+def envoyer_email_lgv(pdf_lgv, nb, semaine_suivante, nb_promo=0, semaines_promo=()):
     """Envoie par email (au destinataire principal uniquement, sans copie) le
-    PDF des produits du classeur DRIVE LGV à commander (Stock UC < 2×VMS ou rupture)."""
+    PDF des produits du classeur DRIVE LGV à commander (Stock UC < 2×VMS,
+    3×VMS pour ceux en promo, ou rupture)."""
     try:
         import base64
         from email.mime.multipart import MIMEMultipart
@@ -1160,7 +1261,9 @@ def envoyer_email_lgv(pdf_lgv, nb, semaine_suivante):
 
         corps = (f"LGV à commander pour la semaine S{semaine_suivante:02d}\n\n"
                  f"  {nb} produit{'s' if nb > 1 else ''} (classeur {CLASSEUR_LGV}, "
-                 f"Stock UC < 2×VMS ou rupture)\n\n"
+                 f"Stock UC < {COEFF_VMS_LGV}×VMS, {COEFF_VMS_LGV_PROMO}×VMS en promo "
+                 f"{'/'.join(f'S{s:02d}' for s in semaines_promo)}, ou rupture)\n"
+                 f"  dont {nb_promo} en promo (repérés « PROMO » dans le libellé)\n\n"
                  f"Détail en pièce jointe.")
         msg.attach(MIMEText(corps, 'plain', 'utf-8'))
 
@@ -1419,6 +1522,8 @@ def main():
     # 2× leur VMS (moyenne des 3 dernières semaines de ventes cumulées), ou
     # en rupture (Stock UC <= 0) même sans vente : un produit jamais
     # réapprovisionné ne se vend plus et sa VMS tombe à 0.
+    # Les produits en promo (fichier PROMOS.xlsx) la semaine en cours ou la
+    # suivante — celle de la commande — sont commandés à 3× leur VMS.
     # Email séparé, au destinataire principal uniquement. Ne se declenche que
     # le samedi, et seulement si j.xlsx a bien ete importe aujourd'hui (un
     # stock J perime rendrait l'alerte non fiable) — pas de garde-fou sur le
@@ -1431,26 +1536,38 @@ def main():
         gencods_lgv = sorted(g for g, c in classeurs_stock.items()
                             if g in stock_j and _normaliser_classeur(c) == _normaliser_classeur(CLASSEUR_LGV))
         if gencods_lgv:
+            semaine_courante = date_courante.isocalendar()[1]
+            lundi_prochain = (date_courante - timedelta(days=date_courante.weekday())
+                              + timedelta(weeks=1))
+            semaine_suivante = lundi_prochain.isocalendar()[1]
+            semaines_promo = (semaine_courante, semaine_suivante)
             vms_lgv = calculer_vms(gencods_lgv, date_courante, nb_semaines=3)
+            print("\nLecture des promos …")
+            promos = charger_gencods_promo(semaines_promo)
             a_commander_lgv = []
+            nb_promo = 0
             for gencod in gencods_lgv:
                 stock_uc = stock_j.get(gencod, 0.0)
-                if stock_uc <= 0 or stock_uc < 2 * vms_lgv.get(gencod, 0.0):
+                en_promo = gencod in promos
+                coeff = COEFF_VMS_LGV_PROMO if en_promo else COEFF_VMS_LGV
+                if stock_uc <= 0 or stock_uc < coeff * vms_lgv.get(gencod, 0.0):
                     lib = (libelles_dict.get(gencod)
                           or libelles_stock.get(gencod)
                           or libelles_extra.get(gencod, ''))
+                    if en_promo:
+                        lib = f"{lib} — PROMO" if lib else "PROMO"
+                        nb_promo += 1
                     a_commander_lgv.append((gencod, 0, 0, 0, stock_uc, 0, '', lib))
             a_commander_lgv.sort(key=lambda r: r[0])
             if a_commander_lgv:
-                lundi_prochain = (date_courante - timedelta(days=date_courante.weekday())
-                                  + timedelta(weeks=1))
-                semaine_suivante = lundi_prochain.isocalendar()[1]
-                print(f"\nLGV à commander : {len(a_commander_lgv)} produit(s) "
-                      f"(classeur {CLASSEUR_LGV}, Stock UC < 2×VMS ou rupture)")
+                print(f"\nLGV à commander : {len(a_commander_lgv)} produit(s) dont {nb_promo} en promo "
+                      f"(classeur {CLASSEUR_LGV}, Stock UC < {COEFF_VMS_LGV}×VMS, "
+                      f"{COEFF_VMS_LGV_PROMO}×VMS en promo, ou rupture)")
                 nom_pdf_lgv = generer_pdf_lgv(a_commander_lgv, date_courante, vms_lgv, semaine_suivante)
                 if nom_pdf_lgv:
                     print("Envoi email LGV …")
-                    envoyer_email_lgv(nom_pdf_lgv, len(a_commander_lgv), semaine_suivante)
+                    envoyer_email_lgv(nom_pdf_lgv, len(a_commander_lgv), semaine_suivante,
+                                      nb_promo, semaines_promo)
 
     if nom_pdf_ecarts or nom_pdf_stock_bas or nom_pdf_a_deloter:
         print("\nEnvoi email …")
