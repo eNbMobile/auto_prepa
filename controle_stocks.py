@@ -243,6 +243,44 @@ def _lire_config_drive(nom):
         print(f"  _lire_config_drive({nom}) échoué : {e}")
         return None
 
+def ajouter_lignes_config_drive(nom, lignes):
+    """Ajoute des lignes à la fin d'un fichier config Drive existant (par
+    exemple gencod_nomenclatures.csv) et met à jour le cache mémoire. Une
+    seule écriture Drive pour tout `lignes`. Ne lève jamais — retourne False
+    en cas d'échec (fichier introuvable, Drive inaccessible, etc.)."""
+    if not lignes:
+        return True
+    global _config_drive_index
+    try:
+        from googleapiclient.http import MediaIoBaseUpload
+        svc = _get_drive_service()
+        if not svc or not DRIVE_CONFIG_FOLDER_ID:
+            return False
+        contenu = _lire_config_drive(nom) or ""
+        if _config_drive_index is None or nom not in _config_drive_index:
+            res = svc.files().list(
+                q=f"name='{nom}' and '{DRIVE_CONFIG_FOLDER_ID}' in parents and trashed=false",
+                fields="files(id)",
+            ).execute()
+            files = res.get("files", [])
+            if not files:
+                print(f"  {nom} introuvable sur Drive — ajout impossible.")
+                return False
+            file_id = files[0]["id"]
+        else:
+            file_id = _config_drive_index[nom]
+        if contenu and not contenu.endswith("\n"):
+            contenu += "\n"
+        nouveau_contenu = contenu + "\n".join(lignes) + "\n"
+        media = MediaIoBaseUpload(io.BytesIO(nouveau_contenu.encode("utf-8")),
+                                  mimetype="text/csv", resumable=False)
+        svc.files().update(fileId=file_id, media_body=media).execute()
+        _config_drive_cache[nom] = nouveau_contenu
+        return True
+    except Exception as e:
+        print(f"  ajouter_lignes_config_drive({nom}) échoué : {e}")
+        return False
+
 def charger_libelles_dict():
     """Charge libelles_dict.csv depuis Drive (mémoire) ou disque. Retourne {gencod: libelle}."""
     contenu = _lire_config_drive("libelles_dict.csv")

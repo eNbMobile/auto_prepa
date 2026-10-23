@@ -20,6 +20,11 @@ exclus : leurs produits ne sont pas adressés produit par produit.
   été envoyés, run manqué), en fait un PDF (code-barres, libellé, adresse,
   commandes), l'envoie par email pour un traitement le lendemain matin, puis
   renomme le fichier en ..._envoye.txt pour ne jamais l'envoyer deux fois.
+- Avant le PDF, arbitrage_fruits_legumes.arbitrer() retire du rapport les
+  fruits/légumes sans nomenclature connue (nouveau calibre/origine/variété) :
+  reconnus avec confiance (nom de fruit/légume + pays d'origine dans le
+  libellé), ils sont ajoutés directement à gencod_nomenclatures.csv ; sinon,
+  un email d'arbitrage manuel (EMAIL_DESTINATAIRE seul) est envoyé à part.
 
 Usage : adresses_inconnues.py [--date JJ/MM/AAAA]   (défaut : jusqu'à aujourd'hui)
 """
@@ -350,6 +355,7 @@ def jours_sans_adresse(drive_svc, jusqu_au):
 
 def main():
     import controle_stocks as cs
+    import arbitrage_fruits_legumes as afl
 
     jusqu_au = datetime.now(_TZ).date()
     if "--date" in sys.argv:
@@ -369,9 +375,22 @@ def main():
 
     annulees = cs.numeros_annules_registre()
     historique = jours_sans_adresse(drive_svc, jusqu_au)
+    nomenclatures = cs.charger_gencod_nomenclatures()
+
+    # Arbitrage fruits/légumes : les produits sans nomenclature connue mais
+    # dont le libellé est reconnu comme un fruit ou un légume avec son pays
+    # d'origine n'ont pas vocation à être adressés (cf. RAYONS_EXCLUS) — ils
+    # sont retirés du rapport et ajoutés à gencod_nomenclatures.csv. Les cas
+    # douteux sont retirés eux aussi, pour arbitrage manuel par email à part.
+    tous_ajouts, tous_doutes = [], []
     pdfs, envoyes = [], []
     for jour, file_id, nom in fichiers:
         produits = regrouper(_telecharger_texte(drive_svc, file_id), annulees)
+        ajouts, doutes, produits = afl.arbitrer(produits, nomenclatures)
+        for gencod, libelle, categorie in ajouts:
+            nomenclatures[gencod] = categorie  # évite un doublon si revu un jour suivant
+        tous_ajouts += ajouts
+        tous_doutes += doutes
         for gencod, p in produits.items():
             p["jours"] = max(1, historique.get(gencod, 1))
         envoyes.append((file_id, nom))
@@ -381,6 +400,12 @@ def main():
         generer_pdf(produits, jour, chemin)
         pdfs.append((jour, chemin, len(produits)))
         print(f"{nom} : {len(produits)} produit(s) non adressé(s).")
+
+    if tous_ajouts:
+        tous_doutes += afl.ajouter_nomenclatures(cs, tous_ajouts)
+    if tous_doutes:
+        afl.envoyer_email_doute(gmail_svc, cs.EMAIL_DESTINATAIRE, tous_doutes)
+        print(f"  {len(tous_doutes)} produit(s) fruit/légume en doute, email d'arbitrage envoyé.")
 
     if pdfs:
         envoyer_email(gmail_svc, cs.EMAIL_DESTINATAIRE, cs.EMAIL_COPIE_STOCK, pdfs)
