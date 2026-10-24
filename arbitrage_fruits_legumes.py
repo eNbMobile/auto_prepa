@@ -72,6 +72,27 @@ LEGUMES_MOTS = {
     "POTIRONS", "BUTTERNUT", "MAIS", "ASPERGE", "ASPERGES",
 }
 
+# Libellés de poissonnerie : « pêché en Atlantique » se normalise en
+# "PECHE", confondu avec le fruit. Un libellé contenant un de ces mots n'est
+# pas concerné par l'arbitrage fruits/légumes.
+_PHRASES_POISSONNERIE = (
+    r"\bPECHEE?S?\s+(EN|AU|AUX|DANS|PAR)\b",
+    r"\bFRUITS?\s+DE\s+MER\b",
+)
+
+POISSONNERIE_MOTS = {
+    "POISSON", "POISSONS", "CABILLAUD", "GADUS", "MORHUA", "SAUMON",
+    "TRUITE", "THON", "COLIN", "MERLU", "LIEU", "MERLAN", "SOLE", "SOLES",
+    "BAR", "DORADE", "DAURADE", "MAQUEREAU", "MAQUEREAUX", "SARDINE",
+    "SARDINES", "LOTTE", "LIMANDE", "PLIE", "TURBOT", "RAIE", "EGLEFIN",
+    "HADDOCK", "ROUGET", "ROUGETS", "HARENG", "HARENGS", "ANCHOIS",
+    "CREVETTE", "CREVETTES", "GAMBAS", "LANGOUSTINE", "LANGOUSTINES",
+    "MOULE", "MOULES", "HUITRE", "HUITRES", "COQUILLE", "COQUILLES",
+    "CALAMAR", "CALAMARS", "ENCORNET", "ENCORNETS", "SEICHE", "POULPE",
+    "TOURTEAU", "HOMARD", "PANGA", "TILAPIA", "SURIMI", "PECHEE",
+    "PECHEES", "ATLANTIQUE", "PACIFIQUE", "MEDITERRANEE",
+}
+
 PAYS = {
     "FRANCE", "ESPAGNE", "ITALIE", "MAROC", "PORTUGAL", "PAYS-BAS",
     "HOLLANDE", "BELGIQUE", "ALLEMAGNE", "GRECE", "EGYPTE", "TUNISIE",
@@ -104,6 +125,10 @@ def classifier_fruit_legume(libelle):
     - (None, None) : libellé sans fruit/légume reconnu, non concerné par cet
       arbitrage (reste un « non adressé » classique)."""
     norm = _normaliser(libelle)
+
+    if (any(re.search(p, norm) for p in _PHRASES_POISSONNERIE)
+            or set(re.findall(r"[A-Z]+", norm)) & POISSONNERIE_MOTS):
+        return None, None
 
     est_legume_phrase = any(re.search(p, norm) for p in _PHRASES_LEGUMES)
     sans_phrases = norm
@@ -207,6 +232,10 @@ def envoyer_email_doute(gmail_svc, destinataire, doutes):
     import base64
     from email.mime.text import MIMEText
 
+    # Un même gencod peut revenir sur plusieurs jours du rapport : une
+    # seule ligne par produit dans l'email.
+    vus = set()
+    doutes = [d for d in doutes if not (d[0] in vus or vus.add(d[0]))]
     if not doutes:
         return
     n = len(doutes)

@@ -36,6 +36,14 @@ class TestClassification(unittest.TestCase):
     def test_accents_et_casse_indifferents(self):
         self.assertEqual(afl.classifier_fruit_legume("pêches espagne"), ("fruit", None))
 
+    def test_poisson_peche_en_nest_pas_une_peche(self):
+        self.assertEqual(afl.classifier_fruit_legume(
+            "Dos de Cabillaud, gadus morhua, pêché en Atlantique Nord Est, ATLA.NE"),
+            (None, None))
+
+    def test_peche_de_vigne_reste_un_fruit(self):
+        self.assertEqual(afl.classifier_fruit_legume("PECHES DE VIGNE FRANCE"), ("fruit", None))
+
     def test_cote_d_ivoire(self):
         self.assertEqual(afl.classifier_fruit_legume("BANANES CÔTE D'IVOIRE"), ("fruit", None))
 
@@ -155,6 +163,16 @@ class TestEnvoyerEmailDoute(unittest.TestCase):
         self.assertIn("1 produit", sujet)
         self.assertIn("1 produit", corps)
         self.assertIn("POMMES GALA", corps)
+
+    def test_gencod_en_double_une_seule_ligne(self):
+        gmail = FauxGmail()
+        doute = ("1", "POMMES GALA", "pays d'origine introuvable dans le libellé")
+        afl.envoyer_email_doute(gmail, "resp@example.com", [doute, doute])
+
+        raw = base64.urlsafe_b64decode(gmail.captures[0]["raw"]).decode()
+        corps = email.message_from_string(raw).get_payload(decode=True).decode("utf-8")
+        self.assertIn("1 produit ressemble", corps)
+        self.assertEqual(corps.count("POMMES GALA"), 1)
 
     def test_rien_a_envoyer(self):
         gmail = FauxGmail()
