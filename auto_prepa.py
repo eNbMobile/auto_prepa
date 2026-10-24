@@ -523,6 +523,24 @@ def _etape_annexe_annulation(numero, etape, *args):
         return None
 
 
+def annuler_commande(drive_svc, gmail_svc, sheets_svc, numero):
+    """Traitement complet d'une commande annulee (sans remplacement) : retrait
+    de l'anticipation et de LIVRAISON DRIVE, des bons de MobUDrive_Bons, des
+    archives, de l'avoir, et depot de annuler_NUMERO.txt pour l'app. Appele a
+    la reception du mail d'annulation, et par annuler_commande.py quand ce
+    mail n'est jamais arrive (cde 56623475, 24/10/2026)."""
+    _etape_annexe_annulation(
+        numero, _traiter_commande_potentiellement_anticipee,
+        drive_svc, gmail_svc, numero)
+    _etape_annexe_annulation(
+        numero, _traiter_annulation_livraison, drive_svc, sheets_svc, numero)
+    _supprimer_bons_drive(drive_svc, numero)
+    _supprimer_anticipation_archive_drive(drive_svc, numero)
+    _supprimer_bdc_drive(drive_svc, numero)
+    _uploader_annulation_drive(drive_svc, numero)
+    supprimer_commande_avoir_drive(drive_svc, numero)
+
+
 def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc,
                                    shopopop_token=None, shopopop_drive_id=None, shopopop_connecte=False):
     """Lit les mails de modification de commande, supprime les anciens bons, archive les mails.
@@ -580,16 +598,7 @@ def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc,
             elif match_annul:
                 num_annule = match_annul.group(1)
                 print(f"  Annulation : cde {num_annule} supprimee")
-                _etape_annexe_annulation(
-                    num_annule, _traiter_commande_potentiellement_anticipee,
-                    drive_svc, gmail_svc, num_annule)
-                _etape_annexe_annulation(
-                    num_annule, _traiter_annulation_livraison, drive_svc, sheets_svc, num_annule)
-                _supprimer_bons_drive(drive_svc, num_annule)
-                _supprimer_anticipation_archive_drive(drive_svc, num_annule)
-                _supprimer_bdc_drive(drive_svc, num_annule)
-                _uploader_annulation_drive(drive_svc, num_annule)
-                supprimer_commande_avoir_drive(drive_svc, num_annule)
+                annuler_commande(drive_svc, gmail_svc, sheets_svc, num_annule)
             else:
                 print(f"    Sujet non reconnu : {subject[:80]}")
                 continue
