@@ -250,13 +250,20 @@ def ajouter_lignes_config_drive(nom, lignes):
     en cas d'échec (fichier introuvable, Drive inaccessible, etc.)."""
     if not lignes:
         return True
-    global _config_drive_index
+    contenu = _lire_config_drive(nom) or ""
+    if contenu and not contenu.endswith("\n"):
+        contenu += "\n"
+    return ecrire_config_drive(nom, contenu + "\n".join(lignes) + "\n")
+
+def ecrire_config_drive(nom, contenu):
+    """Remplace le contenu d'un fichier config Drive existant par `contenu`
+    et met à jour le cache mémoire. Ne lève jamais — retourne False en cas
+    d'échec (fichier introuvable, Drive inaccessible, etc.)."""
     try:
         from googleapiclient.http import MediaIoBaseUpload
         svc = _get_drive_service()
         if not svc or not DRIVE_CONFIG_FOLDER_ID:
             return False
-        contenu = _lire_config_drive(nom) or ""
         if _config_drive_index is None or nom not in _config_drive_index:
             res = svc.files().list(
                 q=f"name='{nom}' and '{DRIVE_CONFIG_FOLDER_ID}' in parents and trashed=false",
@@ -264,21 +271,18 @@ def ajouter_lignes_config_drive(nom, lignes):
             ).execute()
             files = res.get("files", [])
             if not files:
-                print(f"  {nom} introuvable sur Drive — ajout impossible.")
+                print(f"  {nom} introuvable sur Drive — écriture impossible.")
                 return False
             file_id = files[0]["id"]
         else:
             file_id = _config_drive_index[nom]
-        if contenu and not contenu.endswith("\n"):
-            contenu += "\n"
-        nouveau_contenu = contenu + "\n".join(lignes) + "\n"
-        media = MediaIoBaseUpload(io.BytesIO(nouveau_contenu.encode("utf-8")),
+        media = MediaIoBaseUpload(io.BytesIO(contenu.encode("utf-8")),
                                   mimetype="text/csv", resumable=False)
         svc.files().update(fileId=file_id, media_body=media).execute()
-        _config_drive_cache[nom] = nouveau_contenu
+        _config_drive_cache[nom] = contenu
         return True
     except Exception as e:
-        print(f"  ajouter_lignes_config_drive({nom}) échoué : {e}")
+        print(f"  ecrire_config_drive({nom}) échoué : {e}")
         return False
 
 def charger_libelles_dict():

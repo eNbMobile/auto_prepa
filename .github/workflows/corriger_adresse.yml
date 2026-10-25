@@ -1,0 +1,58 @@
+name: Corriger adresse
+
+# Lancement manuel : corrige l'adresse d'un gencod dans gencod_adresses.csv
+# (Drive), par exemple une adresse saisie incomplète (R1-TG-2 → R1-TG-2-1).
+on:
+  workflow_dispatch:
+    inputs:
+      gencod:
+        description: "Gencod du produit"
+        required: true
+        type: string
+      adresse:
+        description: "Nouvelle adresse complète (ex. R1-TG-2-1, cf. chemin_prepa_ramasse.csv)"
+        required: true
+        type: string
+
+concurrency:
+  group: gencod_adresses
+  cancel-in-progress: false
+
+jobs:
+  corriger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python et dépendances
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer les dépendances pip
+        run: pip install -r requirements.txt
+
+      - name: Corriger l'adresse dans gencod_adresses.csv
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          GENCOD:                 ${{ inputs.gencod }}
+          ADRESSE:                ${{ inputs.adresse }}
+        run: python3 bootstrap.py corriger_adresse.py "$GENCOD" "$ADRESSE"
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+            echo "Secret GOOGLE_TOKEN_JSON mis à jour."
+          fi
