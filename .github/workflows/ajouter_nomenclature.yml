@@ -1,0 +1,59 @@
+name: Ajouter nomenclature
+
+# Lancement manuel : ajoute un gencod dans gencod_nomenclatures.csv (Drive)
+# avec son code de nomenclature, par exemple après un email d'arbitrage
+# fruits/légumes.
+on:
+  workflow_dispatch:
+    inputs:
+      gencod:
+        description: "Gencod du produit"
+        required: true
+        type: string
+      code:
+        description: "Code de nomenclature (18 chiffres, cf. chemin_prepa_ramasse.csv)"
+        required: true
+        type: string
+
+concurrency:
+  group: gencod_nomenclatures
+  cancel-in-progress: false
+
+jobs:
+  ajouter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python et dépendances
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer les dépendances pip
+        run: pip install -r requirements.txt
+
+      - name: Ajouter le gencod à gencod_nomenclatures.csv
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          GENCOD:                 ${{ inputs.gencod }}
+          CODE:                   ${{ inputs.code }}
+        run: python3 bootstrap.py ajouter_nomenclature.py "$GENCOD" "$CODE"
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+            echo "Secret GOOGLE_TOKEN_JSON mis à jour."
+          fi
