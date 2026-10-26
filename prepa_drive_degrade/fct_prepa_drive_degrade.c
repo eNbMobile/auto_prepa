@@ -860,7 +860,7 @@ int a=1;
  ligne[j] = '\n';  
  type=1;  
  }  
- if (i < 12 && i > 9 && ligne[j-51] == ' ' && ligne[j-50] == 'M' && (ligne[j-49] == '.' || ligne[j-49] == 'm') && pass == 0) //Récupère le nom du client (jusqu'à 50 caractères)  
+ if (i < 12 && i > 9 && (j == 50 || ligne[j-51] == ' ') && ligne[j-50] == 'M' && (ligne[j-49] == '.' || ligne[j-49] == 'm') && pass == 0) //Récupère le nom du client (jusqu'à 50 caractères)  
  {  
  FILE* baseClient = NULL;  
  baseClient = fopen("base_client.txt", "a");  
