@@ -748,7 +748,10 @@ class Moteur:
                 j += 1
                 L[j] = db.getc()
                 self._en_tete_commande(L, j, i, db, base, type_retrait, etat, agp=True)
-                if (i < 12 and i > 9 and L[j - 51] == SP and L[j - 50] == _o("M")
+                # Civilite en debut de ligne (j == 50) : le C lisait ligne[-1]
+                # (hors tableau) a la place de l'espace attendu, le nom des bons
+                # AGP etait alors perdu.
+                if (i < 12 and i > 9 and (j == 50 or L[j - 51] == SP) and L[j - 50] == _o("M")
                         and (L[j - 49] == _o(".") or L[j - 49] == _o("m")) and pass_ == 0):
                     self._nom_client(L, j, base)
                     pass_ = 1

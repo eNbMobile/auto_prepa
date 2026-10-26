@@ -69,5 +69,35 @@ class TestRangementEtDlc(unittest.TestCase):
         self.assertEqual(m.f["prepaNEW"].data, b"111;LIB A;2\n333;LIB C;5\n222;LIB B;9\n")
 
 
+class TestNomClientAgp(unittest.TestCase):
+    """Bon AGP (substitution au produit) : la civilite est en colonne 0 de la
+    ligne client, le nom doit quand meme etre repris dans l'en-tete."""
+
+    ENCAISSEMENT = (
+        "    Commande" + " " * 40 + "BON D'ENCAISSEMENT" + " " * 49 + "LUNDI 26/10/2026\n"
+        + " " * 52 + "Magasin : ARNAGE\n"
+        + " " * 52 + "0243212223" + " " * 53 + "17h30 - 18h00\n"
+        "\n\n\n\n"
+        "Commande : 12345678 -" + " " * 30 + "99000000000000\n"
+        "RETRAIT" + " " * 117 + "PAIEMENT EN LIGNE\n"
+        "\n"
+        "Mme DUPONT MARIE" + " " * 108 + "Carte de fidelite : 00000000000000\n"
+        "Tel : / 0600000000\n"
+        "  Substitution > AU PRODUIT\n"
+        "      1" + " " * 48 + "Produit test SUBSTI.(Oui)\n"
+    ).encode()
+
+    def test_nom_client_en_debut_de_ligne(self):
+        m = pdd.Moteur(".")
+        m.printf = lambda t: None
+        m.encaissement = self.ENCAISSEMENT
+        en_tetes = []
+        inverse = m.inverse_data
+        m.inverse_data = lambda: (en_tetes.append(m.f["base"].premiere_ligne()), inverse())
+        m.test_bon_encaissement()
+        self.assertEqual(len(en_tetes), 1)
+        self.assertIn(b",Mme DUPONT MARIE", en_tetes[0])
+
+
 if __name__ == "__main__":
     unittest.main()
