@@ -85,17 +85,24 @@ class TestExtraction(unittest.TestCase):
             RHUM: ("RHUM AMBRE 70CL", 1),
         })
 
-    def test_recap_tous_les_produits_plus_vendus_en_tete(self):
+    def test_recap_par_jour_de_retrait_plus_vendus_en_tete(self):
         lignes = [f"2026-10-29;111;29/10/2026;{WHISKY};JW;3",
                   f"2026-10-29;222;30/10/2026;{WHISKY};JW;1",
                   f"2026-10-29;222;30/10/2026;{RHUM};RHUM AMBRE;2",
-                  f"2026-10-28;333;29/10/2026;{RHUM};RHUM AMBRE;5"]
+                  f"2026-10-28;333;29/10/2026;{RHUM};RHUM AMBRE;5",
+                  f"2026-10-29;444;;{RHUM};RHUM AMBRE;1"]
         self.assertEqual(jp.recapituler(lignes, EANS, "2026-10-29").splitlines(), [
             jp.ENTETE_RECAP,
-            f"{WHISKY};WHISKY JW RED;4;2",
-            f"{RHUM};RHUM AMBRE;2;1",
+            f"{RHUM};RHUM AMBRE;6;2",
+            f"{WHISKY};WHISKY JW RED;3;1",
             "3560070000005;WHISKY U 1L;0;0",
         ])
+        self.assertEqual(jp.recapituler(lignes, EANS, "2026-10-30").splitlines()[1:3], [
+            f"{RHUM};RHUM AMBRE;2;1", f"{WHISKY};WHISKY JW RED;1;1"])
+
+    def test_date_de_retrait_du_bon(self):
+        self.assertEqual(jp.date_retrait_bon(BON), "29/10/2026")
+        self.assertEqual(jp.date_retrait_bon(BON[:1]), "")
 
 
 class TestReleveDrive(unittest.TestCase):
@@ -119,7 +126,7 @@ class TestReleveDrive(unittest.TestCase):
     def test_noter_regenerer_puis_annuler(self):
         jour = date(2026, 10, 29)
         jp.noter_commande(self.drive, "111", BON, "29/10/2026", jour=jour)
-        jp.noter_commande(self.drive, "222", BON[:2], "30/10/2026", jour=jour)
+        jp.noter_commande(self.drive, "222", BON[:2], "", jour=date(2026, 10, 28))
         self.assertEqual(self.recap()[1], f"{WHISKY};WHISKY JW RED;5;2")
         # Régénération : les anciennes lignes de 111 sont remplacées.
         jp.noter_commande(self.drive, "111", BON[:2], "29/10/2026", jour=jour)
@@ -131,6 +138,15 @@ class TestReleveDrive(unittest.TestCase):
             f"2026-10-29;111;29/10/2026;{WHISKY};WHISKY JW RED 70CL;2",
         ])
         self.assertEqual(self.recap()[1], f"{WHISKY};WHISKY JW RED;2;1")
+
+    def test_rattrapage_groupe_recap_ecrit_meme_vide(self):
+        arts = jp.noter_commandes(self.drive, [("111", BON, "", date(2026, 10, 27)),
+                                               ("222", BON[:1], "", date(2026, 10, 27))],
+                                  jours=["2026-10-29", "2026-10-31"])
+        self.assertEqual(arts, {"111": 4, "222": 0})
+        self.assertEqual(self.recap()[1], f"{WHISKY};WHISKY JW RED;3;1")
+        self.assertEqual(self.stock["jeudi_plus_2026-10-31.csv"].splitlines()[1:],
+                         [f"{e};{l};0;0" for e, l in sorted(EANS.items(), key=lambda kv: (kv[1], kv[0]))])
 
     def test_sans_liste_rien_n_est_ecrit(self):
         del self.stock[jp.FICHIER_EANS]
