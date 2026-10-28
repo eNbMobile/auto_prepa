@@ -105,6 +105,17 @@ class TestExtraction(unittest.TestCase):
         self.assertEqual(jp.date_retrait_bon(BON[:1]), "")
 
 
+class TestPdf(unittest.TestCase):
+    def test_pdf_des_produits_commandes(self):
+        recap = (f"{jp.ENTETE_RECAP}\n{WHISKY};J&B <RARE>;3;2\n{RHUM};RHUM;0;0\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = jp.generer_pdf_recap(recap, date(2026, 10, 29), os.path.join(tmp, "r.pdf"))
+            with open(pdf, "rb") as f:
+                self.assertTrue(f.read(5) == b"%PDF-")
+            self.assertIsNone(jp.generer_pdf_recap(f"{jp.ENTETE_RECAP}\n{RHUM};RHUM;0;0\n",
+                                                   date(2026, 10, 29), os.path.join(tmp, "v.pdf")))
+
+
 class TestReleveDrive(unittest.TestCase):
     def setUp(self):
         import googleapiclient.http as gh

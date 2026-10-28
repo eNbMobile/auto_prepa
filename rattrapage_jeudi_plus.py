@@ -10,12 +10,14 @@ et, si --dossier est donné, ceux de ce dossier Drive.
 Seuls les bons dont la date de retrait est --date (défaut : demain) sont
 relevés ; les commandes du registre des annulations sont écartées. Le
 récapitulatif du jour (GITHUB/JeudiPlus/jeudi_plus_AAAA-MM-JJ.csv) est
-réécrit même si aucun bon ne contient de produit suivi.
+réécrit même si aucun bon ne contient de produit suivi, et sa version PDF
+(jeudi_plus_AAAA-MM-JJ.pdf, mise en page du contrôle de stocks) déposée à côté.
 """
 import argparse
 import os
 import re
 import sys
+import tempfile
 from datetime import datetime, timedelta
 
 import jeudi_plus as jp
@@ -104,10 +106,18 @@ def main():
           f"{sum(1 for n in articles.values() if n)} avec des produits Jeudi Plus, "
           f"{total} article(s) au total.\nRécapitulatif : {jp.DOSSIER_GITHUB}/{jp.DOSSIER}/{fichier_recap}")
 
+    dossier_id = jp.dossier_jeudi_plus(drive_svc)
+    recap = jp._telecharger_texte(drive_svc, jp._trouver(drive_svc, dossier_id, fichier_recap))
+    with tempfile.TemporaryDirectory() as tmp:
+        pdf = jp.generer_pdf_recap(recap, cible, os.path.join(tmp, f"{jp.PREFIXE_RECAP}{cible:%Y-%m-%d}.pdf"))
+        if pdf:
+            with open(pdf, "rb") as f:
+                jp.ecrire_texte(drive_svc, dossier_id, os.path.basename(pdf), f.read(),
+                                mimetype="application/pdf")
+            print(f"PDF : {jp.DOSSIER_GITHUB}/{jp.DOSSIER}/{os.path.basename(pdf)}")
+
     resume = os.environ.get("GITHUB_STEP_SUMMARY")
     if resume:
-        dossier_id = jp.dossier_jeudi_plus(drive_svc)
-        recap = jp._telecharger_texte(drive_svc, jp._trouver(drive_svc, dossier_id, fichier_recap))
         with open(resume, "a", encoding="utf-8") as f:
             f.write(f"## Jeudi Plus — retrait du {cible_txt}\n\n"
                     f"{len(commandes)} commande(s), {total} article(s)\n\n"

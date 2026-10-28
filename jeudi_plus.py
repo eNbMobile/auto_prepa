@@ -171,11 +171,11 @@ def _telecharger_texte(drive_svc, file_id):
     return buf.getvalue().decode("utf-8")
 
 
-def ecrire_texte(drive_svc, dossier_id, nom, contenu, file_id=None):
+def ecrire_texte(drive_svc, dossier_id, nom, contenu, file_id=None, mimetype="text/csv"):
     from googleapiclient.http import MediaIoBaseUpload
     file_id = file_id or _trouver(drive_svc, dossier_id, nom)
-    media = MediaIoBaseUpload(io.BytesIO(contenu.encode("utf-8")),
-                              mimetype="text/csv", resumable=False)
+    donnees = contenu if isinstance(contenu, bytes) else contenu.encode("utf-8")
+    media = MediaIoBaseUpload(io.BytesIO(donnees), mimetype=mimetype, resumable=False)
     if file_id:
         drive_svc.files().update(fileId=file_id, media_body=media).execute()
     else:
@@ -256,3 +256,73 @@ def retirer_commande(drive_svc, numero):
             _maj_releve(drive_svc, eans, [numero], [])
     except Exception as e:
         print(f"    Retrait Jeudi Plus echoue (cde {numero}) : {e}")
+
+
+# ─────────────────────────────────────────────────────────────────
+# PDF du récapitulatif (mise en page du contrôle de stocks)
+# ─────────────────────────────────────────────────────────────────
+
+def generer_pdf_recap(contenu_recap, jour, nom_pdf):
+    """PDF des produits commandés d'un récapitulatif (contenu de
+    jeudi_plus_AAAA-MM-JJ.csv) : code-barres, libellé, quantité, nombre de
+    commandes, les plus vendus en tête. Retourne le chemin, None si aucun
+    produit commandé."""
+    from reportlab.graphics.barcode import createBarcodeDrawing
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from xml.sax.saxutils import escape
+
+    rows = []
+    for ligne in contenu_recap.splitlines()[1:]:
+        champs = ligne.split(";")
+        if len(champs) >= 4 and champs[2].isdigit() and int(champs[2]) > 0:
+            rows.append((champs[0], champs[1], int(champs[2]), int(champs[3] or 0)))
+    if not rows:
+        return None
+
+    small = ParagraphStyle('small', fontSize=8, leading=10)
+    small_c = ParagraphStyle('small_c', fontSize=8, leading=10, alignment=1)
+    gras_c = ParagraphStyle('gras_c', fontSize=10, leading=12, alignment=1, fontName='Helvetica-Bold')
+    tiny_c = ParagraphStyle('tiny_c', fontSize=7, leading=8, alignment=1)
+    header_s = ParagraphStyle('hdr', fontSize=8, leading=10, textColor=colors.white)
+    header_c = ParagraphStyle('hdr_c', parent=header_s, alignment=1)
+
+    def cellule_code(ean):
+        try:
+            bc = createBarcodeDrawing('EAN13', value=ean, width=100, height=30, humanReadable=False)
+        except Exception:
+            return Paragraph(ean, small)
+        return Table([[bc], [Paragraph(ean, tiny_c)]], colWidths=[108], style=TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('TOPPADDING', (0, 0), (-1, -1), 0), ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ]))
+
+    data = [[Paragraph('Code-barres', header_s), Paragraph('Libellé', header_s),
+             Paragraph('Quantité', header_c), Paragraph('Commandes', header_c)]]
+    for ean, libelle, qte, nb in rows:
+        data.append([cellule_code(ean), Paragraph(escape(libelle), small),
+                     Paragraph(str(qte), gras_c), Paragraph(str(nb), small_c)])
+
+    BLEU = colors.HexColor('#006797')
+    table = Table(data, colWidths=[108, 299, 55, 65], repeatRows=1)
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), BLEU),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#EEF6FB')]),
+        ('GRID', (0, 0), (-1, -1), 0.3, colors.lightgrey),
+        ('TOPPADDING', (0, 0), (-1, -1), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+    ]))
+
+    total = sum(r[2] for r in rows)
+    titre = (f"<b>Jeudi Plus — retrait du {jour:%d/%m/%Y}</b>&nbsp;&nbsp;"
+             f"({len(rows)} produit{'s' if len(rows) > 1 else ''}, "
+             f"{total} article{'s' if total > 1 else ''})")
+    doc = SimpleDocTemplate(nom_pdf, pagesize=A4, topMargin=8*mm, bottomMargin=8*mm,
+                            leftMargin=3*mm, rightMargin=3*mm)
+    doc.build([Paragraph(titre, getSampleStyleSheet()['Title']), Spacer(1, 5*mm), table])
+    return nom_pdf
