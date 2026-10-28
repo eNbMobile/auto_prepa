@@ -17,7 +17,6 @@ import argparse
 import os
 import re
 import sys
-import tempfile
 from datetime import datetime, timedelta
 
 import jeudi_plus as jp
@@ -108,24 +107,18 @@ def main():
 
     dossier_id = jp.dossier_jeudi_plus(drive_svc)
     recap = jp._telecharger_texte(drive_svc, jp._trouver(drive_svc, dossier_id, fichier_recap))
-    with tempfile.TemporaryDirectory() as tmp:
-        pdf = jp.generer_pdf_recap(recap, cible, os.path.join(tmp, f"{jp.PREFIXE_RECAP}{cible:%Y-%m-%d}.pdf"))
-        if pdf:
-            with open(pdf, "rb") as f:
-                jp.ecrire_texte(drive_svc, dossier_id, os.path.basename(pdf), f.read(),
-                                mimetype="application/pdf")
-            print(f"PDF : {jp.DOSSIER_GITHUB}/{jp.DOSSIER}/{os.path.basename(pdf)}")
+    print(f"PDF : {jp.DOSSIER_GITHUB}/{jp.DOSSIER}/{jp.PREFIXE_RECAP}{cible:%Y-%m-%d}.pdf")
 
     resume = os.environ.get("GITHUB_STEP_SUMMARY")
     if resume:
         with open(resume, "a", encoding="utf-8") as f:
             f.write(f"## Jeudi Plus — retrait du {cible_txt}\n\n"
                     f"{len(commandes)} commande(s), {total} article(s)\n\n"
-                    "| EAN | Libellé | Quantité | Commandes |\n|---|---|---|---|\n")
+                    "| Quantité | EAN | Libellé | Commandes |\n|---|---|---|---|\n")
             for ligne in recap.splitlines()[1:]:
-                ean, libelle, qte, nb = ligne.split(";")
+                ean, libelle, qte, _, numeros = ligne.split(";")
                 if qte != "0":
-                    f.write(f"| {ean} | {libelle} | {qte} | {nb} |\n")
+                    f.write(f"| {qte} | {ean} | {libelle} | {numeros} |\n")
 
 
 if __name__ == "__main__":
