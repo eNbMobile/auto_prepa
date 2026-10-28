@@ -1,0 +1,71 @@
+name: Collecte Jeudi Plus
+
+# Lancement manuel : relève les EAN-13 des produits d'une page Jeudi Plus de
+# coursesu.com (ou d'une liste collée) et les dépose sur Drive
+# (GITHUB/JeudiPlus/jeudi_plus_eans.csv). auto_prepa.py note ensuite, à chaque
+# commande, les quantités de ces produits (cf. jeudi_plus.py).
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "URL de la page coursesu.com (ex. Jeudi Plus whisky et rhum)"
+        required: false
+        type: string
+      eans:
+        description: "Ou liste d'EAN collée (espaces, virgules ou lignes)"
+        required: false
+        type: string
+      ajouter:
+        description: "Compléter la liste existante au lieu de la remplacer"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: jeudi_plus
+  cancel-in-progress: false
+
+jobs:
+  collecte:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python et dépendances
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer les dépendances pip
+        run: pip install -r requirements.txt playwright
+
+      - name: Installer Chromium
+        if: ${{ inputs.url != '' }}
+        run: python3 -m playwright install --with-deps chromium
+
+      - name: Collecter les EAN
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          BOOTSTRAP_LOCAL:        "1"
+          URL:                    ${{ inputs.url }}
+          EANS:                   ${{ inputs.eans }}
+          AJOUTER:                ${{ inputs.ajouter && '--ajouter' || '' }}
+        run: python3 bootstrap.py collecte_jeudi_plus.py --url "$URL" --eans "$EANS" $AJOUTER
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+            echo "Secret GOOGLE_TOKEN_JSON mis à jour."
+          fi
