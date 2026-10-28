@@ -11,7 +11,7 @@ on:
         required: false
         type: string
       dossier:
-        description: "ID d'un dossier Drive de bon_prepa en plus du dossier des bons (facultatif)"
+        description: "ID d'un autre dossier Drive de bon_prepa (facultatif : le dossier des bons et GITHUB/JeudiPlus/Bons_prepa sont toujours lus)"
         required: false
         type: string
 
