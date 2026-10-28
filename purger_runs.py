@@ -70,7 +70,14 @@ def api(methode, chemin):
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 return None  # déjà supprimé
-            if e.code in (403, 429):
+            # Un 403 n'est une limite que si le quota est épuisé ou si GitHub
+            # demande d'attendre (Retry-After) ; sinon c'est un refus (par
+            # exemple suppression d'un run non terminé) : inutile d'attendre.
+            limite = e.headers.get("X-RateLimit-Remaining") == "0" or e.headers.get("Retry-After")
+            if e.code == 429 or (e.code == 403 and limite):
+                if e.headers.get("Retry-After"):
+                    time.sleep(int(e.headers["Retry-After"]) + 1)
+                    continue
                 reset = e.headers.get("X-RateLimit-Reset")
                 attente = (max(0, int(reset) - time.time()) + 5) if reset else 60 * (tentative + 1)
                 print(f"  HTTP {e.code} (limite) : pause de {int(attente)} s.", flush=True)
@@ -115,9 +122,34 @@ def tranches(debut, fin):
     yield from tranches(milieu, fin)
 
 
+def supprimer(run):
+    """Supprime un run ; un run resté bloqué (queued, in_progress...) est
+    d'abord annulé de force, GitHub refusant de supprimer un run non terminé.
+    Renvoie False si le run n'a pas pu être supprimé."""
+    chemin = f"/repos/{DEPOT}/actions/runs/{run['id']}"
+    if run.get("status") != "completed":
+        print(f"  Run {run['id']} ({run.get('name')}) bloqué en « {run.get('status')} » : "
+              f"annulation forcée.", flush=True)
+        try:
+            api("POST", f"{chemin}/force-cancel")
+        except urllib.error.HTTPError as e:
+            print(f"  Annulation refusée (HTTP {e.code}).", flush=True)
+    for attente in (0, 10, 30):
+        time.sleep(attente)
+        try:
+            api("DELETE", chemin)
+            return True
+        except urllib.error.HTTPError as e:
+            if e.code not in (403, 409):
+                raise
+            refus = e.code
+    print(f"  Run {run['id']} non supprimé (HTTP {refus}), ignoré pour ce passage.", flush=True)
+    return False
+
+
 def main():
     simulation = "--simulation" in sys.argv
-    supprimes = conserves = 0
+    supprimes = conserves = ignores = 0
     jour = DEBUT
     while jour < AVANT:
         fin = min(jour + timedelta(days=1), AVANT)
@@ -127,7 +159,9 @@ def main():
                     conserves += 1
                     continue
                 if not simulation:
-                    api("DELETE", f"/repos/{DEPOT}/actions/runs/{run['id']}")
+                    if not supprimer(run):
+                        ignores += 1
+                        continue
                 supprimes += 1
                 if datetime.now(timezone.utc) - _debut_execution > DUREE_MAX:
                     print(f"Durée maximale atteinte : {supprimes} run(s) supprimé(s) "
@@ -139,6 +173,8 @@ def main():
         jour = fin
     print(f"Terminé : {supprimes} run(s) {'à supprimer' if simulation else 'supprimé(s)'}, "
           f"{conserves} conservé(s) (workflows sans données client).")
+    if ignores:
+        print(f"{ignores} run(s) non supprimé(s) (voir ci-dessus).")
     _sortie(termine=True)
 
 
