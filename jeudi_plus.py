@@ -14,11 +14,14 @@
   ou remplacée est retirée (retirer_commande()).
 - Après chaque écriture, le récapitulatif du jour de retrait/livraison est
   réécrit : GITHUB/JeudiPlus/jeudi_plus_AAAA-MM-JJ.csv, une ligne par produit
-  suivi (« ean;libellé;quantité;nb commandes »), produits non commandés
-  compris (quantité 0), les plus vendus en tête.
+  suivi (« ean;libellé;quantité;nb commandes;commandes », ces dernières
+  sous la forme « 56808178 56815857×3 »), produits non commandés compris
+  (quantité 0), les plus vendus en tête ; sa version PDF
+  (jeudi_plus_AAAA-MM-JJ.pdf) est réécrite à côté.
 - rattrapage_jeudi_plus.py relève après coup les bons déjà générés.
 """
 import io
+import os
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -31,7 +34,7 @@ FICHIER_EANS = "jeudi_plus_eans.csv"
 FICHIER_COMMANDES = "jeudi_plus_commandes.csv"
 PREFIXE_RECAP = "jeudi_plus_"
 ENTETE_COMMANDES = "date_reception;commande;date_retrait;ean;libelle;quantite"
-ENTETE_RECAP = "ean;libelle;quantite;nb_commandes"
+ENTETE_RECAP = "ean;libelle;quantite;nb_commandes;commandes"
 
 # Index des champs d'une ligne de bon_prepa (gencod;libellé;prix;prix2;qté;...).
 _IDX_GENCOD, _IDX_LIBELLE, _IDX_QTE = 0, 1, 4
@@ -109,19 +112,20 @@ def date_retrait_bon(lignes_bon_prepa):
 def recapituler(lignes_commandes, eans, jour):
     """Contenu du récapitulatif d'un jour de retrait (AAAA-MM-JJ) à partir
     des lignes du relevé : tous les produits suivis, les plus vendus en tête."""
-    totaux = {ean: [libelle, 0, set()] for ean, libelle in eans.items()}
+    totaux = {ean: [libelle, 0, {}] for ean, libelle in eans.items()}
     for ligne in lignes_commandes:
         champs = ligne.split(";")
         if len(champs) < 6 or jour_recap(ligne) != jour:
             continue
         _, numero, _, ean, libelle, qte = champs[:6]
-        total = totaux.setdefault(ean, [libelle, 0, set()])
+        total = totaux.setdefault(ean, [libelle, 0, {}])
         total[0] = total[0] or libelle
         total[1] += int(qte or 0)
-        total[2].add(numero)
+        total[2][numero] = total[2].get(numero, 0) + int(qte or 0)
     ordre = sorted(totaux.items(), key=lambda kv: (-kv[1][1], kv[1][0], kv[0]))
     return "\n".join([ENTETE_RECAP] + [
-        f"{ean};{libelle};{qte};{len(numeros)}"
+        f"{ean};{libelle};{qte};{len(numeros)};"
+        + " ".join(n if q == 1 else f"{n}×{q}" for n, q in sorted(numeros.items()))
         for ean, (libelle, qte, numeros) in ordre]) + "\n"
 
 
@@ -214,8 +218,29 @@ def _maj_releve(drive_svc, eans, numeros, nouvelles, jours=()):
         ecrire_texte(drive_svc, dossier_id, FICHIER_COMMANDES,
                      "\n".join([ENTETE_COMMANDES] + lignes) + "\n", file_id)
     for jour in sorted({jour_recap(l) for l in retirees + nouvelles} | set(jours)):
-        ecrire_texte(drive_svc, dossier_id, f"{PREFIXE_RECAP}{jour}.csv",
-                     recapituler(lignes, eans, jour))
+        recap = recapituler(lignes, eans, jour)
+        ecrire_texte(drive_svc, dossier_id, f"{PREFIXE_RECAP}{jour}.csv", recap)
+        _ecrire_pdf_recap(drive_svc, dossier_id, recap, jour)
+
+
+def _ecrire_pdf_recap(drive_svc, dossier_id, recap, jour):
+    """Réécrit jeudi_plus_AAAA-MM-JJ.pdf à côté du CSV (rien si aucun produit
+    commandé ce jour-là). Un échec n'empêche pas le relevé."""
+    import tempfile
+    fichier_pdf = f"{PREFIXE_RECAP}{jour}.pdf"
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = generer_pdf_recap(recap, datetime.strptime(jour, "%Y-%m-%d").date(),
+                                    os.path.join(tmp, fichier_pdf))
+            if pdf:
+                with open(pdf, "rb") as f:
+                    ecrire_texte(drive_svc, dossier_id, fichier_pdf, f.read(), mimetype="application/pdf")
+            else:
+                ancien = _trouver(drive_svc, dossier_id, fichier_pdf)
+                if ancien:  # plus aucun produit commandé ce jour-là (annulations)
+                    drive_svc.files().update(fileId=ancien, body={"trashed": True}).execute()
+    except Exception as e:
+        print(f"    PDF {DOSSIER}/{fichier_pdf} echoue : {e}")
 
 
 def noter_commandes(drive_svc, commandes, jours=()):
@@ -264,8 +289,8 @@ def retirer_commande(drive_svc, numero):
 
 def generer_pdf_recap(contenu_recap, jour, nom_pdf):
     """PDF des produits commandés d'un récapitulatif (contenu de
-    jeudi_plus_AAAA-MM-JJ.csv) : code-barres, libellé, quantité, nombre de
-    commandes, les plus vendus en tête. Retourne le chemin, None si aucun
+    jeudi_plus_AAAA-MM-JJ.csv) : quantité, code-barres, libellé, numéros de
+    commande, les plus vendus en tête. Retourne le chemin, None si aucun
     produit commandé."""
     from reportlab.graphics.barcode import createBarcodeDrawing
     from reportlab.lib import colors
@@ -279,7 +304,8 @@ def generer_pdf_recap(contenu_recap, jour, nom_pdf):
     for ligne in contenu_recap.splitlines()[1:]:
         champs = ligne.split(";")
         if len(champs) >= 4 and champs[2].isdigit() and int(champs[2]) > 0:
-            rows.append((champs[0], champs[1], int(champs[2]), int(champs[3] or 0)))
+            rows.append((champs[0], champs[1], int(champs[2]),
+                         champs[4] if len(champs) > 4 else champs[3]))
     if not rows:
         return None
 
@@ -301,14 +327,14 @@ def generer_pdf_recap(contenu_recap, jour, nom_pdf):
             ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0),
         ]))
 
-    data = [[Paragraph('Code-barres', header_s), Paragraph('Libellé', header_s),
-             Paragraph('Quantité', header_c), Paragraph('Commandes', header_c)]]
-    for ean, libelle, qte, nb in rows:
-        data.append([cellule_code(ean), Paragraph(escape(libelle), small),
-                     Paragraph(str(qte), gras_c), Paragraph(str(nb), small_c)])
+    data = [[Paragraph('Quantité', header_c), Paragraph('Code-barres', header_s),
+             Paragraph('Libellé', header_s), Paragraph('Commandes', header_c)]]
+    for ean, libelle, qte, commandes in rows:
+        data.append([Paragraph(str(qte), gras_c), cellule_code(ean), Paragraph(escape(libelle), small),
+                     Paragraph(escape(commandes).replace(' ', '<br/>'), small_c)])
 
     BLEU = colors.HexColor('#006797')
-    table = Table(data, colWidths=[108, 299, 55, 65], repeatRows=1)
+    table = Table(data, colWidths=[50, 108, 259, 110], repeatRows=1)
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), BLEU),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),

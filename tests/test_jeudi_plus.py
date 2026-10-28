@@ -30,6 +30,10 @@ BON = [
 EANS = {WHISKY: "WHISKY JW RED", RHUM: "", "3560070000005": "WHISKY U 1L"}
 
 
+def _texte(donnees):
+    return donnees if donnees.startswith(b"%PDF") else donnees.decode()
+
+
 class FauxFichiers:
     def __init__(self, stock):
         self.stock = stock
@@ -41,12 +45,15 @@ class FauxFichiers:
     def get_media(self, fileId):
         return fileId
 
-    def update(self, fileId, media_body=None):
-        self.stock[fileId] = media_body._fd.getvalue().decode()
+    def update(self, fileId, media_body=None, body=None):
+        if body and body.get("trashed"):
+            del self.stock[fileId]
+        else:
+            self.stock[fileId] = _texte(media_body._fd.getvalue())
         return _Exec({})
 
     def create(self, body, media_body=None, fields=None):
-        self.stock[body["name"]] = media_body._fd.getvalue().decode() if media_body else ""
+        self.stock[body["name"]] = _texte(media_body._fd.getvalue()) if media_body else ""
         return _Exec({"id": body["name"]})
 
 
@@ -93,12 +100,12 @@ class TestExtraction(unittest.TestCase):
                   f"2026-10-29;444;;{RHUM};RHUM AMBRE;1"]
         self.assertEqual(jp.recapituler(lignes, EANS, "2026-10-29").splitlines(), [
             jp.ENTETE_RECAP,
-            f"{RHUM};RHUM AMBRE;6;2",
-            f"{WHISKY};WHISKY JW RED;3;1",
-            "3560070000005;WHISKY U 1L;0;0",
+            f"{RHUM};RHUM AMBRE;6;2;333×5 444",
+            f"{WHISKY};WHISKY JW RED;3;1;111×3",
+            "3560070000005;WHISKY U 1L;0;0;",
         ])
         self.assertEqual(jp.recapituler(lignes, EANS, "2026-10-30").splitlines()[1:3], [
-            f"{RHUM};RHUM AMBRE;2;1", f"{WHISKY};WHISKY JW RED;1;1"])
+            f"{RHUM};RHUM AMBRE;2;1;222×2", f"{WHISKY};WHISKY JW RED;1;1;222"])
 
     def test_date_de_retrait_du_bon(self):
         self.assertEqual(jp.date_retrait_bon(BON), "29/10/2026")
@@ -107,7 +114,7 @@ class TestExtraction(unittest.TestCase):
 
 class TestPdf(unittest.TestCase):
     def test_pdf_des_produits_commandes(self):
-        recap = (f"{jp.ENTETE_RECAP}\n{WHISKY};J&B <RARE>;3;2\n{RHUM};RHUM;0;0\n")
+        recap = (f"{jp.ENTETE_RECAP}\n{WHISKY};J&B <RARE>;3;2;111×2 222\n{RHUM};RHUM;0;0;\n")
         with tempfile.TemporaryDirectory() as tmp:
             pdf = jp.generer_pdf_recap(recap, date(2026, 10, 29), os.path.join(tmp, "r.pdf"))
             with open(pdf, "rb") as f:
@@ -138,26 +145,29 @@ class TestReleveDrive(unittest.TestCase):
         jour = date(2026, 10, 29)
         jp.noter_commande(self.drive, "111", BON, "29/10/2026", jour=jour)
         jp.noter_commande(self.drive, "222", BON[:2], "", jour=date(2026, 10, 28))
-        self.assertEqual(self.recap()[1], f"{WHISKY};WHISKY JW RED;5;2")
+        self.assertEqual(self.recap()[1], f"{WHISKY};WHISKY JW RED;5;2;111×3 222×2")
         # Régénération : les anciennes lignes de 111 sont remplacées.
         jp.noter_commande(self.drive, "111", BON[:2], "29/10/2026", jour=jour)
-        self.assertEqual(self.recap()[1:3], [f"{WHISKY};WHISKY JW RED;4;2",
-                                             f"{RHUM};;0;0"])
+        self.assertEqual(self.recap()[1:3], [f"{WHISKY};WHISKY JW RED;4;2;111×2 222×2",
+                                             f"{RHUM};;0;0;"])
         jp.retirer_commande(self.drive, "222")
         self.assertEqual(self.stock[jp.FICHIER_COMMANDES].splitlines(), [
             jp.ENTETE_COMMANDES,
             f"2026-10-29;111;29/10/2026;{WHISKY};WHISKY JW RED 70CL;2",
         ])
-        self.assertEqual(self.recap()[1], f"{WHISKY};WHISKY JW RED;2;1")
+        self.assertEqual(self.recap()[1], f"{WHISKY};WHISKY JW RED;2;1;111×2")
+        self.assertIn("jeudi_plus_2026-10-29.pdf", self.stock)
+        jp.retirer_commande(self.drive, "111")
+        self.assertNotIn("jeudi_plus_2026-10-29.pdf", self.stock)
 
     def test_rattrapage_groupe_recap_ecrit_meme_vide(self):
         arts = jp.noter_commandes(self.drive, [("111", BON, "", date(2026, 10, 27)),
                                                ("222", BON[:1], "", date(2026, 10, 27))],
                                   jours=["2026-10-29", "2026-10-31"])
         self.assertEqual(arts, {"111": 4, "222": 0})
-        self.assertEqual(self.recap()[1], f"{WHISKY};WHISKY JW RED;3;1")
+        self.assertEqual(self.recap()[1], f"{WHISKY};WHISKY JW RED;3;1;111×3")
         self.assertEqual(self.stock["jeudi_plus_2026-10-31.csv"].splitlines()[1:],
-                         [f"{e};{l};0;0" for e, l in sorted(EANS.items(), key=lambda kv: (kv[1], kv[0]))])
+                         [f"{e};{l};0;0;" for e, l in sorted(EANS.items(), key=lambda kv: (kv[1], kv[0]))])
 
     def test_sans_liste_rien_n_est_ecrit(self):
         del self.stock[jp.FICHIER_EANS]
