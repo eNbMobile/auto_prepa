@@ -12,10 +12,11 @@
   (« date de réception;n° commande;date de retrait;ean;libellé;quantité »).
   Une commande régénérée remplace ses anciennes lignes ; une commande annulée
   ou remplacée est retirée (retirer_commande()).
-- Après chaque écriture, le récapitulatif du jour de réception est réécrit :
-  GITHUB/JeudiPlus/jeudi_plus_AAAA-MM-JJ.csv, une ligne par produit suivi
-  (« ean;libellé;quantité;nb commandes »), produits non commandés compris
-  (quantité 0), les plus vendus en tête.
+- Après chaque écriture, le récapitulatif du jour de retrait/livraison est
+  réécrit : GITHUB/JeudiPlus/jeudi_plus_AAAA-MM-JJ.csv, une ligne par produit
+  suivi (« ean;libellé;quantité;nb commandes »), produits non commandés
+  compris (quantité 0), les plus vendus en tête.
+- rattrapage_jeudi_plus.py relève après coup les bons déjà générés.
 """
 import io
 import re
@@ -86,13 +87,32 @@ def extraire_quantites(lignes_bon_prepa, eans):
     return produits
 
 
+def jour_recap(ligne_commande):
+    """Jour (AAAA-MM-JJ) du récapitulatif d'une ligne du relevé : celui du
+    retrait/livraison, à défaut celui de réception de la commande."""
+    champs = ligne_commande.split(";")
+    m = re.fullmatch(r"(\d{2})/(\d{2})/(\d{4})", champs[2] if len(champs) > 2 else "")
+    return f"{m.group(3)}-{m.group(2)}-{m.group(1)}" if m else champs[0]
+
+
+def date_retrait_bon(lignes_bon_prepa):
+    """Date de retrait/livraison (JJ/MM/AAAA) d'un bon_prepa, lue dans les
+    infos commande de ses lignes produit (ex. « JEUDI 29/10/2026 - 10h30 »)."""
+    for ligne in lignes_bon_prepa[1:]:
+        m = re.search(r"\b(?:LUNDI|MARDI|MERCREDI|JEUDI|VENDREDI|SAMEDI|DIMANCHE)\s+"
+                      r"(\d{2}/\d{2}/\d{4})", ligne)
+        if m:
+            return m.group(1)
+    return ""
+
+
 def recapituler(lignes_commandes, eans, jour):
-    """Contenu du récapitulatif d'un jour de réception (AAAA-MM-JJ) à partir
+    """Contenu du récapitulatif d'un jour de retrait (AAAA-MM-JJ) à partir
     des lignes du relevé : tous les produits suivis, les plus vendus en tête."""
     totaux = {ean: [libelle, 0, set()] for ean, libelle in eans.items()}
     for ligne in lignes_commandes:
         champs = ligne.split(";")
-        if len(champs) < 6 or champs[0] != jour:
+        if len(champs) < 6 or jour_recap(ligne) != jour:
             continue
         _, numero, _, ean, libelle, qte = champs[:6]
         total = totaux.setdefault(ean, [libelle, 0, set()])
@@ -178,40 +198,52 @@ def charger_eans(drive_svc):
     return _eans_cache
 
 
-def _maj_releve(drive_svc, eans, numero, nouvelles):
-    """Retire les lignes de la commande `numero` du relevé, ajoute
-    `nouvelles`, puis réécrit le récapitulatif des jours concernés."""
+def _maj_releve(drive_svc, eans, numeros, nouvelles, jours=()):
+    """Retire les lignes des commandes `numeros` du relevé, ajoute
+    `nouvelles`, puis réécrit le récapitulatif des jours concernés (et de
+    `jours`, AAAA-MM-JJ, même sans commande)."""
+    numeros = {str(n) for n in numeros}
     dossier_id = dossier_jeudi_plus(drive_svc)
     file_id = _trouver(drive_svc, dossier_id, FICHIER_COMMANDES)
     lignes = []
     if file_id:
         lignes = [l for l in _telecharger_texte(drive_svc, file_id).splitlines()[1:] if l.strip()]
-    retirees = [l for l in lignes if l.split(";")[1:2] == [str(numero)]]
-    if not retirees and not nouvelles:
-        return
-    lignes = [l for l in lignes if l not in retirees] + nouvelles
-    ecrire_texte(drive_svc, dossier_id, FICHIER_COMMANDES,
-                 "\n".join([ENTETE_COMMANDES] + lignes) + "\n", file_id)
-    for jour in sorted({l.split(";")[0] for l in retirees + nouvelles}):
+    retirees = [l for l in lignes if l.split(";")[1] in numeros]
+    if retirees or nouvelles:
+        lignes = [l for l in lignes if l not in retirees] + nouvelles
+        ecrire_texte(drive_svc, dossier_id, FICHIER_COMMANDES,
+                     "\n".join([ENTETE_COMMANDES] + lignes) + "\n", file_id)
+    for jour in sorted({jour_recap(l) for l in retirees + nouvelles} | set(jours)):
         ecrire_texte(drive_svc, dossier_id, f"{PREFIXE_RECAP}{jour}.csv",
                      recapituler(lignes, eans, jour))
+
+
+def noter_commandes(drive_svc, commandes, jours=()):
+    """Relève en une seule écriture les produits Jeudi Plus de plusieurs bons :
+    `commandes` = [(numéro, lignes du bon_prepa, date de retrait JJ/MM/AAAA ou
+    "", date de réception)]. Retourne {numéro: articles relevés}."""
+    eans = charger_eans(drive_svc)
+    if not eans:
+        return {}
+    nouvelles, articles = [], {}
+    for numero, lignes_bon_prepa, date_retrait, jour in commandes:
+        produits = extraire_quantites(lignes_bon_prepa, eans)
+        date_retrait = date_retrait or date_retrait_bon(lignes_bon_prepa)
+        nouvelles += [f"{jour:%Y-%m-%d};{numero};{date_retrait};{ean};{libelle.replace(';', ' ')};{qte}"
+                      for ean, (libelle, qte) in sorted(produits.items())]
+        articles[numero] = sum(q for _, q in produits.values())
+    _maj_releve(drive_svc, eans, [c[0] for c in commandes], nouvelles, jours)
+    return articles
 
 
 def noter_commande(drive_svc, numero, lignes_bon_prepa, date_retrait="", jour=None):
     """Relève les produits Jeudi Plus d'un bon généré. Ne lève jamais : un
     échec ne doit pas bloquer la génération du bon."""
     try:
-        eans = charger_eans(drive_svc)
-        if not eans:
-            return
-        produits = extraire_quantites(lignes_bon_prepa, eans)
-        jour = (jour or datetime.now(_TZ).date()).strftime("%Y-%m-%d")
-        nouvelles = [f"{jour};{numero};{date_retrait};{ean};{libelle.replace(';', ' ')};{qte}"
-                     for ean, (libelle, qte) in sorted(produits.items())]
-        _maj_releve(drive_svc, eans, numero, nouvelles)
-        if produits:
-            print(f"    Jeudi Plus : {sum(q for _, q in produits.values())} article(s) "
-                  f"({len(produits)} produit(s)) notes dans {DOSSIER}/{FICHIER_COMMANDES}")
+        jour = jour or datetime.now(_TZ).date()
+        nb = noter_commandes(drive_svc, [(numero, lignes_bon_prepa, date_retrait, jour)]).get(numero)
+        if nb:
+            print(f"    Jeudi Plus : {nb} article(s) notes dans {DOSSIER}/{FICHIER_COMMANDES}")
     except Exception as e:
         print(f"    Releve Jeudi Plus echoue (cde {numero}) : {e}")
 
@@ -221,6 +253,6 @@ def retirer_commande(drive_svc, numero):
     try:
         eans = charger_eans(drive_svc)
         if eans:
-            _maj_releve(drive_svc, eans, numero, [])
+            _maj_releve(drive_svc, eans, [numero], [])
     except Exception as e:
         print(f"    Retrait Jeudi Plus echoue (cde {numero}) : {e}")
