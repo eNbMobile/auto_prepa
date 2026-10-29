@@ -19,6 +19,9 @@
   (quantité 0), les plus vendus en tête ; sa version PDF
   (jeudi_plus_AAAA-MM-JJ.pdf) est réécrite à côté.
 - rattrapage_jeudi_plus.py relève après coup les bons déjà générés.
+- exclure_jeudi_plus.py retire à la main des commandes du relevé et les note
+  dans GITHUB/JeudiPlus/jeudi_plus_commandes_exclues.txt : elles ne sont plus
+  jamais relevées (ni à leur régénération, ni au rattrapage).
 """
 import io
 import os
@@ -32,6 +35,7 @@ DOSSIER_GITHUB = "GITHUB"
 DOSSIER = "JeudiPlus"
 FICHIER_EANS = "jeudi_plus_eans.csv"
 FICHIER_COMMANDES = "jeudi_plus_commandes.csv"
+FICHIER_EXCLUES = "jeudi_plus_commandes_exclues.txt"
 PREFIXE_RECAP = "jeudi_plus_"
 ENTETE_COMMANDES = "date_reception;commande;date_retrait;ean;libelle;quantite"
 ENTETE_RECAP = "ean;libelle;quantite;nb_commandes;commandes"
@@ -250,8 +254,12 @@ def noter_commandes(drive_svc, commandes, jours=()):
     eans = charger_eans(drive_svc)
     if not eans:
         return {}
+    exclues = charger_exclues(drive_svc)
     nouvelles, articles = [], {}
     for numero, lignes_bon_prepa, date_retrait, jour in commandes:
+        if str(numero) in exclues:
+            articles[numero] = 0
+            continue
         produits = extraire_quantites(lignes_bon_prepa, eans)
         date_retrait = date_retrait or date_retrait_bon(lignes_bon_prepa)
         nouvelles += [f"{jour:%Y-%m-%d};{numero};{date_retrait};{ean};{libelle.replace(';', ' ')};{qte}"
@@ -271,6 +279,37 @@ def noter_commande(drive_svc, numero, lignes_bon_prepa, date_retrait="", jour=No
             print(f"    Jeudi Plus : {nb} article(s) notes dans {DOSSIER}/{FICHIER_COMMANDES}")
     except Exception as e:
         print(f"    Releve Jeudi Plus echoue (cde {numero}) : {e}")
+
+
+def charger_exclues(drive_svc):
+    """Numéros des commandes exclues à la main du relevé (set vide si aucun)."""
+    dossier_id = dossier_jeudi_plus(drive_svc, creer=False)
+    file_id = _trouver(drive_svc, dossier_id, FICHIER_EXCLUES) if dossier_id else None
+    if not file_id:
+        return set()
+    return {l.strip() for l in _telecharger_texte(drive_svc, file_id).splitlines() if l.strip()}
+
+
+def exclure_commandes(drive_svc, numeros):
+    """Exclut définitivement des commandes du relevé : ajoutées à
+    jeudi_plus_commandes_exclues.txt, retirées du relevé, récapitulatifs et
+    PDF des jours concernés réécrits. Retourne {numéro: articles retirés}."""
+    numeros = [str(n) for n in numeros]
+    dossier_id = dossier_jeudi_plus(drive_svc)
+    exclues = charger_exclues(drive_svc) | set(numeros)
+    ecrire_texte(drive_svc, dossier_id, FICHIER_EXCLUES, "\n".join(sorted(exclues)) + "\n",
+                 mimetype="text/plain")
+    file_id = _trouver(drive_svc, dossier_id, FICHIER_COMMANDES)
+    retires = {n: 0 for n in numeros}
+    if file_id:
+        for l in _telecharger_texte(drive_svc, file_id).splitlines()[1:]:
+            champs = l.split(";")
+            if len(champs) >= 6 and champs[1] in retires:
+                retires[champs[1]] += int(champs[5] or 0)
+    eans = charger_eans(drive_svc)
+    if eans:
+        _maj_releve(drive_svc, eans, numeros, [])
+    return retires
 
 
 def retirer_commande(drive_svc, numero):

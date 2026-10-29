@@ -169,6 +169,18 @@ class TestReleveDrive(unittest.TestCase):
         self.assertEqual(self.stock["jeudi_plus_2026-10-31.csv"].splitlines()[1:],
                          [f"{e};{l};0;0;" for e, l in sorted(EANS.items(), key=lambda kv: (kv[1], kv[0]))])
 
+    def test_exclusion_definitive(self):
+        jour = date(2026, 10, 28)
+        jp.noter_commande(self.drive, "111", BON, "", jour=jour)
+        jp.noter_commande(self.drive, "222", BON[:2], "", jour=jour)
+        self.assertEqual(jp.exclure_commandes(self.drive, ["111", "999"]), {"111": 4, "999": 0})
+        self.assertEqual(self.stock[jp.FICHIER_EXCLUES], "111\n999\n")
+        self.assertEqual(self.recap()[1], f"{WHISKY};WHISKY JW RED;2;1;222×2")
+        # Régénérée ou reprise par le rattrapage : toujours ignorée.
+        jp.noter_commande(self.drive, "111", BON, "", jour=jour)
+        self.assertEqual(self.recap()[1], f"{WHISKY};WHISKY JW RED;2;1;222×2")
+        self.assertNotIn(";111;", self.stock[jp.FICHIER_COMMANDES])
+
     def test_sans_liste_rien_n_est_ecrit(self):
         del self.stock[jp.FICHIER_EANS]
         jp.noter_commande(self.drive, "111", BON, "29/10/2026", jour=date(2026, 10, 29))
