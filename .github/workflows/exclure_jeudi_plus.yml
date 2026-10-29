@@ -1,0 +1,55 @@
+name: Exclure commandes Jeudi Plus
+
+# Lancement manuel : retire des commandes du relevé Jeudi Plus (récapitulatif
+# et PDF) et les note comme exclues pour qu'elles ne soient plus jamais
+# relevées (cf. exclure_jeudi_plus.py).
+on:
+  workflow_dispatch:
+    inputs:
+      commandes:
+        description: "Numéros de commande à exclure (séparés par des espaces ou des virgules)"
+        required: true
+        type: string
+
+concurrency:
+  group: jeudi_plus
+  cancel-in-progress: false
+
+jobs:
+  exclure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python et dépendances
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer les dépendances pip
+        run: pip install -r requirements.txt
+
+      - name: Exclure les commandes
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          BOOTSTRAP_LOCAL:        "1"
+          COMMANDES:              ${{ inputs.commandes }}
+        run: python3 bootstrap.py exclure_jeudi_plus.py "$COMMANDES"
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+            echo "Secret GOOGLE_TOKEN_JSON mis à jour."
+          fi
