@@ -1,7 +1,14 @@
-# Worker « gmailpush » : un run aut_prep par email reçu
+# Worker « gmailpush » : un run aut_prep par commande, pas un par notification
 
-Avant : cron-job.org lançait `aut_prep` **toutes les minutes** (≈ 820 runs par
+Avant cron-job.org : `aut_prep` tournait **toutes les minutes** (≈ 820 runs par
 jour, dont l'immense majorité ne trouvaient rien à faire).
+
+Avant le Debounce (historyId + Durable Object, ci-dessous) : un run par
+notification Pub/Sub, et traiter une seule commande en génère plusieurs
+(réception de l'email, puis archivage/étiquetage par aut_prep lui-même) — le
+groupe de concurrence du workflow ne fait que les mettre en file
+(`cancel-in-progress: false`), il ne les annule pas : jusqu'à 4 runs GitHub
+pour une seule commande.
 
 Maintenant :
 
@@ -10,22 +17,43 @@ Email reçu dans Gmail
    └─▶ Gmail (users.watch, boîte de réception)
          └─▶ Google Cloud Pub/Sub (topic + abonnement « push »)
                └─▶ POST https://gmailpush.<compte>.workers.dev/pubsub?token=…
-                     └─▶ workflow_dispatch auto_prepa.yml (force=true, source=gmail)
+                     └─▶ Debounce (Durable Object) : notification déjà couverte
+                         (historyId) ou run déjà en cours → pas de nouveau run
+                     └─▶ sinon : workflow_dispatch auto_prepa.yml
+                         (force=true, source=gmail)
 ```
 
 - **Délai** : quelques secondes entre la réception de l'email et le lancement du run.
+- **Anti-doublon (Debounce)** : voir le commentaire en tête de `src/index.js`.
+  En résumé — une notification dont le `historyId` est déjà couvert par le
+  dernier run terminé est ignorée (écho généré par aut_prep lui-même) ; une
+  notification arrivant pendant qu'un run tourne encore ne dispatche pas de
+  nouveau run, elle est juste mémorisée pour en relancer un seul juste après.
+  La dernière étape de `auto_prepa.yml` (`if: always()`) signale la fin du run
+  au worker (`POST /termine?token=…`) avec le `historyId` Gmail courant.
+  Résultat : un seul run par commande dans le cas général, deux au plus (le
+  run utile + un run de vérification qui ne trouve plus rien à faire) si des
+  échos arrivent pendant que le premier tourne encore.
+  **Nécessite un Durable Object** (`[[durable_objects.bindings]]` dans
+  `wrangler.toml`, stockage SQLite — disponible sur le plan Workers gratuit).
+  Garde-fou anti-blocage à deux niveaux, pour qu'une commande ne reste jamais
+  bloquée si `/termine` n'arrive jamais (job planté, annulé…) :
+  passif (une notification reçue sur un état périmé redémarre un cycle) et
+  **actif** (alarme du Durable Object posée à chaque démarrage de cycle, qui
+  se déclenche d'elle-même 20 minutes plus tard sans dépendre d'une nouvelle
+  notification — sans elle, une commande tombée pendant un cycle bloqué et
+  mise « en attente » restait bloquée pour de bon si aucun autre email
+  n'arrivait derrière pour forcer une réévaluation ; vécu le 30/10/2026).
 - **Filet de sécurité (désactivé depuis le 14/10/2026)** : le worker peut relancer
   `aut_prep` toutes les 10 minutes (cron Cloudflare, `source=filet`) en ajoutant
   `"*/10 * * * *"` aux crons de `wrangler.toml`. Sans lui, les bons déposés à la
   main dans « Traitement manuel », les km Shopopop à retenter et les alertes
   d'anticipation en attente ne sont repris qu'au prochain email reçu (ou par un
-  lancement manuel de aut_prep).
+  lancement manuel de aut_prep). Ce filet, lui, passe directement par
+  `workflow_dispatch` sans passer par le Debounce.
 - **Renouvellement** : Gmail coupe les notifications au bout de 7 jours. Le worker
   lance chaque nuit (03h17 UTC) le workflow `gmail_watch.yml`, qui les réactive
   (un schedule GitHub sert de secours).
-- **Rafales** : un email génère plusieurs notifications (réception, puis archivage par
-  aut_prep). Ce n'est pas un problème : le groupe de concurrence du workflow garde un
-  run en cours et un seul en attente.
 
 ## Mise en place (une seule fois, environ 15 min)
 
@@ -51,7 +79,14 @@ Le volume (quelques centaines de messages par jour) reste très loin de la limit
 3. Actions → **Deployer tableau de bord Cloudflare** → **Run workflow** : le job
    `gmailpush` déploie le worker et installe ses secrets (`GH_TOKEN` depuis
    `WF_GH_TOKEN`, `PUBSUB_TOKEN` depuis `GMAIL_PUSH_TOKEN`).
-   URL du worker : `https://gmailpush.<compte>.workers.dev` (même sous-domaine que `wf`).
+   URL du worker : `https://gmailpush.<compte>.workers.dev` (visible dans le
+   log de ce run, ligne « Deployed gmailpush triggers » — actuellement
+   `https://gmailpush.coopu.workers.dev`).
+4. Si cette URL n'est pas `https://gmailpush.coopu.workers.dev` (valeur par
+   défaut utilisée par `auto_prepa.yml` pour signaler `/termine` au
+   Debounce), Dépôt → Settings → Secrets and variables → Actions →
+   onglet **Variables** → **New repository variable** : `GMAILPUSH_URL` =
+   l'URL réelle du worker.
 
 ### 3. Google Cloud : abonnement « push »
 

@@ -6,9 +6,39 @@
  * Pub/Sub (abonnement « push ») → POST /pubsub?token=… sur ce worker →
  * workflow_dispatch de auto_prepa.yml (force=true).
  *
- * Plusieurs notifications rapprochées (l'email reçu, puis son archivage par
- * aut_prep lui-même) ne posent pas de problème : le groupe de concurrence du
- * workflow garde un run en cours et un seul en attente, le reste est annulé.
+ * Anti-doublon (Durable Object « Debounce », une seule instance partagée) :
+ * traiter une commande fait lui-même bouger la boîte Gmail (archivage de
+ * l'email, pose de labels…), ce qui génère de nouvelles notifications
+ * Pub/Sub. Sans garde-fou, chacune déclenchait un run GitHub séparé — jusqu'à
+ * 4 runs pour une seule commande, le groupe de concurrence du workflow se
+ * contentant de les mettre en file (cancel-in-progress: false) sans les
+ * annuler. Le Debounce :
+ *  - ignore une notification dont le historyId est déjà couvert par le
+ *    dernier historyId connu (écho d'une mutation faite par aut_prep
+ *    lui-même, ou redistribution Pub/Sub d'un message déjà traité) ;
+ *  - si un run est déjà en cours, mémorise seulement qu'il en faudra un
+ *    autre une fois celui-ci terminé (« pending »), au lieu d'en dispatcher
+ *    un par notification reçue pendant son exécution ;
+ *  - à la fin du run (étape finale de auto_prepa.yml, POST
+ *    /termine?token=…), dispatche le run « pending » s'il y en a un et
+ *    avance le historyId connu.
+ *
+ * Garde-fou anti-blocage, à DEUX niveaux (un run qui ne signale jamais sa
+ * fin — job planté, annulé — ne doit jamais laisser une commande bloquée
+ * indéfiniment) :
+ *  - passif : une notification reçue alors que l'état "en cours" a plus de
+ *    DELAI_BLOCAGE_MS redémarre un cycle au lieu d'attendre ;
+ *  - actif (alarme du Durable Object, posée à chaque démarrage de cycle) :
+ *    se déclenche d'elle-même après DELAI_BLOCAGE_MS SANS dépendre de
+ *    l'arrivée d'une notification suivante. Sans elle, une commande tombée
+ *    pendant un cycle bloqué et mise "pending" restait bloquée pour de bon
+ *    si aucun autre email n'arrivait derrière pour forcer une réévaluation
+ *    (c'est ce qui s'est produit le 30/10/2026 : plus aucun run automatique
+ *    entre 19h21 et 19h47 malgré des commandes tombées).
+ *
+ * Résultat : un seul run par commande dans le cas général, deux au plus
+ * (le run utile + un run de vérification rapide qui ne trouve plus rien à
+ * faire) si des échos arrivent pendant que le premier tourne encore.
  *
  * Déclencheurs planifiés (wrangler.toml) : renouvellement quotidien de la
  * surveillance Gmail (gmail_watch.yml). Le filet de sécurité toutes les
@@ -17,6 +47,11 @@
  */
 const REPO = 'eNbMobile/auto_prepa';
 const REF = 'main';
+
+// Au-delà de ce délai sans /termine, un cycle "en cours" est considéré
+// perdu (job planté, annulé...) : on ne reste pas bloqué indéfiniment. Le
+// job GitHub a un timeout de 15 min ; on laisse une marge confortable.
+const DELAI_BLOCAGE_MS = 20 * 60 * 1000;
 
 async function lancer(env, fichier, inputs) {
   const reponse = await fetch(
@@ -46,45 +81,205 @@ function memeJeton(a, b) {
   return diff === 0;
 }
 
+/**
+ * Durable Object : une seule instance (id fixe "unique"), état partagé entre
+ * toutes les requêtes /pubsub et /termine, et son alarme. L'exécution d'un
+ * Durable Object est sérialisée (une requête/alarme à la fois), ce qui
+ * évite toute course entre deux notifications Pub/Sub reçues en même temps.
+ */
+export class Debounce {
+  constructor(ctx, env) {
+    this.ctx = ctx;
+    this.env = env;
+  }
+
+  async etat() {
+    const [lastHistoryId, inFlight, pending, startedAt] = await Promise.all([
+      this.ctx.storage.get('lastHistoryId'),
+      this.ctx.storage.get('inFlight'),
+      this.ctx.storage.get('pending'),
+      this.ctx.storage.get('startedAt'),
+    ]);
+    return {
+      lastHistoryId: lastHistoryId ?? null,
+      inFlight: inFlight ?? false,
+      pending: pending ?? false,
+      startedAt: startedAt ?? 0,
+    };
+  }
+
+  /** Démarre (ou relance) un cycle "run en cours" et arme le garde-fou actif. */
+  async demarrer(now) {
+    await this.ctx.storage.put({ inFlight: true, pending: false, startedAt: now });
+    await this.ctx.storage.setAlarm(now + DELAI_BLOCAGE_MS);
+  }
+
+  /** Termine le cycle courant (plus rien en attente) et désarme le garde-fou. */
+  async arreter() {
+    await this.ctx.storage.put('inFlight', false);
+    await this.ctx.storage.deleteAlarm();
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    const now = Date.now();
+    const e = await this.etat();
+
+    if (url.pathname === '/pubsub') {
+      const { historyId } = await request.json();
+
+      if (historyId != null && e.lastHistoryId != null && historyId <= e.lastHistoryId) {
+        return Response.json({ action: 'ignore', lastHistoryId: e.lastHistoryId });
+      }
+
+      const bloque = e.inFlight && (now - e.startedAt) < DELAI_BLOCAGE_MS;
+      if (bloque) {
+        await this.ctx.storage.put('pending', true);
+        return Response.json({ action: 'attente' });
+      }
+
+      await this.demarrer(now);
+      return Response.json({ action: 'lancer' });
+    }
+
+    if (url.pathname === '/termine') {
+      const { historyId } = await request.json().catch(() => ({}));
+      if (historyId != null && (e.lastHistoryId == null || historyId > e.lastHistoryId)) {
+        await this.ctx.storage.put('lastHistoryId', historyId);
+      }
+      if (e.pending) {
+        await this.demarrer(now);
+        return Response.json({ action: 'relancer' });
+      }
+      await this.arreter();
+      return Response.json({ action: 'rien' });
+    }
+
+    // Diagnostic (temporaire) : état brut, sans effet de bord.
+    if (url.pathname === '/etat') {
+      return Response.json(e);
+    }
+
+    return new Response('Not found', { status: 404 });
+  }
+
+  /**
+   * Garde-fou actif : posé par demarrer() pour DELAI_BLOCAGE_MS plus tard.
+   * Se déclenche tout seul, sans dépendre d'une notification Pub/Sub
+   * suivante — sinon une commande mise "pending" pendant un cycle resté
+   * bloqué (job planté, annulé) n'était jamais relancée s'il n'arrivait
+   * plus d'email derrière pour forcer une réévaluation de l'état.
+   */
+  async alarm() {
+    const now = Date.now();
+    const e = await this.etat();
+    if (e.pending) {
+      console.log('garde-fou (alarme) : notification en attente jamais traitée → relance automatique');
+      await this.demarrer(now);
+      await lancer(this.env, 'auto_prepa.yml', {
+        force: 'true', source: 'gmail-alarme',
+        trace: 'garde-fou anti-blocage (20 min) : relance automatique sans notification',
+      });
+    } else if (e.inFlight) {
+      console.log('garde-fou (alarme) : cycle périmé sans rien en attente → état remis à zéro');
+      await this.arreter();
+    }
+  }
+}
+
+function debounce(env) {
+  const id = env.DEBOUNCE.idFromName('unique');
+  return env.DEBOUNCE.get(id);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname !== '/pubsub') return new Response('Not found', { status: 404 });
-    if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
     if (!memeJeton(url.searchParams.get('token') || '', env.PUBSUB_TOKEN || '')) {
       return new Response('Forbidden', { status: 403 });
     }
-    let corps;
-    try {
-      corps = await request.json();
-    } catch {
-      return new Response('Bad request', { status: 400 });
+
+    if (url.pathname === '/pubsub') {
+      if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+      let corps;
+      try {
+        corps = await request.json();
+      } catch {
+        return new Response('Bad request', { status: 400 });
+      }
+      if (!corps || !corps.message) return new Response('Bad request', { status: 400 });
+
+      // Trace de chaque notification (logs Cloudflare, privés) : publishTime
+      // très antérieur à l'heure de réception = message redistribué par
+      // Pub/Sub, pas un nouvel événement Gmail — le historyId (ci-dessous)
+      // s'en charge de toute façon via le Debounce.
+      let historyId = null;
+      try {
+        const brut = JSON.parse(atob(corps.message.data || '')).historyId;
+        if (brut != null) historyId = Number(brut);
+      } catch {}
+      const trace = `notification ${corps.message.messageId || corps.message.message_id || '?'} ` +
+        `publiée ${corps.message.publishTime || corps.message.publish_time || '?'} ` +
+        `historyId ${historyId ?? '?'} tentative ${corps.deliveryAttempt || '?'}`;
+
+      const decision = await (await debounce(env).fetch('https://debounce/pubsub', {
+        method: 'POST',
+        body: JSON.stringify({ historyId }),
+      })).json();
+
+      if (decision.action !== 'lancer') {
+        console.log(`${trace} → ${decision.action}`);
+        return new Response(null, { status: 204 });
+      }
+
+      // trace : heures de publication Pub/Sub et de réception par le worker,
+      // affichées par le run pour découper le délai de notification.
+      const publie = corps.message.publishTime || corps.message.publish_time || '?';
+      const recu = new Date().toISOString();
+      const ok = await lancer(env, 'auto_prepa.yml', {
+        force: 'true', source: 'gmail',
+        trace: `publiée ${publie.slice(11, 23)} | reçue par le worker ${recu.slice(11, 23)}`,
+      });
+      console.log(`${trace} → ${ok ? 'run lancé' : 'échec du lancement'}`);
+      return new Response(null, { status: ok ? 204 : 502 });
     }
-    if (!corps || !corps.message) return new Response('Bad request', { status: 400 });
 
-    // Trace de chaque notification (logs Cloudflare, privés) : publishTime
-    // très antérieur à l'heure de réception = message redistribué par
-    // Pub/Sub, pas un nouvel événement Gmail.
-    let historyId = '';
-    try {
-      historyId = JSON.parse(atob(corps.message.data || '')).historyId || '';
-    } catch {}
-    const trace = `notification ${corps.message.messageId || corps.message.message_id || '?'} ` +
-      `publiée ${corps.message.publishTime || corps.message.publish_time || '?'} ` +
-      `historyId ${historyId} tentative ${corps.deliveryAttempt || '?'}`;
+    // Appelé par la dernière étape de auto_prepa.yml (if: always()) : libère
+    // le cycle "en cours" côté Debounce, et relance immédiatement un run si
+    // des notifications sont arrivées pendant celui qui vient de se terminer.
+    if (url.pathname === '/termine') {
+      if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+      let corps = {};
+      try { corps = await request.json(); } catch {}
+      const historyId = corps && corps.historyId != null ? Number(corps.historyId) : null;
 
-    // Réponse non-2xx = Pub/Sub retentera plus tard : rien ne se perd si
-    // GitHub est momentanément indisponible.
-    // trace : heures de publication Pub/Sub et de réception par le worker,
-    // affichées par le run pour découper le délai de notification.
-    const publie = corps.message.publishTime || corps.message.publish_time || '?';
-    const recu = new Date().toISOString();
-    const ok = await lancer(env, 'auto_prepa.yml', {
-      force: 'true', source: 'gmail',
-      trace: `publiée ${publie.slice(11, 23)} | reçue par le worker ${recu.slice(11, 23)}`,
-    });
-    console.log(`${trace} → ${ok ? 'run lancé' : 'échec du lancement'}`);
-    return new Response(null, { status: ok ? 204 : 502 });
+      const decision = await (await debounce(env).fetch('https://debounce/termine', {
+        method: 'POST',
+        body: JSON.stringify({ historyId }),
+      })).json();
+
+      if (decision.action === 'relancer') {
+        const ok = await lancer(env, 'auto_prepa.yml', {
+          force: 'true', source: 'gmail-relance',
+          trace: 'notification(s) reçue(s) pendant le run précédent',
+        });
+        console.log(`fin de run (historyId ${historyId ?? '?'}) → relance : ${ok ? 'ok' : 'échec'}`);
+        return new Response(null, { status: ok ? 204 : 502 });
+      }
+      console.log(`fin de run (historyId ${historyId ?? '?'}) → ${decision.action}`);
+      return new Response(null, { status: 204 });
+    }
+
+    // Diagnostic (temporaire) : état brut du Debounce, sans effet de bord.
+    if (url.pathname === '/etat') {
+      const reponse = await debounce(env).fetch('https://debounce/etat');
+      return new Response(await reponse.text(), {
+        status: reponse.status,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    return new Response('Not found', { status: 404 });
   },
 
   async scheduled(event, env, ctx) {
