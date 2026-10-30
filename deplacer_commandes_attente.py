@@ -42,7 +42,7 @@ def _resume(lignes):
         return
     try:
         with open(chemin, "a", encoding="utf-8") as f:
-            f.write("## Deplacer commandes en attente (22h)\n\n")
+            f.write("## Deplacer commandes en attente\n\n")
             if not lignes:
                 f.write("- Aucune commande en attente de deplacement.\n")
             for ok, message in lignes:
@@ -70,11 +70,18 @@ def main():
         ok, message = dc.traiter_marqueur(drive_svc, numero, cible)
         print(f"  {'OK ' if ok else 'ERREUR'} {message}")
         resultats.append((ok, message))
-        if ok:
+        # Bon introuvable : cas stable (deja traite/supprime entre-temps par
+        # ailleurs, typiquement un --forcer sur le meme numero) — retenter
+        # demain ne changera rien, le marqueur est donc abandonne plutot que
+        # de bloquer indefiniment la routine chaque soir.
+        if ok or dc.MESSAGE_INTROUVABLE in message:
             try:
                 drive_svc.files().update(fileId=file_id, body={"trashed": True}).execute()
             except Exception as e:
                 print(f"    Marqueur non supprime ({e}) — sera retraite demain soir.")
+            if not ok:
+                print("    Marqueur abandonne (bon introuvable, probablement deja "
+                      "traite par ailleurs) : rien a rejouer.")
         else:
             echecs = True
 

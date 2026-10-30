@@ -57,6 +57,12 @@ MIME_DOSSIER = "application/vnd.google-apps.folder"
 _RE_JJ_MM = re.compile(r"^\d{2}_\d{2}$")
 _RE_MM_AAAA = re.compile(r"^\d{2}_\d{4}$")
 
+# Message renvoye par deplacer()/supprimer() quand le bon n'est plus dans
+# l'archive BDC (deja traite autrement, par ex. --forcer entre-temps sur le
+# meme numero). Utilise par deplacer_commandes_attente.py pour distinguer ce
+# cas stable (retenter ne sert a rien) d'un echec technique transitoire.
+MESSAGE_INTROUVABLE = "introuvable dans l'archive Drive BDC"
+
 JOURS_FR = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 
 
@@ -192,7 +198,7 @@ def _localiser_et_resoudre_cible(drive_svc, numero, cible, jour_choisi, date_sai
     except Exception as e:
         return False, None, None, None, f"{nom} : recherche sur Drive echouee ({e})"
     if not exemplaires:
-        return False, None, None, None, f"{nom} : introuvable dans l'archive Drive BDC"
+        return False, None, None, None, f"{nom} : {MESSAGE_INTROUVABLE}"
 
     jours = sorted({(e["mm_aaaa"], e["jj_mm"]) for e in exemplaires})
     liste = ", ".join(f"BDC/{m}/{j}" for m, j in jours)
@@ -282,7 +288,7 @@ def supprimer(drive_svc, numero, *_ignores, **_ignores_nommes):
     except Exception as e:
         return False, f"{nom} : recherche sur Drive echouee ({e})"
     if not exemplaires:
-        return False, f"{nom} : introuvable dans l'archive Drive BDC"
+        return False, f"{nom} : {MESSAGE_INTROUVABLE}"
     chemins = ", ".join(sorted({f"BDC/{e['mm_aaaa']}/{e['jj_mm']}" for e in exemplaires}))
     try:
         for e in exemplaires:
@@ -379,6 +385,29 @@ def lister_marqueurs_attente(drive_svc):
     return resultats
 
 
+def supprimer_marqueur_attente(drive_svc, numero):
+    """Met a la corbeille Drive le marqueur deplacer_NUMERO.txt pour ce
+    numero, s'il existe (ne fait rien sinon). A appeler apres un
+    deplacement/suppression --forcer reussi : une demande de mise en
+    attente plus ancienne sur le meme numero, si elle n'est pas nettoyee,
+    serait retraitee le soir (routine_soir.yml) sur un bon deja
+    deplace/supprime par le forcage, et echouerait (bon introuvable au
+    jour attendu)."""
+    folder_id = _dossier_attente(drive_svc, creer=False)
+    if not folder_id:
+        return
+    nom_fichier = f"deplacer_{numero}.txt"
+    try:
+        res = drive_svc.files().list(
+            q=f"name='{nom_fichier}' and '{folder_id}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        for f in res.get("files", []):
+            drive_svc.files().update(fileId=f["id"], body={"trashed": True}).execute()
+    except Exception as e:
+        print(f"    (marqueur en attente {nom_fichier} non nettoye : {e})")
+
+
 def mettre_en_attente(drive_svc, numero, cible, jour_choisi="", date_saisie="", aujourd_hui=None):
     """Inscrit la demande de deplacement de BonDeCommande_NUMERO.pdf dans la
     file d'attente (marqueur Drive), pour un deplacement physique differe au
@@ -413,7 +442,7 @@ def mettre_en_attente_suppression(drive_svc, numero, *_ignores, **_ignores_nomme
     except Exception as e:
         return False, f"{nom} : recherche sur Drive echouee ({e})"
     if not exemplaires:
-        return False, f"{nom} : introuvable dans l'archive Drive BDC"
+        return False, f"{nom} : {MESSAGE_INTROUVABLE}"
     try:
         deposer_marqueur_attente(drive_svc, numero, SUPPRIMER)
     except Exception as e:
@@ -493,6 +522,8 @@ def main():
         ok, message = action(drive_svc, numero, cible, jour_choisi, date_saisie, aujourd_hui)
         print(f"  {'OK ' if ok else 'ERREUR'} {message}")
         resultats.append((ok, message))
+        if forcer and ok:
+            supprimer_marqueur_attente(drive_svc, numero)
 
     _resume(resultats, forcer, suppr)
     if suppr and forcer:
