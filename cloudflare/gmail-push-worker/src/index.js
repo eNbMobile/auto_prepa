@@ -21,10 +21,20 @@
  *    un par notification reçue pendant son exécution ;
  *  - à la fin du run (étape finale de auto_prepa.yml, POST
  *    /termine?token=…), dispatche le run « pending » s'il y en a un et
- *    avance le historyId connu ;
- *  - garde-fou anti-blocage : si /termine n'arrive jamais (job planté,
- *    annulé...), l'état « en cours » est considéré périmé après
- *    DELAI_BLOCAGE_MS et un nouveau run peut repartir.
+ *    avance le historyId connu.
+ *
+ * Garde-fou anti-blocage, à DEUX niveaux (un run qui ne signale jamais sa
+ * fin — job planté, annulé — ne doit jamais laisser une commande bloquée
+ * indéfiniment) :
+ *  - passif : une notification reçue alors que l'état "en cours" a plus de
+ *    DELAI_BLOCAGE_MS redémarre un cycle au lieu d'attendre ;
+ *  - actif (alarme du Durable Object, posée à chaque démarrage de cycle) :
+ *    se déclenche d'elle-même après DELAI_BLOCAGE_MS SANS dépendre de
+ *    l'arrivée d'une notification suivante. Sans elle, une commande tombée
+ *    pendant un cycle bloqué et mise "pending" restait bloquée pour de bon
+ *    si aucun autre email n'arrivait derrière pour forcer une réévaluation
+ *    (c'est ce qui s'est produit le 30/10/2026 : plus aucun run automatique
+ *    entre 19h21 et 19h47 malgré des commandes tombées).
  *
  * Résultat : un seul run par commande dans le cas général, deux au plus
  * (le run utile + un run de vérification rapide qui ne trouve plus rien à
@@ -38,9 +48,9 @@
 const REPO = 'eNbMobile/auto_prepa';
 const REF = 'main';
 
-// Au-delà de ce délai sans /termine, un run "en cours" est considéré perdu
-// (job planté, annulé...) : on ne reste pas bloqué indéfiniment. Le job
-// GitHub a un timeout de 15 min ; on laisse une marge confortable.
+// Au-delà de ce délai sans /termine, un cycle "en cours" est considéré
+// perdu (job planté, annulé...) : on ne reste pas bloqué indéfiniment. Le
+// job GitHub a un timeout de 15 min ; on laisse une marge confortable.
 const DELAI_BLOCAGE_MS = 20 * 60 * 1000;
 
 async function lancer(env, fichier, inputs) {
@@ -73,21 +83,22 @@ function memeJeton(a, b) {
 
 /**
  * Durable Object : une seule instance (id fixe "unique"), état partagé entre
- * toutes les requêtes /pubsub et /termine. L'exécution d'un Durable Object
- * est sérialisée (une requête à la fois), ce qui évite toute course entre
- * deux notifications Pub/Sub reçues en même temps.
+ * toutes les requêtes /pubsub et /termine, et son alarme. L'exécution d'un
+ * Durable Object est sérialisée (une requête/alarme à la fois), ce qui
+ * évite toute course entre deux notifications Pub/Sub reçues en même temps.
  */
 export class Debounce {
-  constructor(state) {
-    this.state = state;
+  constructor(ctx, env) {
+    this.ctx = ctx;
+    this.env = env;
   }
 
   async etat() {
     const [lastHistoryId, inFlight, pending, startedAt] = await Promise.all([
-      this.state.storage.get('lastHistoryId'),
-      this.state.storage.get('inFlight'),
-      this.state.storage.get('pending'),
-      this.state.storage.get('startedAt'),
+      this.ctx.storage.get('lastHistoryId'),
+      this.ctx.storage.get('inFlight'),
+      this.ctx.storage.get('pending'),
+      this.ctx.storage.get('startedAt'),
     ]);
     return {
       lastHistoryId: lastHistoryId ?? null,
@@ -95,6 +106,18 @@ export class Debounce {
       pending: pending ?? false,
       startedAt: startedAt ?? 0,
     };
+  }
+
+  /** Démarre (ou relance) un cycle "run en cours" et arme le garde-fou actif. */
+  async demarrer(now) {
+    await this.ctx.storage.put({ inFlight: true, pending: false, startedAt: now });
+    await this.ctx.storage.setAlarm(now + DELAI_BLOCAGE_MS);
+  }
+
+  /** Termine le cycle courant (plus rien en attente) et désarme le garde-fou. */
+  async arreter() {
+    await this.ctx.storage.put('inFlight', false);
+    await this.ctx.storage.deleteAlarm();
   }
 
   async fetch(request) {
@@ -111,24 +134,24 @@ export class Debounce {
 
       const bloque = e.inFlight && (now - e.startedAt) < DELAI_BLOCAGE_MS;
       if (bloque) {
-        await this.state.storage.put('pending', true);
+        await this.ctx.storage.put('pending', true);
         return Response.json({ action: 'attente' });
       }
 
-      await this.state.storage.put({ inFlight: true, pending: false, startedAt: now });
+      await this.demarrer(now);
       return Response.json({ action: 'lancer' });
     }
 
     if (url.pathname === '/termine') {
       const { historyId } = await request.json().catch(() => ({}));
       if (historyId != null && (e.lastHistoryId == null || historyId > e.lastHistoryId)) {
-        await this.state.storage.put('lastHistoryId', historyId);
+        await this.ctx.storage.put('lastHistoryId', historyId);
       }
       if (e.pending) {
-        await this.state.storage.put({ pending: false, startedAt: now });
+        await this.demarrer(now);
         return Response.json({ action: 'relancer' });
       }
-      await this.state.storage.put('inFlight', false);
+      await this.arreter();
       return Response.json({ action: 'rien' });
     }
 
@@ -138,6 +161,29 @@ export class Debounce {
     }
 
     return new Response('Not found', { status: 404 });
+  }
+
+  /**
+   * Garde-fou actif : posé par demarrer() pour DELAI_BLOCAGE_MS plus tard.
+   * Se déclenche tout seul, sans dépendre d'une notification Pub/Sub
+   * suivante — sinon une commande mise "pending" pendant un cycle resté
+   * bloqué (job planté, annulé) n'était jamais relancée s'il n'arrivait
+   * plus d'email derrière pour forcer une réévaluation de l'état.
+   */
+  async alarm() {
+    const now = Date.now();
+    const e = await this.etat();
+    if (e.pending) {
+      console.log('garde-fou (alarme) : notification en attente jamais traitée → relance automatique');
+      await this.demarrer(now);
+      await lancer(this.env, 'auto_prepa.yml', {
+        force: 'true', source: 'gmail-alarme',
+        trace: 'garde-fou anti-blocage (20 min) : relance automatique sans notification',
+      });
+    } else if (e.inFlight) {
+      console.log('garde-fou (alarme) : cycle périmé sans rien en attente → état remis à zéro');
+      await this.arreter();
+    }
   }
 }
 
@@ -199,8 +245,8 @@ export default {
     }
 
     // Appelé par la dernière étape de auto_prepa.yml (if: always()) : libère
-    // le run "en cours" côté Debounce, et relance immédiatement un run si des
-    // notifications sont arrivées pendant celui qui vient de se terminer.
+    // le cycle "en cours" côté Debounce, et relance immédiatement un run si
+    // des notifications sont arrivées pendant celui qui vient de se terminer.
     if (url.pathname === '/termine') {
       if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
       let corps = {};

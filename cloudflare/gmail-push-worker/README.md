@@ -36,8 +36,14 @@ Email reçu dans Gmail
   échos arrivent pendant que le premier tourne encore.
   **Nécessite un Durable Object** (`[[durable_objects.bindings]]` dans
   `wrangler.toml`, stockage SQLite — disponible sur le plan Workers gratuit).
-  Garde-fou anti-blocage : si `/termine` n'arrive jamais (job planté, annulé…),
-  l'état « run en cours » est considéré périmé après 20 minutes.
+  Garde-fou anti-blocage à deux niveaux, pour qu'une commande ne reste jamais
+  bloquée si `/termine` n'arrive jamais (job planté, annulé…) :
+  passif (une notification reçue sur un état périmé redémarre un cycle) et
+  **actif** (alarme du Durable Object posée à chaque démarrage de cycle, qui
+  se déclenche d'elle-même 20 minutes plus tard sans dépendre d'une nouvelle
+  notification — sans elle, une commande tombée pendant un cycle bloqué et
+  mise « en attente » restait bloquée pour de bon si aucun autre email
+  n'arrivait derrière pour forcer une réévaluation ; vécu le 30/10/2026).
 - **Filet de sécurité (désactivé depuis le 14/10/2026)** : le worker peut relancer
   `aut_prep` toutes les 10 minutes (cron Cloudflare, `source=filet`) en ajoutant
   `"*/10 * * * *"` aux crons de `wrangler.toml`. Sans lui, les bons déposés à la
