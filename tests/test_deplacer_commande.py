@@ -269,7 +269,7 @@ class TestFileAttente(unittest.TestCase):
         ok, msg = dc.mettre_en_attente(self.drive, "54868421", None,
                                         "lendemain de la commande", "", AUJOURD_HUI)
         self.assertTrue(ok, msg)
-        self.assertIn("22h", msg)
+        self.assertIn("ce soir", msg)
         self.assertEqual(_parents(self.drive, "f1"), ["j24"])  # pas deplace
 
     def test_mettre_en_attente_depose_un_marqueur_lisible(self):
@@ -312,7 +312,7 @@ class TestFileAttente(unittest.TestCase):
     def test_suppression_en_attente_ne_supprime_rien(self):
         ok, msg = dc.mettre_en_attente_suppression(self.drive, "54868421")
         self.assertTrue(ok, msg)
-        self.assertIn("22h", msg)
+        self.assertIn("ce soir", msg)
         self.assertFalse(self.drive.files()._par_id("f1").get("trashed"))
         self.assertEqual([(n, c) for _id, n, c in dc.lister_marqueurs_attente(self.drive)],
                          [("54868421", dc.SUPPRIMER)])
@@ -339,6 +339,39 @@ class TestFileAttente(unittest.TestCase):
         self.assertTrue(self.drive.files()._par_id("f1").get("trashed"))
         self.assertEqual(_parents(self.drive, "f2"), [next(
             f["id"] for f in self.drive.files().store if f["name"] == "26_09")])
+
+    def test_forcer_nettoie_un_marqueur_en_attente_obsolete(self):
+        """Un --forcer sur un numero doit nettoyer un marqueur en attente
+        plus ancien sur ce meme numero : sinon il resterait a traiter le
+        soir sur un bon deja deplace/supprime par le forcage (cf. incident
+        du 30/10 : routine_soir.yml en echec sur un marqueur orphelin)."""
+        dc.mettre_en_attente(self.drive, "54868421", date(2026, 9, 28), aujourd_hui=AUJOURD_HUI)
+        self.assertEqual(len(self._marqueurs_store()), 1)
+
+        ok, msg = dc.deplacer(self.drive, "54868421", None, "demain", "", AUJOURD_HUI)
+        self.assertTrue(ok, msg)
+        dc.supprimer_marqueur_attente(self.drive, "54868421")
+
+        self.assertEqual(dc.lister_marqueurs_attente(self.drive), [])
+
+    def test_marqueur_introuvable_nettoye_sans_etre_rejoue(self):
+        """Simule deplacer_commandes_attente.py face a un marqueur dont le
+        bon n'existe plus (deja traite autrement, ex. --forcer) : le
+        marqueur doit etre abandonne (nettoye), pas laisse en place pour un
+        nouvel essai qui echouerait indefiniment."""
+        dc.mettre_en_attente(self.drive, "54868421", date(2026, 9, 28), aujourd_hui=AUJOURD_HUI)
+        self.drive.files().update(fileId="f1", body={"trashed": True}).execute()
+
+        marqueurs = dc.lister_marqueurs_attente(self.drive)
+        self.assertEqual(len(marqueurs), 1)
+        file_id, numero, cible = marqueurs[0]
+        ok, msg = dc.traiter_marqueur(self.drive, numero, cible)
+        self.assertFalse(ok)
+        self.assertIn(dc.MESSAGE_INTROUVABLE, msg)
+        if ok or dc.MESSAGE_INTROUVABLE in msg:
+            self.drive.files().update(fileId=file_id, body={"trashed": True}).execute()
+
+        self.assertEqual(dc.lister_marqueurs_attente(self.drive), [])
 
 
 class TestSupprimer(unittest.TestCase):
