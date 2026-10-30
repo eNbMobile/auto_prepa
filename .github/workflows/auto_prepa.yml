@@ -434,7 +434,7 @@ jobs:
         env:
           GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
           GMAIL_PUSH_TOKEN:  ${{ secrets.GMAIL_PUSH_TOKEN }}
-          GMAILPUSH_URL:     ${{ vars.GMAILPUSH_URL || 'https://gmailpush.controle-stocks.workers.dev' }}
+          GMAILPUSH_URL:     ${{ vars.GMAILPUSH_URL || 'https://gmailpush.coopu.workers.dev' }}
         run: |
           python3 - <<'EOF'
           import json, os, sys, urllib.request, urllib.parse
