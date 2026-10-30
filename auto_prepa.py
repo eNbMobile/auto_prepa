@@ -26,7 +26,6 @@ from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 
 import adresses_inconnues
 import confidentiel
-import jeudi_plus
 import livraison_drive
 import moteur_ombre
 
@@ -540,7 +539,6 @@ def annuler_commande(drive_svc, gmail_svc, sheets_svc, numero):
     _supprimer_bdc_drive(drive_svc, numero)
     _uploader_annulation_drive(drive_svc, numero)
     supprimer_commande_avoir_drive(drive_svc, numero)
-    jeudi_plus.retirer_commande(drive_svc, numero)
 
 
 def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc,
@@ -597,7 +595,6 @@ def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc,
                 _supprimer_bdc_drive(drive_svc, num_ancien)
                 _uploader_annulation_drive(drive_svc, num_ancien)
                 supprimer_commande_avoir_drive(drive_svc, num_ancien)
-                jeudi_plus.retirer_commande(drive_svc, num_ancien)
             elif match_annul:
                 num_annule = match_annul.group(1)
                 print(f"  Annulation : cde {num_annule} supprimee")
@@ -2038,6 +2035,55 @@ def _envoyer_email_anomalie_bon(gmail_svc, numero, lignes_invalides):
     except Exception as e:
         print(f"    Envoi email anomalie {numero} echoue : {e}")
 
+# Alerte temporaire (demandee le 30/10/2026, a garder quelques jours) : toute
+# commande en livraison d'au moins SEUIL_ALERTE_LIVRAISON euros traitee a
+# partir de DEBUT_ALERTE_LIVRAISON est signalee par email au destinataire 1.
+SEUIL_ALERTE_LIVRAISON = 170.0
+DEBUT_ALERTE_LIVRAISON = datetime(2026, 10, 31, 1, 0, tzinfo=_TZ)
+
+
+def _alerte_livraison_due(montant_pdf, maintenant=None):
+    """Vrai si une commande en livraison de ce montant ("Montant initial" du
+    bon de commande, ex. "172.40") doit etre signalee."""
+    maintenant = maintenant or datetime.now(_TZ)
+    if maintenant < DEBUT_ALERTE_LIVRAISON:
+        return False
+    try:
+        return float(montant_pdf) >= SEUIL_ALERTE_LIVRAISON
+    except (TypeError, ValueError):
+        return False
+
+
+def _envoyer_email_alerte_livraison(gmail_svc, numero, montant, nom, prenom,
+                                    date_cde, creneau):
+    """Signale au destinataire 1 l'arrivee d'une commande en livraison d'au
+    moins SEUIL_ALERTE_LIVRAISON euros."""
+    from email.mime.text import MIMEText
+    destinataire = EMAIL_ANTICIPATION
+    if not destinataire:
+        return False
+    corps = (
+        f"Bonjour,\n\n"
+        f"Une commande en livraison d'au moins {SEUIL_ALERTE_LIVRAISON:.0f} EUR "
+        f"vient de tomber :\n\n"
+        f"  Commande : {numero}\n"
+        f"  Montant  : {montant} EUR\n"
+        f"  Client   : {nom} {prenom}\n"
+        f"  Livraison: {date_cde or '?'} {creneau or ''}\n"
+    )
+    try:
+        msg = MIMEText(corps, "plain", "utf-8")
+        msg["to"] = destinataire
+        msg["subject"] = f"Commande {numero} - livraison de {montant} EUR"
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
+        print(f"    Email alerte livraison >= {SEUIL_ALERTE_LIVRAISON:.0f} EUR envoye pour cde {numero}")
+        return True
+    except Exception as e:
+        print(f"    Envoi email alerte livraison {numero} echoue : {e}")
+        return False
+
+
 _SUJET_BON_ABSENT = "AUCUN bon de prepa genere"
 
 
@@ -2751,9 +2797,14 @@ def _traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, 
         if km_manquant:
             livraison_drive.noter_km_en_attente(drive_svc, order_num)
 
+    # Une commande regeneree a deja ete signalee a son premier traitement.
+    if (len(lignes) > 1 and ',Livraison,' in lignes[1] and not regeneration
+            and _alerte_livraison_due(montant_pdf)):
+        _envoyer_email_alerte_livraison(gmail_svc, order_num, montant_pdf,
+                                        nom, prenom, date_cde, creneau)
+
     adresses_inconnues.noter_produits_non_adresses(
         drive_svc, order_num, adresses_inconnues.extraire_produits_non_adresses(lignes))
-    jeudi_plus.noter_commande(drive_svc, order_num, lignes, date_cde)
 
     if articles_pdf is not None and produits_pdf is not None:
         with open(bon_prepa_path, 'r', encoding='utf-8') as _f:
