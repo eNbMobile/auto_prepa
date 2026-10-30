@@ -1,6 +1,9 @@
 name: Routine du soir
 
-# Rassemble les 4 étapes du soir, dans cet ordre précis :
+# Rassemble les 4 étapes du soir dans UN SEUL job (un seul runner : un seul
+# checkout + setup Python + install pip), pour limiter les minutes GitHub
+# Actions consommées — 4 jobs séparés réinitialiseraient chacun leur propre
+# runner (c'était tout l'intérêt du regroupement). Ordre précis :
 #
 # 1. Déplacer commandes en attente : déplace/supprime physiquement les
 #    BonDeCommande dont le déplacement a été demandé dans la journée (carte
@@ -16,9 +19,16 @@ name: Routine du soir
 # 4. Générer Ventes : calcule et archive les ventes du jour depuis les
 #    BonDeCommande PDF (une fois les commandes non récupérées déplacées).
 #
+# Chaque étape est indépendante (continue-on-error: true) : l'échec de
+# l'une n'empêche pas les suivantes de s'exécuter, comme lorsqu'il
+# s'agissait de workflows séparés. Le dernier step fait échouer le run
+# globalement si l'une d'elles a échoué, pour garder la visibilité normale
+# d'un échec sur GitHub Actions (sinon continue-on-error masquerait
+# l'échec au niveau du run).
+#
 # Déclenché uniquement par workflow_dispatch : un cronjob externe (hors
 # GitHub Actions) appelle l'API dispatch chaque soir à l'heure voulue —
-# plus de déclenchement `schedule` ici, pour éviter un double run.
+# pas de déclenchement `schedule` ici, pour éviter un double run.
 
 on:
   workflow_dispatch:
@@ -33,133 +43,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deplacer-commandes-attente:
+  routine:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: Récupérer le code
-        uses: actions/checkout@v4
-
-      - name: Installer Python et dépendances
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: pip
-
-      - name: Installer les dépendances pip
-        run: pip install -r requirements.txt
-
-      - name: Déplacer les commandes en attente
-        env:
-          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
-          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
-          WORK_DIR: "v 4.0.0"
-        run: python3 deplacer_commandes_attente.py
-
-      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
-        if: always()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          TOKEN_FILE="$HOME/.auto_prepa_token.json"
-          if [ -f "$TOKEN_FILE" ]; then
-            gh secret set GOOGLE_TOKEN_JSON \
-              --body "$(cat "$TOKEN_FILE")" \
-              --repo "${{ github.repository }}"
-            echo "Secret GOOGLE_TOKEN_JSON mis à jour."
-          fi
-
-  adresses-inconnues:
-    needs: deplacer-commandes-attente
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: Récupérer le code
-        uses: actions/checkout@v4
-
-      - name: Installer Python et dépendances
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: pip
-
-      - name: Installer les dépendances pip
-        run: pip install -r requirements.txt
-
-      - name: Générer et envoyer le PDF des produits non adressés
-        env:
-          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
-          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
-          DATE_ARG:               ${{ inputs.date }}
-        run: |
-          if [ -n "$DATE_ARG" ]; then
-            python3 bootstrap.py adresses_inconnues.py --date "$DATE_ARG"
-          else
-            python3 bootstrap.py adresses_inconnues.py
-          fi
-
-      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
-        if: always()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          TOKEN_FILE="$HOME/.auto_prepa_token.json"
-          if [ -f "$TOKEN_FILE" ]; then
-            gh secret set GOOGLE_TOKEN_JSON \
-              --body "$(cat "$TOKEN_FILE")" \
-              --repo "${{ github.repository }}"
-            echo "Secret GOOGLE_TOKEN_JSON mis à jour."
-          fi
-
-  verif-lad:
-    needs: adresses-inconnues
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: Récupérer le code
-        uses: actions/checkout@v4
-
-      - name: Installer Python et dépendances
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: pip
-
-      - name: Installer les dépendances pip
-        run: pip install -r requirements.txt
-
-      - name: Vérifier les livraisons du jour sur Shopopop
-        env:
-          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
-          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
-        run: python3 bootstrap.py verif_lad.py
-
-      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
-        if: always()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          TOKEN_FILE="$HOME/.auto_prepa_token.json"
-          if [ -f "$TOKEN_FILE" ]; then
-            gh secret set GOOGLE_TOKEN_JSON \
-              --body "$(cat "$TOKEN_FILE")" \
-              --repo "${{ github.repository }}"
-            echo "Secret GOOGLE_TOKEN_JSON mis à jour."
-          fi
-
-  generer-ventes:
-    needs: verif-lad
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
 
     steps:
       - name: Récupérer le code
@@ -180,7 +66,40 @@ jobs:
       - name: Installer les dépendances pip
         run: pip install -r requirements.txt
 
-      - name: Générer les ventes
+      - name: 1. Déplacer les commandes en attente
+        id: deplacer
+        continue-on-error: true
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          WORK_DIR: "v 4.0.0"
+        run: python3 deplacer_commandes_attente.py
+
+      - name: 2. Générer et envoyer le PDF des produits non adressés
+        id: adresses
+        continue-on-error: true
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          DATE_ARG:               ${{ inputs.date }}
+        run: |
+          if [ -n "$DATE_ARG" ]; then
+            python3 bootstrap.py adresses_inconnues.py --date "$DATE_ARG"
+          else
+            python3 bootstrap.py adresses_inconnues.py
+          fi
+
+      - name: 3. Vérifier les livraisons du jour sur Shopopop
+        id: verif_lad
+        continue-on-error: true
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+        run: python3 bootstrap.py verif_lad.py
+
+      - name: 4. Générer les ventes
+        id: generer_ventes
+        continue-on-error: true
         env:
           GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
           DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
@@ -203,7 +122,30 @@ jobs:
             gh secret set GOOGLE_TOKEN_JSON \
               --body "$(cat "$TOKEN_FILE")" \
               --repo "${{ github.repository }}"
+            echo "Secret GOOGLE_TOKEN_JSON mis à jour."
           fi
+
+      - name: Vérifier qu'aucune étape n'a échoué
+        if: always()
+        run: |
+          echec=0
+          if [ "${{ steps.deplacer.outcome }}" = "failure" ]; then
+            echo "::error::Étape 1 (Déplacer commandes en attente) en échec."
+            echec=1
+          fi
+          if [ "${{ steps.adresses.outcome }}" = "failure" ]; then
+            echo "::error::Étape 2 (Adresses inconnues) en échec."
+            echec=1
+          fi
+          if [ "${{ steps.verif_lad.outcome }}" = "failure" ]; then
+            echo "::error::Étape 3 (Vérif LAD) en échec."
+            echec=1
+          fi
+          if [ "${{ steps.generer_ventes.outcome }}" = "failure" ]; then
+            echo "::error::Étape 4 (Générer Ventes) en échec."
+            echec=1
+          fi
+          exit $echec
 
       # Cas non couvert par l'alerte email de generer_ventes.py (celle-ci ne
       # peut pas s'exécuter) : le run est annulé avant même de lancer le
@@ -211,4 +153,4 @@ jobs:
       # le même groupe de concurrence.
       - name: Annotation si run annulé
         if: cancelled()
-        run: echo "::error::Générer Ventes annulé avant exécution (concurrence ? relancer le jour concerné)."
+        run: echo "::error::Routine du soir annulée avant la fin (concurrence ? relancer si besoin)."
