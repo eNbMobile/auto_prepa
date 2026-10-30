@@ -17,18 +17,19 @@ jour d'origine est mis a la corbeille (restaurable depuis Drive).
 Par defaut, ce script ne deplace PAS tout de suite : la demande est inscrite
 dans un marqueur Drive (GITHUB/DeplacementsEnAttente/deplacer_NUMERO.txt,
 contenant la date cible deja resolue) et c'est deplacer_commandes_attente.py,
-lance chaque soir a 22h par cron, qui effectue le deplacement physique. Raison
-du differe : les ventes du jour (generer_ventes, controle_stocks,
-cumul_ventes_semaine) tournent dans la journee, et un
-deplacement immediat d'un jour a l'autre leur faisait perdre une commande deja
-preparee. --forcer deplace immediatement, comme avant (a utiliser quand la
-commande n'a pas encore ete preparee).
+lance chaque soir (premiere etape de routine_soir.yml, avant le calcul des
+ventes du jour), qui effectue le deplacement physique. Raison du differe :
+les ventes du jour (generer_ventes, controle_stocks, cumul_ventes_semaine)
+tournent dans la journee, et un deplacement immediat d'un jour a l'autre
+leur faisait perdre une commande deja preparee. --forcer deplace
+immediatement, comme avant (a utiliser quand la commande n'a pas encore ete
+preparee).
 
 --supprimer ne deplace pas la commande : tous ses exemplaires archives dans
 BDC sont mis a la corbeille Drive (restaurables). Seul, --supprimer suit la
-meme logique de differe (marqueur contenant SUPPRIMER, traite le soir a 22h) ;
-avec --forcer, la suppression est immediate. Le jour / la date cible sont
-alors ignores.
+meme logique de differe (marqueur contenant SUPPRIMER, traite le soir, meme
+etape) ; avec --forcer, la suppression est immediate. Le jour / la date
+cible sont alors ignores.
 
 Usage :
   deplacer_commande.py --numeros "54868421 54868422" [--jour CHOIX] [--date JJ/MM[/AAAA]] [--forcer] [--supprimer]
@@ -397,7 +398,7 @@ def mettre_en_attente(drive_svc, numero, cible, jour_choisi="", date_saisie="", 
     except Exception as e:
         return False, f"{nom} : mise en attente echouee ({e})"
     return True, (f"{nom} : deplacement vers le {libelle(cible)} enregistre, "
-                  f"sera effectue ce soir (22h)")
+                  f"sera effectue ce soir")
 
 
 def mettre_en_attente_suppression(drive_svc, numero, *_ignores, **_ignores_nommes):
@@ -417,7 +418,7 @@ def mettre_en_attente_suppression(drive_svc, numero, *_ignores, **_ignores_nomme
         deposer_marqueur_attente(drive_svc, numero, SUPPRIMER)
     except Exception as e:
         return False, f"{nom} : mise en attente echouee ({e})"
-    return True, f"{nom} : suppression enregistree, sera effectuee ce soir (22h)"
+    return True, f"{nom} : suppression enregistree, sera effectuee ce soir"
 
 
 def traiter_marqueur(drive_svc, numero, cible):
@@ -499,14 +500,14 @@ def main():
               "du jour concerne ont deja ete calcules, relancer les workflows "
               "correspondants (generer_ventes, controle_stocks).")
     elif suppr:
-        print("\nLa suppression aura lieu ce soir a 22h (workflow 'Deplacer commandes "
-              "en attente'). Cocher aussi --forcer pour supprimer tout de suite.")
+        print("\nLa suppression aura lieu ce soir (routine_soir.yml, etape 'Deplacer "
+              "commandes en attente'). Cocher aussi --forcer pour supprimer tout de suite.")
     elif forcer:
         print("\nSi les ventes / le CA d'un des jours concernes ont deja ete calcules, "
               "relancer les workflows correspondants (generer_ventes, "
               "controle_stocks) pour ces jours.")
     else:
-        print("\nLe deplacement physique aura lieu ce soir a 22h (workflow "
+        print("\nLe deplacement physique aura lieu ce soir (routine_soir.yml, etape "
               "'Deplacer commandes en attente'). Utiliser --forcer si la commande "
               "n'est pas encore preparee et doit etre deplacee tout de suite.")
     if not all(ok for ok, _ in resultats):

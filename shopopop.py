@@ -258,12 +258,14 @@ _statut_terminees = None
 _terminees_indisponible = False
 
 
-def _rechercher_livraison_terminee(access_token, drive_id, date_livraison, nom_complet):
-    """Comme _rechercher_livraison_programmee, dans l'onglet "Terminees" :
-    une livraison faite quitte "Programmees" mais y reste consultable, avec
-    sa distance. Retourne l'item brut ou None."""
+def _lister_terminees(access_token, drive_id, date_livraison):
+    """Livraisons (items bruts) de l'onglet "Terminees" du magasin `drive_id`
+    pour `date_livraison`, en devinant au besoin le code de statut accepte
+    par l'API (memorise dans _statut_terminees pour la suite du run, comme
+    _rechercher_livraison_terminee). Retourne None si aucun statut n'est
+    accepte (onglet indisponible) ou si access_token est absent."""
     global _statut_terminees, _terminees_indisponible
-    if not access_token or not _tokens(nom_complet) or _terminees_indisponible:
+    if not access_token or _terminees_indisponible:
         return None
     statuts = (_statut_terminees,) if _statut_terminees else _STATUTS_TERMINEES
     for statut in statuts:
@@ -282,15 +284,50 @@ def _rechercher_livraison_terminee(access_token, drive_id, date_livraison, nom_c
         if not _statut_terminees:
             print(f"    Shopopop : statut '{statut}' accepte pour l'onglet 'Terminees'.")
             _statut_terminees = statut
-        it, noms_vus = _chercher_destinataire(items, nom_complet)
-        if not it:
-            print(f"    Shopopop : destinataire absent des {len(noms_vus)} livraison(s) "
-                  f"'{statut}' du {date_livraison.strftime('%d/%m/%Y')}.")
-        return it
+        return items
     _terminees_indisponible = True
     print("    Shopopop : aucun statut 'Terminees' accepte par l'API "
           f"(essayes : {', '.join(_STATUTS_TERMINEES)}).")
     return None
+
+
+def _rechercher_livraison_terminee(access_token, drive_id, date_livraison, nom_complet):
+    """Comme _rechercher_livraison_programmee, dans l'onglet "Terminees" :
+    une livraison faite quitte "Programmees" mais y reste consultable, avec
+    sa distance. Retourne l'item brut ou None."""
+    if not access_token or not _tokens(nom_complet):
+        return None
+    items = _lister_terminees(access_token, drive_id, date_livraison)
+    if items is None:
+        return None
+    it, noms_vus = _chercher_destinataire(items, nom_complet)
+    if not it:
+        print(f"    Shopopop : destinataire absent des {len(noms_vus)} livraison(s) "
+              f"'Terminees' du {date_livraison.strftime('%d/%m/%Y')}.")
+    return it
+
+
+def noms_absents_de(access_token, drive_id, date_livraison, noms_connus):
+    """Parmi les destinataires des livraisons de l'onglet "Terminees" de
+    Shopopop pour `date_livraison`, ceux dont le nom ne correspond (meme
+    comparaison insensible a l'ordre nom/prenom, aux accents et a la casse
+    que pour la recherche normale) a aucun des noms de `noms_connus`.
+    Utilise par le workflow "Vérif LAD" pour la vérification inverse :
+    détecter une commande livrée côté Shopopop mais absente de LIVRAISON
+    DRIVE 2026. Retourne None si l'onglet "Terminees" est inaccessible
+    (aucun statut de l'API accepte, cf. _lister_terminees)."""
+    items = _lister_terminees(access_token, drive_id, date_livraison)
+    if items is None:
+        return None
+    connus = {_tokens(n) for n in noms_connus}
+    absents = []
+    for it in items:
+        dest = it.get("recipient") or {}
+        nom = f"{dest.get('first_name', '')} {dest.get('last_name', '')}".strip()
+        jetons = _tokens(nom)
+        if jetons and jetons not in connus:
+            absents.append(nom)
+    return absents
 
 
 def _rechercher_livraison_programmee(access_token, drive_id, date_livraison, nom_complet):

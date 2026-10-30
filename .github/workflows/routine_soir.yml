@@ -1,0 +1,214 @@
+name: Routine du soir
+
+# Rassemble les 4 étapes du soir, dans cet ordre précis :
+#
+# 1. Déplacer commandes en attente : déplace/supprime physiquement les
+#    BonDeCommande dont le déplacement a été demandé dans la journée (carte
+#    "Déplacer commandes" du tableau de bord, sans forçage). Doit passer
+#    AVANT le calcul des ventes du jour : une commande non récupérée par le
+#    client, déplacée au lendemain, ne doit pas compter dans les ventes /
+#    le CA du jour en cours (cf. deplacer_commandes_attente.py).
+# 2. Adresses inconnues : PDF des produits restés sans adresse dans le
+#    chemin de préparation au cours de la journée, envoyé par email.
+# 3. Vérif LAD : vérifie, dans les deux sens, la cohérence entre les
+#    commandes en LIVRAISON du jour (LIVRAISON DRIVE 2026) et l'onglet
+#    "Terminées" du back-office Shopopop.
+# 4. Générer Ventes : calcule et archive les ventes du jour depuis les
+#    BonDeCommande PDF (une fois les commandes non récupérées déplacées).
+#
+# Déclenché uniquement par workflow_dispatch : un cronjob externe (hors
+# GitHub Actions) appelle l'API dispatch chaque soir à l'heure voulue —
+# plus de déclenchement `schedule` ici, pour éviter un double run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Date (JJ/MM/AAAA) — laisser vide pour aujourd'hui (Adresses inconnues : jusqu'à cette date ; Générer Ventes : pour cette date)"
+        required: false
+        type: string
+
+concurrency:
+  group: routine_soir
+  cancel-in-progress: false
+
+jobs:
+  deplacer-commandes-attente:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python et dépendances
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer les dépendances pip
+        run: pip install -r requirements.txt
+
+      - name: Déplacer les commandes en attente
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          WORK_DIR: "v 4.0.0"
+        run: python3 deplacer_commandes_attente.py
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+            echo "Secret GOOGLE_TOKEN_JSON mis à jour."
+          fi
+
+  adresses-inconnues:
+    needs: deplacer-commandes-attente
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python et dépendances
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer les dépendances pip
+        run: pip install -r requirements.txt
+
+      - name: Générer et envoyer le PDF des produits non adressés
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          DATE_ARG:               ${{ inputs.date }}
+        run: |
+          if [ -n "$DATE_ARG" ]; then
+            python3 bootstrap.py adresses_inconnues.py --date "$DATE_ARG"
+          else
+            python3 bootstrap.py adresses_inconnues.py
+          fi
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+            echo "Secret GOOGLE_TOKEN_JSON mis à jour."
+          fi
+
+  verif-lad:
+    needs: adresses-inconnues
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python et dépendances
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer les dépendances pip
+        run: pip install -r requirements.txt
+
+      - name: Vérifier les livraisons du jour sur Shopopop
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+        run: python3 bootstrap.py verif_lad.py
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+            echo "Secret GOOGLE_TOKEN_JSON mis à jour."
+          fi
+
+  generer-ventes:
+    needs: verif-lad
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python et dépendances
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer poppler-utils avec cache
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: poppler-utils
+          version: 1.0
+
+      - name: Installer les dépendances pip
+        run: pip install -r requirements.txt
+
+      - name: Générer les ventes
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          WORK_DIR: "v 4.0.0"
+        run: |
+          DATE_ARG=""
+          if [ -n "${{ inputs.date }}" ]; then
+            DATE_ARG="--date ${{ inputs.date }}"
+          fi
+          python3 bootstrap.py generer_ventes.py $DATE_ARG
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+          fi
+
+      # Cas non couvert par l'alerte email de generer_ventes.py (celle-ci ne
+      # peut pas s'exécuter) : le run est annulé avant même de lancer le
+      # script, par ex. si un autre déclenchement est arrivé entre-temps dans
+      # le même groupe de concurrence.
+      - name: Annotation si run annulé
+        if: cancelled()
+        run: echo "::error::Générer Ventes annulé avant exécution (concurrence ? relancer le jour concerné)."

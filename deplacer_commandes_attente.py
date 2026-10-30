@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
 """
-Deplace effectivement, chaque soir a 22h, les BonDeCommande dont le
-deplacement a ete demande dans la journee via le workflow "Deplacer
-commandes" (sans --forcer) : cette demande n'a fait, sur le moment,
+Deplace effectivement, chaque soir (premiere etape de routine_soir.yml,
+avant le calcul des ventes du jour), les BonDeCommande dont le deplacement
+a ete demande dans la journee via le workflow "Deplacer commandes" (sans
+--forcer) : cette demande n'a fait, sur le moment,
 qu'inscrire un marqueur Drive GITHUB/DeplacementsEnAttente/deplacer_NUMERO.txt
 (date cible deja resolue), depose par deplacer_commande.mettre_en_attente.
 Traite aussi les demandes de suppression sans forcage (marqueur contenant
 SUPPRIMER, depose par deplacer_commande.mettre_en_attente_suppression) : les
 exemplaires archives de la commande sont alors mis a la corbeille Drive.
 
-Pourquoi differe : les ventes du jour (generer_ventes, controle_stocks,
-cumul_ventes_semaine) tournent dans la journee a partir des
+Pourquoi differe, et pourquoi cette etape doit passer avant les suivantes
+de routine_soir.yml : les ventes du jour (generer_ventes, controle_stocks,
+cumul_ventes_semaine) sont calculees a partir des
 BonDeCommande presents dans BDC/MM_AAAA/JJ_MM ; un deplacement immediat d'une
 commande du jour vers le lendemain la faisait disparaitre du CA quotidien
-alors qu'elle avait bien ete preparee. En attendant le soir, une fois ces
-calculs du jour deja faits, le deplacement ne les fausse plus.
+alors qu'elle avait bien ete preparee (le client n'etant pas venu la
+chercher, ses produits n'ont en revanche pas ete vendus et doivent bien
+sortir des ventes du jour en cours). Deplacer en tout premier, avant
+"Generer Ventes", exclut donc correctement ces commandes du calcul.
 
 Chaque marqueur traite avec succes est supprime (mis a la corbeille) ; un
 echec le laisse en place pour une nouvelle tentative le soir suivant.
