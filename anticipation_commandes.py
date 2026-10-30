@@ -1367,9 +1367,14 @@ def main():
         return
 
     try:
-        # Un timeout Drive ponctuel sur l'archivage bloquait l'envoi du mail
-        # sans faire echouer le run (30/10) : on reessaie, puis on echoue
-        # bruyamment. Le brouillon reste intact, un nouveau run l'enverra.
+        # Le mail passe AVANT l'archivage du PDF : un timeout Drive sur
+        # l'archivage bloquait l'envoi (30/10). Sans mail, le run echoue et
+        # le brouillon reste intact, un nouveau run l'enverra.
+        if not _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf):
+            print("  ERREUR : mail d'anticipation non envoye — brouillon conserve.")
+            sys.exit(1)
+        # Archive du PDF secondaire (relue nulle part) : un echec ne doit pas
+        # empecher de noter les commandes envoyees, sinon elles repartiraient.
         archive_ok = False
         for essai in range(3):
             if essai:
@@ -1379,14 +1384,10 @@ def main():
                 drive_svc, chemin_pdf, dossier_mm_aaaa, dossier_jj_mm)
             if archive_ok:
                 break
-        if not archive_ok:
-            print("  ERREUR : archivage Drive impossible — mail NON envoye, "
-                  "brouillon conserve.")
-            sys.exit(1)
-        print(f"\n{nom_pdf} => Drive Anticipation/archives OK")
-        if not _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf):
-            print("  ERREUR : mail d'anticipation non envoye — brouillon conserve.")
-            sys.exit(1)
+        if archive_ok:
+            print(f"\n{nom_pdf} => Drive Anticipation/archives OK")
+        else:
+            print(f"::warning::{nom_pdf} envoye par mail mais non archive sur Drive")
         _maj_fichier_commandes_envoyees(
             drive_svc, commandes_du_pdf(contenu_jour), dossier_mm_aaaa, dossier_jj_mm)
         _archiver_contenu_envoye(drive_svc, contenu_jour, dossier_mm_aaaa, dossier_jj_mm)
