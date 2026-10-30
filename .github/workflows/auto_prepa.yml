@@ -477,11 +477,21 @@ jobs:
           url = worker_url.rstrip("/") + "/termine?" + urllib.parse.urlencode({"token": push_token})
           body = json.dumps({"historyId": history_id}).encode()
           try:
+              # User-Agent explicite : le défaut "Python-urllib/3.x" est bloqué
+              # par les protections anti-bot de Cloudflare (403 "Mitigated by
+              # Cloudflare", constaté le 30/10/2026 — le worker ne recevait
+              # jamais la requête, le Debounce restait donc bloqué pour de bon).
               urllib.request.urlopen(
-                  urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}),
+                  urllib.request.Request(url, data=body, headers={
+                      "Content-Type": "application/json",
+                      "User-Agent": "enbmobile-auto-prepa-workflow",
+                  }),
                   timeout=15,
               )
               print(f"Fin de run signalée au worker gmailpush (historyId={history_id}).")
+          except urllib.error.HTTPError as e:
+              print(f"Signalement au worker gmailpush échoué (HTTP {e.code} {e.reason}) — "
+                    f"sans conséquence (garde-fou anti-blocage côté worker).")
           except Exception as e:
               print(f"Signalement au worker gmailpush échoué ({e}) — sans conséquence (garde-fou anti-blocage côté worker).")
           EOF
