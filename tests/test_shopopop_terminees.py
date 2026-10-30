@@ -73,5 +73,36 @@ class TestTerminees(unittest.TestCase):
         self.assertIsNone(shopopop._statut_terminees)
 
 
+class TestNomsAbsentsDe(unittest.TestCase):
+    """Vérification inverse du workflow "Vérif LAD" : une commande
+    'Terminée' côté Shopopop mais absente de notre fichier de livraison."""
+
+    def setUp(self):
+        shopopop._statut_terminees = None
+        shopopop._terminees_indisponible = False
+
+    def tearDown(self):
+        self.setUp()
+
+    def test_commande_shopopop_absente_du_fichier_signalee(self):
+        lister, _ = _faux_lister({"finished": [_item("Nadine", "Robert", 1000),
+                                               _item("Céline", "Dubray", 2000)]})
+        with mock.patch.object(shopopop, "_lister_livraisons", lister):
+            absents = shopopop.noms_absents_de("t", "14156", JOUR, ["ROBERT NADINE"])
+        self.assertEqual(absents, ["Céline Dubray"])
+
+    def test_toutes_les_commandes_shopopop_connues_aucune_absence(self):
+        lister, _ = _faux_lister({"finished": [_item("Nadine", "Robert", 1000)]})
+        with mock.patch.object(shopopop, "_lister_livraisons", lister):
+            absents = shopopop.noms_absents_de("t", "14156", JOUR, ["ROBERT NADINE"])
+        self.assertEqual(absents, [])
+
+    def test_onglet_termines_indisponible_retourne_none(self):
+        lister, _ = _faux_lister({})
+        with mock.patch.object(shopopop, "_lister_livraisons", lister):
+            absents = shopopop.noms_absents_de("t", "14156", JOUR, ["ROBERT NADINE"])
+        self.assertIsNone(absents)
+
+
 if __name__ == "__main__":
     unittest.main()

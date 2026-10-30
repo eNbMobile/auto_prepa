@@ -6,9 +6,15 @@ aujourd'hui), vérifie côté back-office Shopopop (nom/prénom du
 destinataire) qu'elle n'est plus dans l'onglet "Programmées" — c'est-à-dire
 qu'elle est bien passée dans "Livrées" (ou un autre statut final).
 
+Vérifie aussi dans l'autre sens : que chaque commande présente dans
+l'onglet "Terminées" de Shopopop pour aujourd'hui figure bien dans notre
+fichier LIVRAISON DRIVE 2026 (sinon une livraison faite par erreur, ou une
+commande absente de notre suivi, passerait inaperçue).
+
 Une commande est signalée en anomalie si :
 - elle est toujours dans "Programmées" (pas encore livrée) ;
-- la vérification Shopopop elle-même a échoué (connexion/API).
+- la vérification Shopopop elle-même a échoué (connexion/API) ;
+- elle est dans "Terminées" côté Shopopop mais absente de notre fichier.
 
 Un email récapitulatif des anomalies est envoyé s'il y en a au moins une.
 """
@@ -48,8 +54,8 @@ def _envoyer_email_anomalies(gmail_svc, destinataire, destinataire_2, aujourdhui
         return
     corps = (
         f"Bonjour,\n\n\n"
-        f"{len(anomalies)} commande(s) en LIVRAISON du {aujourdhui.strftime('%d/%m/%Y')} "
-        f"ne sont pas confirmées livrées côté Shopopop :\n\n"
+        f"{len(anomalies)} anomalie(s) sur les commandes en LIVRAISON du "
+        f"{aujourdhui.strftime('%d/%m/%Y')} (côté Shopopop) :\n\n"
     )
     for nom_complet, raison in anomalies:
         corps += f"  - {nom_complet} : {raison}\n"
@@ -98,8 +104,6 @@ def main():
 
     commandes = ld.lire_commandes_jour(sheets_svc, spreadsheet_id, aujourdhui)
     print(f"{len(commandes)} commande(s) LIVRAISON du jour dans LIVRAISON DRIVE 2026.")
-    if not commandes:
-        return
 
     anomalies = []
     for ligne, nom_complet, km in commandes:
@@ -116,7 +120,26 @@ def main():
             print(f"  Ligne {ligne} : OK (livrée) — nom passé en vert")
             ld.marquer_livree(sheets_svc, spreadsheet_id, aujourdhui, ligne)
 
-    print(f"\n{len(anomalies)} anomalie(s) sur {len(commandes)} commande(s).")
+    print(f"\n{len(anomalies)} anomalie(s) sur {len(commandes)} commande(s) "
+          f"(sens fichier → Shopopop).")
+
+    # Vérification inverse : toute commande 'Terminée' côté Shopopop doit
+    # être présente dans notre fichier LIVRAISON DRIVE 2026.
+    noms_connus = [nom_complet for _, nom_complet, _ in commandes]
+    absents = shopopop.noms_absents_de(shopopop_token, shopopop_drive_id, aujourdhui, noms_connus)
+    if absents is None:
+        print("  Vérification inverse (Terminées → notre fichier) impossible : "
+              "onglet 'Terminées' Shopopop inaccessible.")
+    else:
+        for nom in absents:
+            confidentiel.masquer(nom)
+        print(f"  {len(absents)} commande(s) 'Terminée(s)' côté Shopopop absente(s) "
+              f"de notre fichier.")
+        for nom in absents:
+            anomalies.append((nom, "présente dans 'Terminées' côté Shopopop, absente "
+                                    "de LIVRAISON DRIVE 2026"))
+
+    print(f"\n{len(anomalies)} anomalie(s) au total.")
 
     if anomalies:
         gmail_svc = cs._get_gmail_service()
