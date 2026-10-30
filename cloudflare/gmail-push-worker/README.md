@@ -73,10 +73,12 @@ Le volume (quelques centaines de messages par jour) reste très loin de la limit
 3. Actions → **Deployer tableau de bord Cloudflare** → **Run workflow** : le job
    `gmailpush` déploie le worker et installe ses secrets (`GH_TOKEN` depuis
    `WF_GH_TOKEN`, `PUBSUB_TOKEN` depuis `GMAIL_PUSH_TOKEN`).
-   URL du worker : `https://gmailpush.<compte>.workers.dev` (même sous-domaine que `wf`).
-4. Si cette URL n'est pas `https://gmailpush.controle-stocks.workers.dev`
-   (valeur par défaut utilisée par `auto_prepa.yml` pour signaler `/termine`
-   au Debounce), Dépôt → Settings → Secrets and variables → Actions →
+   URL du worker : `https://gmailpush.<compte>.workers.dev` (visible dans le
+   log de ce run, ligne « Deployed gmailpush triggers » — actuellement
+   `https://gmailpush.coopu.workers.dev`).
+4. Si cette URL n'est pas `https://gmailpush.coopu.workers.dev` (valeur par
+   défaut utilisée par `auto_prepa.yml` pour signaler `/termine` au
+   Debounce), Dépôt → Settings → Secrets and variables → Actions →
    onglet **Variables** → **New repository variable** : `GMAILPUSH_URL` =
    l'URL réelle du worker.
 
