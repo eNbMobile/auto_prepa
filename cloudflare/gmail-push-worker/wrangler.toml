@@ -11,9 +11,21 @@ crons = ["17 3 * * *"]
 # désactivé à la demande le 14/10/2026. Pour le réactiver, ajouter
 # "*/10 * * * *" à la liste ci-dessus ; le code est toujours dans src/index.js.
 
+# Durable Object "Debounce" : un seul run GitHub par commande (voir le
+# commentaire en tête de src/index.js). Stockage SQLite intégré (disponible
+# sur le plan Workers gratuit).
+[[durable_objects.bindings]]
+name = "DEBOUNCE"
+class_name = "Debounce"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Debounce"]
+
 # Secrets (jamais en clair ici) :
 #   GH_TOKEN      token GitHub autorisé à lancer les workflows du dépôt
-#   PUBSUB_TOKEN  jeton secret présent dans l'URL de l'abonnement Pub/Sub
+#   PUBSUB_TOKEN  jeton secret présent dans l'URL de l'abonnement Pub/Sub,
+#                 et utilisé par auto_prepa.yml pour signaler /termine
 
 # Logs conservés dans le tableau de bord Cloudflare (Observability → Logs) :
 # sans ça, un échec du lancement GitHub (jeton refusé…) est invisible.

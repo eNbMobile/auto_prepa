@@ -419,3 +419,69 @@ jobs:
               --repo "${{ github.repository }}"
             echo "Secret GOOGLE_TOKEN_JSON mis à jour."
           fi
+
+      # Signale au worker Cloudflare "gmailpush" que ce run est terminé, pour
+      # qu'il libère son Debounce (anti-doublon : voir cloudflare/gmail-push-
+      # worker/src/index.js) et ne dispatche un run supplémentaire que si des
+      # notifications sont arrivées pendant celui-ci — jamais un par
+      # notification. Toujours exécuté (y compris si le run n'a rien trouvé à
+      # faire, ou a échoué) pour ne jamais laisser le Debounce bloqué ; en cas
+      # d'échec de cette étape, le garde-fou anti-blocage côté worker (20 min)
+      # prend le relais.
+      - name: Signaler la fin du run au worker gmailpush (anti-doublon)
+        if: always()
+        continue-on-error: true
+        env:
+          GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
+          GMAIL_PUSH_TOKEN:  ${{ secrets.GMAIL_PUSH_TOKEN }}
+          GMAILPUSH_URL:     ${{ vars.GMAILPUSH_URL || 'https://gmailpush.controle-stocks.workers.dev' }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys, urllib.request, urllib.parse
+
+          push_token = os.environ.get("GMAIL_PUSH_TOKEN", "").strip()
+          worker_url = os.environ.get("GMAILPUSH_URL", "").strip()
+          token_json = os.environ.get("GOOGLE_TOKEN_JSON", "").strip()
+          if not push_token or not worker_url:
+              print("GMAIL_PUSH_TOKEN ou GMAILPUSH_URL absent : signalement anti-doublon ignoré.")
+              sys.exit(0)
+
+          # historyId Gmail courant (reflète aussi les mutations faites par ce
+          # run lui-même) : permet au worker d'ignorer les échos de notification
+          # qu'elles génèrent, au lieu de redéclencher un run pour chacune.
+          history_id = None
+          if token_json:
+              try:
+                  token = json.loads(token_json)
+                  data = urllib.parse.urlencode({
+                      "client_id":     token["client_id"],
+                      "client_secret": token["client_secret"],
+                      "refresh_token": token["refresh_token"],
+                      "grant_type":    "refresh_token",
+                  }).encode()
+                  resp = json.loads(urllib.request.urlopen(
+                      urllib.request.Request("https://oauth2.googleapis.com/token", data=data),
+                      timeout=30,
+                  ).read())
+                  access = resp["access_token"]
+                  profil = json.loads(urllib.request.urlopen(
+                      urllib.request.Request(
+                          "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+                          headers={"Authorization": f"Bearer {access}"}),
+                      timeout=30,
+                  ).read())
+                  history_id = int(profil["historyId"])
+              except Exception as e:
+                  print(f"historyId non récupéré ({e}) : signalement sans historyId.")
+
+          url = worker_url.rstrip("/") + "/termine?" + urllib.parse.urlencode({"token": push_token})
+          body = json.dumps({"historyId": history_id}).encode()
+          try:
+              urllib.request.urlopen(
+                  urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}),
+                  timeout=15,
+              )
+              print(f"Fin de run signalée au worker gmailpush (historyId={history_id}).")
+          except Exception as e:
+              print(f"Signalement au worker gmailpush échoué ({e}) — sans conséquence (garde-fou anti-blocage côté worker).")
+          EOF
