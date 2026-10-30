@@ -247,11 +247,13 @@ def _chercher_destinataire(items, nom_complet):
     return None, noms_vus
 
 
-# Valeurs essayees pour le parametre "status" de l'onglet "Terminees" (le
-# code exact n'est pas documente ; l'API repond 400 a un statut inconnu). La
-# premiere acceptee est memorisee pour la suite de l'execution.
-_STATUTS_TERMINEES = ("done", "finished", "delivered", "terminated", "completed",
-                      "ended", "closed", "validated", "archived", "history")
+# Valeur confirmee pour le parametre "status" de l'onglet "Terminees" :
+# capturee via les DevTools (onglet Network) sur app.shopopop.com/deliveries
+# en cliquant sur "Livrées" — la vraie requete du site utilise
+# status=deliveredAndFinished (l'API n'etant pas documentee, deviner un code
+# anglais plausible comme "finished" ou "delivered" seul ne fonctionne pas,
+# d'ou ce tuple a un seul element plutot qu'une liste de suppositions).
+_STATUTS_TERMINEES = ("deliveredAndFinished",)
 _statut_terminees = None
 # Passe a True quand aucun statut n'a ete accepte : inutile de reessayer toute
 # la liste pour chaque commande du meme run.
