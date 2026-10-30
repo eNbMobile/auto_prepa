@@ -32,6 +32,7 @@ import io
 import os
 import re
 import sys
+import time
 import urllib.request
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -1366,20 +1367,34 @@ def main():
         return
 
     try:
-        archive_ok = ap.archiver_resultat_anticipation_drive(
-            drive_svc, chemin_pdf, dossier_mm_aaaa, dossier_jj_mm)
-        if archive_ok:
-            print(f"\n{nom_pdf} => Drive Anticipation/archives OK")
-            email_ok = _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf)
-            if email_ok:
-                _maj_fichier_commandes_envoyees(
-                    drive_svc, commandes_du_pdf(contenu_jour), dossier_mm_aaaa, dossier_jj_mm)
-                _archiver_contenu_envoye(drive_svc, contenu_jour, dossier_mm_aaaa, dossier_jj_mm)
-                orphelins, arrivees = _reinitialiser_dossier_jour_anticipation(
-                    drive_svc, folder_id, dossier_jj_mm, dossier_mm_aaaa, contenu_jour)
-                _envoyer_email_commandes_orphelines(gmail_svc, dossier_jj_mm, orphelins)
-                _envoyer_email_commandes_arrivees_pendant_envoi(gmail_svc, dossier_jj_mm, arrivees)
-                _envoyer_email_annulees_rattrapees(gmail_svc, dossier_jj_mm, annulees_rattrapees)
+        # Un timeout Drive ponctuel sur l'archivage bloquait l'envoi du mail
+        # sans faire echouer le run (30/10) : on reessaie, puis on echoue
+        # bruyamment. Le brouillon reste intact, un nouveau run l'enverra.
+        archive_ok = False
+        for essai in range(3):
+            if essai:
+                time.sleep(15 * essai)
+                print(f"  Nouvel essai d'archivage ({essai + 1}/3)...")
+            archive_ok = ap.archiver_resultat_anticipation_drive(
+                drive_svc, chemin_pdf, dossier_mm_aaaa, dossier_jj_mm)
+            if archive_ok:
+                break
+        if not archive_ok:
+            print("  ERREUR : archivage Drive impossible — mail NON envoye, "
+                  "brouillon conserve.")
+            sys.exit(1)
+        print(f"\n{nom_pdf} => Drive Anticipation/archives OK")
+        if not _envoyer_email_resultat(gmail_svc, dossier_jj_mm, chemin_pdf):
+            print("  ERREUR : mail d'anticipation non envoye — brouillon conserve.")
+            sys.exit(1)
+        _maj_fichier_commandes_envoyees(
+            drive_svc, commandes_du_pdf(contenu_jour), dossier_mm_aaaa, dossier_jj_mm)
+        _archiver_contenu_envoye(drive_svc, contenu_jour, dossier_mm_aaaa, dossier_jj_mm)
+        orphelins, arrivees = _reinitialiser_dossier_jour_anticipation(
+            drive_svc, folder_id, dossier_jj_mm, dossier_mm_aaaa, contenu_jour)
+        _envoyer_email_commandes_orphelines(gmail_svc, dossier_jj_mm, orphelins)
+        _envoyer_email_commandes_arrivees_pendant_envoi(gmail_svc, dossier_jj_mm, arrivees)
+        _envoyer_email_annulees_rattrapees(gmail_svc, dossier_jj_mm, annulees_rattrapees)
     finally:
         if os.path.exists(chemin_pdf):
             os.remove(chemin_pdf)
