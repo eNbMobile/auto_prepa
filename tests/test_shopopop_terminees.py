@@ -2,8 +2,8 @@
 """
 Tests de la recherche de distance Shopopop dans l'onglet "Terminees" : une
 livraison deja faite n'est plus dans "Programmees" (status=schedule) ; sa
-distance est alors cherchee parmi les "Terminees", dont le code de statut est
-devine parmi plusieurs valeurs (l'API repond 400 a un statut inconnu).
+distance est alors cherchee parmi les "Terminees" (status=deliveredAndFinished,
+valeur confirmee via les DevTools du site app.shopopop.com, cf. shopopop.py).
 
 Lancement : python3 -m unittest discover -s tests
 """
@@ -58,13 +58,13 @@ class TestTerminees(unittest.TestCase):
 
     def test_livraison_faite_trouvee_dans_terminees(self):
         lister, appels = _faux_lister({"schedule": [],
-                                       "finished": [_item("Céline", "Dubray", 2015)]})
+                                       "deliveredAndFinished": [_item("Céline", "Dubray", 2015)]})
         with mock.patch.object(shopopop, "_lister_livraisons", lister):
             self.assertEqual(distance_km("t", "14156", JOUR, "DUBRAY CELINE"), 2.02)
             # Le statut accepte est memorise : plus d'essais a l'appel suivant.
             appels.clear()
             distance_km("t", "14156", JOUR, "DUBRAY CELINE")
-        self.assertEqual(appels, ["schedule", "finished"])
+        self.assertEqual(appels, ["schedule", "deliveredAndFinished"])
 
     def test_aucun_statut_accepte(self):
         lister, _ = _faux_lister({"schedule": []})
@@ -85,14 +85,14 @@ class TestNomsAbsentsDe(unittest.TestCase):
         self.setUp()
 
     def test_commande_shopopop_absente_du_fichier_signalee(self):
-        lister, _ = _faux_lister({"finished": [_item("Nadine", "Robert", 1000),
-                                               _item("Céline", "Dubray", 2000)]})
+        lister, _ = _faux_lister({"deliveredAndFinished": [_item("Nadine", "Robert", 1000),
+                                                            _item("Céline", "Dubray", 2000)]})
         with mock.patch.object(shopopop, "_lister_livraisons", lister):
             absents = shopopop.noms_absents_de("t", "14156", JOUR, ["ROBERT NADINE"])
         self.assertEqual(absents, ["Céline Dubray"])
 
     def test_toutes_les_commandes_shopopop_connues_aucune_absence(self):
-        lister, _ = _faux_lister({"finished": [_item("Nadine", "Robert", 1000)]})
+        lister, _ = _faux_lister({"deliveredAndFinished": [_item("Nadine", "Robert", 1000)]})
         with mock.patch.object(shopopop, "_lister_livraisons", lister):
             absents = shopopop.noms_absents_de("t", "14156", JOUR, ["ROBERT NADINE"])
         self.assertEqual(absents, [])
