@@ -100,8 +100,8 @@ _COMMANDE_BAGUETTES_DRIVE = "Drive"
 # Tri de la page BVP (lettre C) : Boulangerie d'abord, puis Viennoiserie, puis
 # Patisserie (les autres rayons ne sont pas concernes). Un produit est
 # Boulangerie si sa nomenclature (gencod_nomenclatures.csv, config Drive)
-# commence par 020518 et/ou si son libelle contient "pain(s)" ou
-# "baguette(s)" — sauf un pain au chocolat ou aux raisins, qui est une
+# commence par 020518 et/ou si son libelle contient "pain(s)", "baguette(s)"
+# ou "dejeunette(s)" — sauf un pain au chocolat ou aux raisins, qui est une
 # viennoiserie malgre le mot "pain" dans son libelle et ne compte jamais comme
 # Boulangerie, meme via sa nomenclature. Viennoiserie et Patisserie ne se
 # reconnaissent qu'a la nomenclature (020519 et 020520), aucun mot du libelle
@@ -111,7 +111,7 @@ _NOMENCLATURE_BOULANGERIE  = "020518"
 _NOMENCLATURE_VIENNOISERIE = "020519"
 _NOMENCLATURE_PATISSERIE   = "020520"
 
-_RE_MOT_PAIN_BAGUETTE      = re.compile(r'\bpains?\b|\bbaguettes?\b', re.IGNORECASE)
+_RE_MOT_PAIN_BAGUETTE      = re.compile(r'\bpains?\b|\bbaguettes?\b|\bdéjeunettes?\b', re.IGNORECASE)
 # "au"/"aux" est parfois absent du libelle reel (ex. "2 pains chocolat pur
 # beurre") : facultatif pour ne pas rater l'exclusion.
 _RE_PAIN_VIENNOISERIE      = re.compile(r'\bpains?\s+(?:au\s+)?chocolat\b|\bpains?\s+(?:aux\s+)?raisins\b',

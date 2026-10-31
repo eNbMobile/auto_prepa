@@ -32,6 +32,10 @@ class TestCategorieBvp(unittest.TestCase):
         self.assertEqual(ac._categorie_bvp("Baguette au froment, 1 pièce, 250g", "1", {}),
                           BOULANGERIE)
 
+    def test_mot_dejeunette_est_boulangerie(self):
+        self.assertEqual(ac._categorie_bvp("Déjeunette, 4 pièces, 500g", "1", {}),
+                          BOULANGERIE)
+
     def test_pain_au_chocolat_exclu_meme_avec_nomenclature_boulangerie(self):
         nomenclatures = {"0000000000001": "020518000000000000"}
         self.assertNotEqual(
