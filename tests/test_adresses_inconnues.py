@@ -2,7 +2,7 @@ import os
 import sys
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -139,9 +139,39 @@ class TestFichierDuJour(unittest.TestCase):
         drive = FauxDrive(stock)
         drive.files().renommes[nom] = nom.replace(".txt", "_envoye.txt")
         ai.noter_produits_non_adresses(drive, "222", [("2", "B", "")], jour)
-        # La ligne de la commande 222 est reportee dans un nouveau fichier du
-        # jour (ici le meme nom dans le faux Drive) au lieu d'etre perdue.
-        self.assertEqual(stock[nom].splitlines()[-1], "2;B;;222")
+        # La ligne de la commande 222 est reportee dans le fichier du
+        # lendemain au lieu d'etre perdue dans le fichier deja parti.
+        demain = ai.nom_fichier_jour(date(2026, 10, 14))
+        self.assertEqual(stock[demain].splitlines(), ["2;B;;222"])
+
+    def test_apres_le_rapport_du_soir_fichier_du_lendemain(self):
+        # Fichier du 13 deja envoye : les bons generes jusqu'a minuit vont
+        # dans le fichier du 14, envoye le lendemain soir avec les autres.
+        envoye = ai.nom_fichier_jour(date(2026, 10, 13)).replace(".txt", "_envoye.txt")
+        stock = {envoye: "1;A;;111\n"}
+        drive = FauxDrive(stock)
+        soir = datetime(2026, 10, 13, 22, 30, tzinfo=ai._TZ)
+        self.assertEqual(ai.jour_du_fichier(drive, ai.DOSSIER, soir), date(2026, 10, 14))
+        orig = ai.jour_du_fichier
+        ai.jour_du_fichier = lambda svc, d: orig(svc, d, soir)
+        try:
+            ai.noter_produits_non_adresses(drive, "222", [("2", "B", "")])
+        finally:
+            ai.jour_du_fichier = orig
+        self.assertEqual(stock[ai.nom_fichier_jour(date(2026, 10, 14))].splitlines(),
+                         ["2;B;;222"])
+        self.assertEqual(stock[envoye], "1;A;;111\n")
+        self.assertNotIn(ai.nom_fichier_jour(date(2026, 10, 13)), stock)
+
+    def test_avant_le_rapport_du_soir_fichier_du_jour(self):
+        drive = FauxDrive({ai.nom_fichier_jour(date(2026, 10, 13)): "1;A;;111\n"})
+        matin = datetime(2026, 10, 13, 9, 0, tzinfo=ai._TZ)
+        self.assertEqual(ai.jour_du_fichier(drive, ai.DOSSIER, matin), date(2026, 10, 13))
+        # Apres minuit : comportement normal (le fichier envoye est celui de la veille).
+        envoye = ai.nom_fichier_jour(date(2026, 10, 13)).replace(".txt", "_envoye.txt")
+        drive = FauxDrive({envoye: ""})
+        nuit = datetime(2026, 10, 14, 0, 5, tzinfo=ai._TZ)
+        self.assertEqual(ai.jour_du_fichier(drive, ai.DOSSIER, nuit), date(2026, 10, 14))
 
     def test_commandes_annulees_ignorees(self):
         p = ai.regrouper("1;A;;111\n1;A;;222\n2;B;;222\n", annulees={"222"})

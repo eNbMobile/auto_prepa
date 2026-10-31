@@ -22,10 +22,14 @@ que AUCUNE ADRESSE ou ADRESSE INCONNUE. Le rapport du soir les retire
   pour chaque bon généré : gencod, libellé, adresse actuelle et n° de commande
   sont ajoutés au fichier texte du jour, sur Drive :
   GITHUB/AdressesInconnues/adresses_inconnues_AAAA-MM-JJ.txt
+  Une fois le rapport du soir passé (fichier du jour déjà renommé en
+  ..._envoye.txt), les bons générés jusqu'à minuit vont dans le fichier du
+  lendemain : ils partent avec le rapport du lendemain soir, dans un seul
+  fichier, au lieu de laisser un second fichier daté du jour. L'heure de la
+  routine du soir (cron externe) n'a donc pas à être connue ici.
 - Le soir, le workflow « Adresses inconnues » lance ce script (main) : il
-  regroupe chaque fichier du jour (et des jours précédents qui n'auraient pas
-  été envoyés, run manqué), en fait un PDF (code-barres, libellé, adresse,
-  commandes), l'envoie par email pour un traitement le lendemain matin, puis
+  regroupe le fichier du jour et ceux des jours précédents qui n'auraient pas
+  été envoyés (run manqué) en UN seul PDF (code-barres, libellé, commandes), l'envoie par email pour un traitement le lendemain matin, puis
   renomme le fichier en ..._envoye.txt pour ne jamais l'envoyer deux fois.
 - Avant le PDF, arbitrage_fruits_legumes.arbitrer() retire du rapport les
   fruits/légumes sans nomenclature connue (nouveau calibre/origine/variété) :
@@ -39,7 +43,7 @@ import io
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 _TZ = ZoneInfo("Europe/Paris")
@@ -162,40 +166,63 @@ def nom_fichier_jour(jour):
     return f"{PREFIXE}{jour.strftime('%Y-%m-%d')}.txt"
 
 
+def _id_fichier(drive_svc, dossier_id, nom):
+    res = drive_svc.files().list(
+        q=f"name='{nom}' and '{dossier_id}' in parents and trashed=false",
+        fields="files(id)",
+    ).execute()
+    files = res.get("files", [])
+    return files[0]["id"] if files else None
+
+
+def jour_du_fichier(drive_svc, dossier_id, maintenant=None):
+    """Date du fichier où noter les produits : aujourd'hui, ou demain si le
+    rapport du soir a déjà envoyé le fichier d'aujourd'hui."""
+    aujourd_hui = (maintenant or datetime.now(_TZ)).date()
+    envoye = nom_fichier_jour(aujourd_hui).replace(".txt", f"{SUFFIXE_ENVOYE}.txt")
+    if _id_fichier(drive_svc, dossier_id, envoye):
+        return aujourd_hui + timedelta(days=1)
+    return aujourd_hui
+
+
+def _ajouter_lignes(drive_svc, dossier_id, nom, numero, produits):
+    """Ajoute au fichier `nom` les lignes de la commande `numero` (ses
+    anciennes lignes sont remplacées). Retourne l'id du fichier s'il
+    existait déjà, sinon None."""
+    file_id = _id_fichier(drive_svc, dossier_id, nom)
+    lignes = []
+    if file_id:
+        lignes = [l for l in _telecharger_texte(drive_svc, file_id).splitlines()
+                  if l.strip() and l.rsplit(";", 1)[-1] != str(numero)]
+    for gencod, libelle, adresse in produits:
+        lignes.append(f"{gencod};{libelle.replace(';', ' ')};{adresse};{numero}")
+    _ecrire_texte(drive_svc, dossier_id, nom, "\n".join(lignes) + "\n", file_id)
+    return file_id
+
+
 def noter_produits_non_adresses(drive_svc, numero, produits, jour=None):
-    """Ajoute au fichier texte du jour une ligne
+    """Ajoute au fichier texte du jour (cf. jour_du_fichier) une ligne
     « gencod;libellé;adresse;n° commande » par produit non adressé.
     Une commande régénérée n'est pas comptée deux fois (ses anciennes lignes
     sont remplacées). Ne lève jamais : un échec ne doit pas bloquer la
     génération du bon."""
     if not produits:
         return
-    jour = jour or datetime.now(_TZ).date()
-    nom = nom_fichier_jour(jour)
+    nom = "?"
     try:
         dossier_id = _dossier_adresses(drive_svc)
-        res = drive_svc.files().list(
-            q=f"name='{nom}' and '{dossier_id}' in parents and trashed=false",
-            fields="files(id)",
-        ).execute()
-        files = res.get("files", [])
-        lignes = []
-        if files:
-            lignes = [l for l in _telecharger_texte(drive_svc, files[0]["id"]).splitlines()
-                      if l.strip() and l.rsplit(";", 1)[-1] != str(numero)]
-        for gencod, libelle, adresse in produits:
-            lignes.append(f"{gencod};{libelle.replace(';', ' ')};{adresse};{numero}")
-        _ecrire_texte(drive_svc, dossier_id, nom, "\n".join(lignes) + "\n",
-                      files[0]["id"] if files else None)
-        if files:
+        jour = jour or jour_du_fichier(drive_svc, dossier_id)
+        nom = nom_fichier_jour(jour)
+        file_id = _ajouter_lignes(drive_svc, dossier_id, nom, numero, produits)
+        if file_id:
             # Le rapport du soir a pu envoyer puis renommer le fichier entre sa
             # lecture et sa réécriture ci-dessus : les lignes de cette commande
-            # sont alors reportées dans un nouveau fichier du jour, envoyé au
+            # sont alors reportées dans le fichier du lendemain, envoyé au
             # rapport suivant, au lieu de se perdre dans le fichier déjà parti.
-            nom_actuel = drive_svc.files().get(fileId=files[0]["id"], fields="name").execute().get("name")
+            nom_actuel = drive_svc.files().get(fileId=file_id, fields="name").execute().get("name")
             if nom_actuel != nom:
-                nouvelles = [f"{g};{l.replace(';', ' ')};{a};{numero}" for g, l, a in produits]
-                _ecrire_texte(drive_svc, dossier_id, nom, "\n".join(nouvelles) + "\n")
+                nom = nom_fichier_jour(jour + timedelta(days=1))
+                _ajouter_lignes(drive_svc, dossier_id, nom, numero, produits)
         print(f"    {len(produits)} produit(s) non adresse(s) note(s) dans {DOSSIER}/{nom}")
     except Exception as e:
         print(f"    Ecriture {DOSSIER}/{nom} echouee : {e}")
@@ -405,23 +432,24 @@ def main():
     # douteux sont retirés eux aussi, pour arbitrage manuel par email à part.
     tous_ajouts, tous_doutes = [], []
     pdfs, envoyes = [], []
-    for jour, file_id, nom in fichiers:
-        produits = regrouper(_telecharger_texte(drive_svc, file_id), annulees)
-        produits = retirer_adresses(produits, adresses)
-        ajouts, doutes, produits = afl.arbitrer(produits, nomenclatures)
-        for gencod, libelle, categorie in ajouts:
-            nomenclatures[gencod] = categorie  # évite un doublon si revu un jour suivant
-        tous_ajouts += ajouts
-        tous_doutes += doutes
-        for gencod, p in produits.items():
-            p["jours"] = max(1, historique.get(gencod, 1))
-        envoyes.append((file_id, nom))
-        if not produits:
-            continue
+    # Tous les fichiers en attente (fichier de la veille laissé par un run
+    # manqué ou par d'anciens bons notés après le rapport, fichier du jour)
+    # partent dans UN seul PDF : un produit vu dans plusieurs fichiers n'y
+    # figure qu'une fois, avec toutes ses commandes.
+    contenu = "\n".join(_telecharger_texte(drive_svc, file_id) for _, file_id, _ in fichiers)
+    envoyes = [(file_id, nom) for _, file_id, nom in fichiers]
+    jour = fichiers[-1][0]
+    produits = regrouper(contenu, annulees)
+    produits = retirer_adresses(produits, adresses)
+    tous_ajouts, tous_doutes, produits = afl.arbitrer(produits, nomenclatures)
+    for gencod, p in produits.items():
+        p["jours"] = max(1, historique.get(gencod, 1))
+    pdfs = []
+    if produits:
         chemin = f"produits_non_adresses_{jour.strftime('%d_%m_%Y')}.pdf"
         generer_pdf(produits, jour, chemin)
         pdfs.append((jour, chemin, len(produits)))
-        print(f"{nom} : {len(produits)} produit(s) non adressé(s).")
+        print(f"{', '.join(n for _, n in envoyes)} : {len(produits)} produit(s) non adressé(s).")
 
     if tous_ajouts:
         tous_doutes += afl.ajouter_nomenclatures(cs, tous_ajouts)
