@@ -41,6 +41,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 import auto_prepa as ap
+import controle_stocks as cs
 
 _TZ = ZoneInfo("Europe/Paris")
 
@@ -94,6 +95,41 @@ _PRIX_BAGUETTE_DRIVE    = "1,05"
 _QTE_BAGUETTES_DRIVE    = 4
 _HEURE_BAGUETTES_DRIVE  = "07:30"
 _COMMANDE_BAGUETTES_DRIVE = "Drive"
+
+
+# Tri de la page BVP (lettre C) : Boulangerie d'abord, puis Viennoiserie, puis
+# Patisserie (les autres rayons ne sont pas concernes). Un produit est
+# Boulangerie si sa nomenclature (gencod_nomenclatures.csv, config Drive)
+# commence par 020518 et/ou si son libelle contient "pain(s)" ou
+# "baguette(s)" — sauf un pain au chocolat ou aux raisins, qui est une
+# viennoiserie malgre le mot "pain" dans son libelle et ne compte jamais comme
+# Boulangerie, meme via sa nomenclature. Viennoiserie et Patisserie ne se
+# reconnaissent qu'a la nomenclature (020519 et 020520), aucun mot du libelle
+# n'etant fiable pour elles. Un produit qui ne correspond a aucune des trois
+# passe apres, dans l'ordre ou le tri les aurait places sans cette regle.
+_NOMENCLATURE_BOULANGERIE  = "020518"
+_NOMENCLATURE_VIENNOISERIE = "020519"
+_NOMENCLATURE_PATISSERIE   = "020520"
+
+_RE_MOT_PAIN_BAGUETTE      = re.compile(r'\bpains?\b|\bbaguettes?\b', re.IGNORECASE)
+_RE_PAIN_VIENNOISERIE      = re.compile(r'\bpains?\s+(?:au\s+chocolat|aux\s+raisins)\b',
+                                        re.IGNORECASE)
+
+
+def _categorie_bvp(libelle, gencod, nomenclatures):
+    """Categorie BVP d'un produit pour le tri de sa page PDF : 0 Boulangerie,
+    1 Viennoiserie, 2 Patisserie, 3 autre (cf. constantes ci-dessus)."""
+    cle = gencod.lstrip('0').zfill(13) if gencod and gencod.isdigit() else gencod
+    code_nomenclature = nomenclatures.get(cle, '')
+    pain_viennoiserie = bool(_RE_PAIN_VIENNOISERIE.search(libelle))
+    if not pain_viennoiserie and (code_nomenclature.startswith(_NOMENCLATURE_BOULANGERIE)
+                                   or _RE_MOT_PAIN_BAGUETTE.search(libelle)):
+        return 0
+    if code_nomenclature.startswith(_NOMENCLATURE_VIENNOISERIE):
+        return 1
+    if code_nomenclature.startswith(_NOMENCLATURE_PATISSERIE):
+        return 2
+    return 3
 
 
 # Format des lignes de bon_anticipation.txt (16 champs separes par ';') :
@@ -279,6 +315,13 @@ def _charger_ordre_chemin_prepa(drive_svc):
     return ordre
 
 
+def _charger_nomenclatures_bvp():
+    """Charge gencod_nomenclatures.csv (config Drive, via controle_stocks) :
+    {gencod: code_nomenclature}. Utilise pour trier la page BVP du PDF
+    (Boulangerie/Viennoiserie/Patisserie, cf. _categorie_bvp)."""
+    return cs.charger_gencod_nomenclatures()
+
+
 def _grouper_produits(produits):
     """Regroupe les lignes portant le meme gencod (produit identique commande
     dans plusieurs commandes) : commande, quantite et heure sont empilees, le
@@ -364,7 +407,7 @@ def _rang_rayon_pdf(lettre):
         return (1, 0, lettre)
 
 
-def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin):
+def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin, nomenclatures=None):
     """Genere un unique PDF reunissant tous les rayons fournis (produits_pdf :
     {lettre: [produit, ...]}), chaque rayon demarrant en haut d'une nouvelle
     page, dans l'ordre de _ORDRE_RAYONS_PDF. Colonnes : quantite, photo, code-barres EAN13 + gencod, libelle,
@@ -376,8 +419,12 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
     par commande. Les lignes sont triees par heure de commande croissante
     (l'ordre du chemin de preparation, chemin_prepa_ramasse.csv via
     ordre_chemin, ne departage plus qu'a heure egale), celles d'un meme produit
-    restant groupees. Retourne le chemin local du PDF, ou None si reportlab est
-    indisponible / produits_pdf est vide."""
+    restant groupees — sauf sur la page BVP (lettre C), d'abord triee par
+    categorie (Boulangerie, Viennoiserie, Patisserie, cf. _categorie_bvp et
+    nomenclatures), l'heure ne departageant plus qu'au sein d'une categorie.
+    Retourne le chemin local du PDF, ou None si reportlab est indisponible /
+    produits_pdf est vide."""
+    nomenclatures = nomenclatures or {}
     if not produits_pdf:
         return None
 
@@ -410,9 +457,15 @@ def _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin
     def _elements_rayon(produits, lettre, nom_rayon):
         groupes = _grouper_produits(produits)
         fin_chemin = len(ordre_chemin)
-        groupes.sort(key=lambda g: (g["lignes"][0][2],
-                                     ordre_chemin.get(g["adresse"], fin_chemin),
-                                     g["gencod"]))
+        if lettre == _LETTRE_BAGUETTES_DRIVE:
+            groupes.sort(key=lambda g: (_categorie_bvp(g["libelle"], g["gencod"], nomenclatures),
+                                         g["lignes"][0][2],
+                                         ordre_chemin.get(g["adresse"], fin_chemin),
+                                         g["gencod"]))
+        else:
+            groupes.sort(key=lambda g: (g["lignes"][0][2],
+                                         ordre_chemin.get(g["adresse"], fin_chemin),
+                                         g["gencod"]))
 
         elements = [
             Paragraph(f"Anticipation {nom_rayon} {date_complete} — À préparer avant 7h30",
@@ -1098,7 +1151,8 @@ def generer_pdf_jour(drive_svc, contenu_jour, dossier_jj_mm, dossier_mm_aaaa):
     aaaa = dossier_mm_aaaa.split("_")[1]
     date_complete = f"{jj}/{mm}/{aaaa}"
     ordre_chemin = _charger_ordre_chemin_prepa(drive_svc)
-    return _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin)
+    nomenclatures = _charger_nomenclatures_bvp()
+    return _generer_pdf_rayons(produits_pdf, dossier_jj_mm, date_complete, ordre_chemin, nomenclatures)
 
 
 def _mettre_pdf_jour_a_la_corbeille(drive_svc, folder_id, dossier_jj_mm):
