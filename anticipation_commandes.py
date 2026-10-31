@@ -112,7 +112,9 @@ _NOMENCLATURE_VIENNOISERIE = "020519"
 _NOMENCLATURE_PATISSERIE   = "020520"
 
 _RE_MOT_PAIN_BAGUETTE      = re.compile(r'\bpains?\b|\bbaguettes?\b', re.IGNORECASE)
-_RE_PAIN_VIENNOISERIE      = re.compile(r'\bpains?\s+(?:au\s+chocolat|aux\s+raisins)\b',
+# "au"/"aux" est parfois absent du libelle reel (ex. "2 pains chocolat pur
+# beurre") : facultatif pour ne pas rater l'exclusion.
+_RE_PAIN_VIENNOISERIE      = re.compile(r'\bpains?\s+(?:au\s+)?chocolat\b|\bpains?\s+(?:aux\s+)?raisins\b',
                                         re.IGNORECASE)
 
 
