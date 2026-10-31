@@ -11,6 +11,12 @@ bon de préparation, c'est une ligne dont l'adresse vaut :
 Les rayons fruits (R), légumes (S) et BVP (U) du chemin de préparation sont
 exclus : leurs produits ne sont pas adressés produit par produit.
 
+Un produit replacé par sa nomenclature perd son adresse dans le bon (AUCUNE
+ADRESSE), même quand gencod_adresses.csv en a une : le rapport du soir la
+retrouve (completer_adresses) et la signale « hors chemin » — l'adresse existe
+mais manque dans chemin_prepa_mono.csv (ex. M2-LL-1-10 alors que le chemin
+s'arrête à M2-LL-1-9), à ajouter au chemin ou à corriger.
+
 - En cours de journée, auto_prepa.py appelle noter_produits_non_adresses()
   pour chaque bon généré : gencod, libellé, adresse actuelle et n° de commande
   sont ajoutés au fichier texte du jour, sur Drive :
@@ -219,6 +225,28 @@ def regrouper(contenu, annulees=()):
     return produits
 
 
+def _cle_gencod(gencod):
+    gencod = gencod.strip()
+    return gencod.lstrip("0").zfill(13) if gencod.isdigit() else gencod
+
+
+def completer_adresses(produits, adresses):
+    """Renseigne l'adresse des produits relevés sans adresse (replacés via leur
+    nomenclature : le bon ne la garde pas) quand gencod_adresses.csv en a une.
+    adresses : {gencod normalisé sur 13 chiffres: adresse}. Un produit relevé
+    avec une adresse a forcément une adresse hors du chemin de préparation."""
+    for gencod, p in produits.items():
+        if not p["adresse"]:
+            p["adresse"] = adresses.get(_cle_gencod(gencod), "")
+    return produits
+
+
+def _texte_adresse(adresse):
+    if not adresse:
+        return "absente de gencod_adresses"
+    return f"{adresse}<br/>(hors chemin)"
+
+
 def generer_pdf(produits, jour, chemin):
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
@@ -253,7 +281,7 @@ def generer_pdf(produits, jour, chemin):
         data.append([
             cellule_code_barres(gencod),
             Paragraph(p["libelle"], small),
-            Paragraph(p["adresse"] or "aucune", small_c),
+            Paragraph(_texte_adresse(p["adresse"]), small_c),
             Paragraph("<br/>".join(p["commandes"]), small_c),
             Paragraph(str(p.get("jours", 1)), small_c),
         ])
@@ -295,8 +323,12 @@ def envoyer_email(gmail_svc, destinataire, copie, pdfs):
         f"{'ont' if total > 1 else 'a'} pas d'adresse valide dans "
         f"gencod_adresses.csv ({jours}, hors fruits, légumes et BVP).\n\n"
         f"La liste (code-barres, libellé, adresse actuelle, commandes) est en "
-        f"pièce jointe, à traiter demain matin : adresser ces produits dans "
-        f"gencod_adresses.csv / chemin_prepa_mono.csv.\n", "plain", "utf-8"))
+        f"pièce jointe, à traiter demain matin :\n"
+        f"- « absente de gencod_adresses » : adresser le produit dans "
+        f"gencod_adresses.csv ;\n"
+        f"- « hors chemin » : l'adresse figure dans gencod_adresses.csv mais "
+        f"pas dans chemin_prepa_mono.csv — l'ajouter au chemin ou corriger "
+        f"l'adresse du produit.\n", "plain", "utf-8"))
     for _, chemin, _ in pdfs:
         with open(chemin, "rb") as f:
             part = MIMEApplication(f.read(), "pdf")
@@ -376,6 +408,8 @@ def main():
     annulees = cs.numeros_annules_registre()
     historique = jours_sans_adresse(drive_svc, jusqu_au)
     nomenclatures = cs.charger_gencod_nomenclatures()
+    adresses = {_cle_gencod(g): a for g, a in
+                cs._charger_mapping_gencod_csv("gencod_adresses.csv").items()}
 
     # Arbitrage fruits/légumes : les produits sans nomenclature connue mais
     # dont le libellé est reconnu comme un fruit ou un légume avec son pays
@@ -386,6 +420,7 @@ def main():
     pdfs, envoyes = [], []
     for jour, file_id, nom in fichiers:
         produits = regrouper(_telecharger_texte(drive_svc, file_id), annulees)
+        completer_adresses(produits, adresses)
         ajouts, doutes, produits = afl.arbitrer(produits, nomenclatures)
         for gencod, libelle, categorie in ajouts:
             nomenclatures[gencod] = categorie  # évite un doublon si revu un jour suivant

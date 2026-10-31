@@ -94,6 +94,25 @@ class TestExtraction(unittest.TestCase):
         self.assertEqual(p["3168930001911"]["commandes"], ["111", "222"])
         self.assertEqual(p["3760000000017"]["adresse"], "")
 
+    def test_adresse_retrouvee_hors_chemin(self):
+        # Replacé via sa nomenclature (AUCUNE ADRESSE) : l'adresse de
+        # gencod_adresses.csv, absente du chemin, est retrouvée le soir.
+        p = ai.regrouper("5900130030630;NUII;;111\n"
+                         "3529380020097;MORBIER;;111\n"
+                         "3168930001911;BUGLES;M1-AB-9-9;111\n")
+        ai.completer_adresses(p, {"5900130030630": "M2-LL-1-10",
+                                  "3168930001911": "M2-HH-1-1"})
+        self.assertEqual(p["5900130030630"]["adresse"], "M2-LL-1-10")
+        self.assertEqual(p["3529380020097"]["adresse"], "")
+        self.assertEqual(p["3168930001911"]["adresse"], "M1-AB-9-9")
+        self.assertIn("hors chemin", ai._texte_adresse("M2-LL-1-10"))
+        self.assertIn("absente", ai._texte_adresse(""))
+
+    def test_adresse_retrouvee_gencod_zeros_de_tete(self):
+        p = ai.regrouper("0201781000009;BOURGUIGNON;;111\n")
+        ai.completer_adresses(p, {"0201781000009": "M2-KK-4-1"})
+        self.assertEqual(p["0201781000009"]["adresse"], "M2-KK-4-1")
+
     def test_pdf_genere(self):
         produits = ai.regrouper("3168930001911;BUGLES;M1-AB-9-9;111\n123;COURT;;111\n")
         with tempfile.TemporaryDirectory() as d:
