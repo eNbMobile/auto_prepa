@@ -46,6 +46,14 @@ class TestCategorieBvp(unittest.TestCase):
                               "0000000000001", nomenclatures),
             BOULANGERIE)
 
+    def test_pains_chocolat_sans_au_exclu_meme_avec_nomenclature_boulangerie(self):
+        # Libelle reel rencontre sur un bon de commande : "au" est absent.
+        nomenclatures = {"0000000000001": "020518000000000000"}
+        self.assertNotEqual(
+            ac._categorie_bvp("U SAVEURS 2 croissants + 2 pains chocolat pur beurre, 260g",
+                              "0000000000001", nomenclatures),
+            BOULANGERIE)
+
     def test_pain_au_chocolat_avec_nomenclature_viennoiserie(self):
         nomenclatures = {"0000000000001": "020519000000000000"}
         self.assertEqual(
