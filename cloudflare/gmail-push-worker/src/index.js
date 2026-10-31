@@ -155,11 +155,6 @@ export class Debounce {
       return Response.json({ action: 'rien' });
     }
 
-    // Diagnostic (temporaire) : état brut, sans effet de bord.
-    if (url.pathname === '/etat') {
-      return Response.json(e);
-    }
-
     return new Response('Not found', { status: 404 });
   }
 
@@ -268,15 +263,6 @@ export default {
       }
       console.log(`fin de run (historyId ${historyId ?? '?'}) → ${decision.action}`);
       return new Response(null, { status: 204 });
-    }
-
-    // Diagnostic (temporaire) : état brut du Debounce, sans effet de bord.
-    if (url.pathname === '/etat') {
-      const reponse = await debounce(env).fetch('https://debounce/etat');
-      return new Response(await reponse.text(), {
-        status: reponse.status,
-        headers: { 'Content-Type': 'application/json' },
-      });
     }
 
     return new Response('Not found', { status: 404 });
