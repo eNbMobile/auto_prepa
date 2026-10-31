@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Produits non adresses : relevé au fil de la journée, PDF envoyé le soir.
 
-Un produit est « non adressé » quand il n'a pas d'adresse valide dans
-gencod_adresses.csv, qu'il ait été replacé ou non par sa nomenclature. Dans le
-bon de préparation, c'est une ligne dont l'adresse vaut :
+Un produit est « non adressé » quand il n'a AUCUNE adresse dans
+gencod_adresses.csv. Un produit qui y a une adresse n'est jamais signalé, même
+si cette adresse manque dans chemin_prepa_mono.csv. Dans le bon de
+préparation, le relevé part des lignes dont l'adresse vaut :
 - AUCUNE ADRESSE : placé d'après sa nomenclature (adresse absente de
   gencod_adresses.csv, ou présente mais hors chemin) ;
 - ADRESSE INCONNUE : adresse hors chemin et nomenclature sans correspondance ;
@@ -11,11 +12,11 @@ bon de préparation, c'est une ligne dont l'adresse vaut :
 Les rayons fruits (R), légumes (S) et BVP (U) du chemin de préparation sont
 exclus : leurs produits ne sont pas adressés produit par produit.
 
-Un produit replacé par sa nomenclature perd son adresse dans le bon (AUCUNE
-ADRESSE), même quand gencod_adresses.csv en a une : le rapport du soir la
-retrouve (completer_adresses) et la signale « hors chemin » — l'adresse existe
-mais manque dans chemin_prepa_mono.csv (ex. M2-LL-1-10 alors que le chemin
-s'arrête à M2-LL-1-9), à ajouter au chemin ou à corriger.
+Ces lignes comprennent aussi des produits bien présents dans
+gencod_adresses.csv, mais dont l'adresse manque dans le chemin (ex.
+M2-LL-1-10 alors que le chemin s'arrête à M2-LL-1-9) : le bon ne garde alors
+que AUCUNE ADRESSE ou ADRESSE INCONNUE. Le rapport du soir les retire
+(retirer_adresses) en relisant gencod_adresses.csv.
 
 - En cours de journée, auto_prepa.py appelle noter_produits_non_adresses()
   pour chaque bon généré : gencod, libellé, adresse actuelle et n° de commande
@@ -230,21 +231,12 @@ def _cle_gencod(gencod):
     return gencod.lstrip("0").zfill(13) if gencod.isdigit() else gencod
 
 
-def completer_adresses(produits, adresses):
-    """Renseigne l'adresse des produits relevés sans adresse (replacés via leur
-    nomenclature : le bon ne la garde pas) quand gencod_adresses.csv en a une.
-    adresses : {gencod normalisé sur 13 chiffres: adresse}. Un produit relevé
-    avec une adresse a forcément une adresse hors du chemin de préparation."""
-    for gencod, p in produits.items():
-        if not p["adresse"]:
-            p["adresse"] = adresses.get(_cle_gencod(gencod), "")
-    return produits
-
-
-def _texte_adresse(adresse):
-    if not adresse:
-        return "absente de gencod_adresses"
-    return f"{adresse}<br/>(hors chemin)"
+def retirer_adresses(produits, adresses):
+    """Retire des produits relevés ceux qui ont une adresse dans
+    gencod_adresses.csv (adresses : {gencod normalisé sur 13 chiffres:
+    adresse}), qu'elle figure ou non dans le chemin de préparation : seuls
+    restent les produits réellement sans adresse."""
+    return {g: p for g, p in produits.items() if not adresses.get(_cle_gencod(g))}
 
 
 def generer_pdf(produits, jour, chemin):
@@ -274,21 +266,20 @@ def generer_pdf(produits, jour, chemin):
                          ("TOPPADDING", "BOTTOMPADDING", "LEFTPADDING", "RIGHTPADDING")]))
 
     data = [[Paragraph(t, entete) for t in
-             ("Code-barres", "Libellé", "Adresse actuelle", "Commande(s)",
+             ("Code-barres", "Libellé", "Commande(s)",
               f"Jours sans adresse ({JOURS_HISTORIQUE} j)")]]
     for gencod, p in sorted(produits.items(),
                             key=lambda kv: (-kv[1].get("jours", 1), kv[1]["libelle"])):
         data.append([
             cellule_code_barres(gencod),
             Paragraph(p["libelle"], small),
-            Paragraph(_texte_adresse(p["adresse"]), small_c),
             Paragraph("<br/>".join(p["commandes"]), small_c),
             Paragraph(str(p.get("jours", 1)), small_c),
         ])
 
     doc = SimpleDocTemplate(chemin, pagesize=A4, topMargin=8 * mm, bottomMargin=8 * mm,
                             leftMargin=3 * mm, rightMargin=3 * mm)
-    table = Table(data, colWidths=[108, 209, 80, 70, 60], repeatRows=1)
+    table = Table(data, colWidths=[108, 289, 70, 60], repeatRows=1)
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#006797")),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -320,15 +311,11 @@ def envoyer_email(gmail_svc, destinataire, copie, pdfs):
     msg.attach(MIMEText(
         f"Bonjour,\n\n{total} produit{'s' if total > 1 else ''} commandé"
         f"{'s' if total > 1 else ''} sur le Drive n'"
-        f"{'ont' if total > 1 else 'a'} pas d'adresse valide dans "
+        f"{'ont' if total > 1 else 'a'} aucune adresse dans "
         f"gencod_adresses.csv ({jours}, hors fruits, légumes et BVP).\n\n"
-        f"La liste (code-barres, libellé, adresse actuelle, commandes) est en "
-        f"pièce jointe, à traiter demain matin :\n"
-        f"- « absente de gencod_adresses » : adresser le produit dans "
-        f"gencod_adresses.csv ;\n"
-        f"- « hors chemin » : l'adresse figure dans gencod_adresses.csv mais "
-        f"pas dans chemin_prepa_mono.csv — l'ajouter au chemin ou corriger "
-        f"l'adresse du produit.\n", "plain", "utf-8"))
+        f"La liste (code-barres, libellé, commandes) est en pièce jointe, à "
+        f"traiter demain matin : adresser ces produits dans "
+        f"gencod_adresses.csv.\n", "plain", "utf-8"))
     for _, chemin, _ in pdfs:
         with open(chemin, "rb") as f:
             part = MIMEApplication(f.read(), "pdf")
@@ -420,7 +407,7 @@ def main():
     pdfs, envoyes = [], []
     for jour, file_id, nom in fichiers:
         produits = regrouper(_telecharger_texte(drive_svc, file_id), annulees)
-        completer_adresses(produits, adresses)
+        produits = retirer_adresses(produits, adresses)
         ajouts, doutes, produits = afl.arbitrer(produits, nomenclatures)
         for gencod, libelle, categorie in ajouts:
             nomenclatures[gencod] = categorie  # évite un doublon si revu un jour suivant
