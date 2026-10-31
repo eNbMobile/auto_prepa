@@ -82,8 +82,9 @@ class TestBaguettesDrivePDF(unittest.TestCase):
             setattr(module, nom, valeur)
 
         _patch(ac, "_charger_ordre_chemin_prepa", lambda d: {})
+        _patch(ac, "_charger_nomenclatures_bvp", lambda: {})
         _patch(ac, "_generer_pdf_rayons",
-               lambda produits_pdf, jj, date, ordre: self.generations.append(produits_pdf))
+               lambda produits_pdf, jj, date, ordre, nomenclatures=None: self.generations.append(produits_pdf))
         _patch(ap, "deposer_fichier_jour_anticipation", lambda *a, **k: None)
         # Par defaut, le PDF du 10/09 est genere le 10/09 lui-meme.
         self.aujourdhui = date(2026, 9, 10)
