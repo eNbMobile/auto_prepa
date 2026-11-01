@@ -19,6 +19,7 @@ Usage :
     python3 telecharger_visuels_coursesu.py visuels_ean.json --sortie /chemin/vers/dossier
 """
 import argparse
+import http.cookiejar
 import json
 import re
 import time
@@ -26,6 +27,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+_ACCUEIL_URL = "https://www.coursesu.com/"
 _RECHERCHE_URL = "https://www.coursesu.com/recherche?q={gencod}"
 _TAILLE_IMAGE = "sw=400&sh=400&sm=fit"
 
@@ -36,8 +38,34 @@ _PHOTO_EXTENSIONS = (".jpg", ".png")
 _HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "fr-FR,fr;q=0.9",
+    "Referer": _ACCUEIL_URL,
 }
+
+# coursesu.com (Cloudflare) distingue un vrai navigateur d'une requete nue
+# surtout par l'absence de cookies : une requete isolee, sans le cookie de
+# session pose par la page d'accueil au prealable, se fait bloquer (403)
+# meme depuis une IP normale. On passe donc par un opener qui conserve les
+# cookies d'une requete a l'autre, comme un navigateur.
+_COOKIEJAR = http.cookiejar.CookieJar()
+_OPENER = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_COOKIEJAR))
+
+# Au-dela de cette duree sans requete vers coursesu.com, le cookie de
+# session a de bonnes chances d'avoir expire ; on revisite l'accueil avant
+# de continuer.
+_DUREE_SESSION_SECONDES = 20 * 60
+_derniere_visite_accueil = 0.0
+
+
+def _rafraichir_session_si_besoin():
+    global _derniere_visite_accueil
+    if time.monotonic() - _derniere_visite_accueil < _DUREE_SESSION_SECONDES:
+        return
+    req = urllib.request.Request(_ACCUEIL_URL, headers=_HEADERS)
+    with _OPENER.open(req, timeout=20):
+        pass
+    _derniere_visite_accueil = time.monotonic()
 
 # Present uniquement quand coursesu.com n'a rien trouve pour le gencod (il
 # affiche alors un faux resultat "produit similaire" qu'il faut ignorer).
@@ -66,13 +94,13 @@ def _charger_gencods(chemin_json):
 
 def _requete_texte(url):
     req = urllib.request.Request(url, headers=_HEADERS)
-    with urllib.request.urlopen(req, timeout=20) as resp:
+    with _OPENER.open(req, timeout=20) as resp:
         return resp.read().decode("utf-8", errors="replace")
 
 
 def _requete_binaire(url):
     req = urllib.request.Request(url, headers=_HEADERS)
-    with urllib.request.urlopen(req, timeout=20) as resp:
+    with _OPENER.open(req, timeout=20) as resp:
         return resp.read()
 
 
@@ -108,6 +136,7 @@ def telecharger_visuel(gencod, dossier_sortie):
 
     Retourne "ok", "introuvable", ou "erreur:<detail>"."""
     try:
+        _rafraichir_session_si_besoin()
         html_resultats = _requete_texte(_RECHERCHE_URL.format(gencod=gencod))
     except (urllib.error.URLError, TimeoutError) as e:
         return f"erreur:{e}"
