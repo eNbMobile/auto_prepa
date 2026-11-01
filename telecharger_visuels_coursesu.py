@@ -2,12 +2,13 @@
 """Telecharge les visuels produits manquants depuis coursesu.com.
 
 Pour chaque gencod present dans visuels_ean.json (cf. collecte_ean.yml), le
-script recherche le produit sur coursesu.com/recherche?q=<gencod> et, s'il
-est trouve, telecharge sa photo en PNG 400x400 dans le dossier de sortie
-(nommee <gencod>.png). Quand la recherche ne trouve rien, coursesu.com
-affiche quand meme un "produit similaire" a ignorer : ce cas est detecte via
-le message "nous n'avons rien trouve pour ..." et le gencod est simplement
-saute.
+script verifie d'abord si le visuel existe deja sur enbmobile.nl (si oui, on
+ne retelecharge pas) puis, sinon, recherche le produit sur
+coursesu.com/recherche?q=<gencod> et, s'il est trouve, telecharge sa photo
+en PNG 400x400 dans le dossier de sortie (nommee <gencod>.png). Quand la
+recherche ne trouve rien, coursesu.com affiche quand meme un "produit
+similaire" a ignorer : ce cas est detecte via le message "nous n'avons rien
+trouve pour ..." et le gencod est simplement saute.
 
 A executer EN LOCAL : coursesu.com bloque au niveau pare-feu les IP de
 datacenter (GitHub Actions, environnements cloud), seule une connexion
@@ -27,6 +28,11 @@ from pathlib import Path
 
 _RECHERCHE_URL = "https://www.coursesu.com/recherche?q={gencod}"
 _TAILLE_IMAGE = "sw=400&sh=400&sm=fit"
+
+# Visuels deja en ligne sur l'application (cf. anticipation_commandes.py) :
+# si l'un des deux existe, inutile d'aller le chercher sur coursesu.com.
+_VISUELS_ENBMOBILE_URL = "http://enbmobile.nl/mobUDrive/visuels/"
+_PHOTO_EXTENSIONS = (".jpg", ".png")
 _HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
@@ -68,6 +74,19 @@ def _requete_binaire(url):
     req = urllib.request.Request(url, headers=_HEADERS)
     with urllib.request.urlopen(req, timeout=20) as resp:
         return resp.read()
+
+
+def _visuel_existe_sur_enbmobile(gencod):
+    """True si le visuel du gencod est deja en ligne sur enbmobile.nl."""
+    for ext in _PHOTO_EXTENSIONS:
+        url = f"{_VISUELS_ENBMOBILE_URL}{gencod}{ext}"
+        req = urllib.request.Request(url, headers=_HEADERS, method="HEAD")
+        try:
+            with urllib.request.urlopen(req, timeout=10):
+                return True
+        except urllib.error.URLError:
+            continue
+    return False
 
 
 def _url_image_produit(gencod, html_resultats):
@@ -127,13 +146,17 @@ def main():
     gencods = _charger_gencods(args.visuels_ean_json)
     print(f"{len(gencods)} gencod(s) a traiter.")
 
-    nb_ok = nb_deja = nb_introuvable = nb_erreur = 0
+    nb_ok = nb_deja = nb_deja_enbmobile = nb_introuvable = nb_erreur = 0
     for i, gencod in enumerate(gencods, 1):
         if (dossier_sortie / f"{gencod}.png").exists():
             nb_deja += 1
             continue
         if gencod in introuvables and not args.reessayer_introuvables:
             nb_introuvable += 1
+            continue
+        if _visuel_existe_sur_enbmobile(gencod):
+            nb_deja_enbmobile += 1
+            print(f"[{i}/{len(gencods)}] {gencod} : deja present sur enbmobile.nl, ignore")
             continue
 
         resultat = telecharger_visuel(gencod, dossier_sortie)
@@ -153,7 +176,8 @@ def main():
                                 encoding="utf-8")
         time.sleep(args.pause)
 
-    print(f"\nTermine : {nb_ok} telecharge(s), {nb_deja} deja present(s), "
+    print(f"\nTermine : {nb_ok} telecharge(s), {nb_deja} deja present(s) localement, "
+          f"{nb_deja_enbmobile} deja present(s) sur enbmobile.nl, "
           f"{nb_introuvable} introuvable(s), {nb_erreur} erreur(s).")
 
 
