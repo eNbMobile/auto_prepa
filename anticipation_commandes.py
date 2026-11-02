@@ -29,6 +29,7 @@ elles seraient preparees une seconde fois avec l'anticipation du lendemain.
 
 import base64
 import io
+import json
 import os
 import re
 import sys
@@ -1067,6 +1068,92 @@ def telecharger_texte_dossier(drive_svc, folder_id, filename):
     return _telecharger_texte(drive_svc, files[0]["id"]), files[0]["id"]
 
 
+# Attente, avant l'envoi, des commandes en cours de traitement : un bon
+# genere par aut_prep (auto_prepa.yml) puis assemble dans le brouillon par
+# anticipation_assemble.yml quelques secondes apres la lecture du brouillon
+# manquait dans le PDF envoye (29/10/2026, cde 56826337 : email a 6h00:02,
+# anticipation partie a 6h00:11, bon genere a 6h00:35). Les runs aut_prep
+# deja lances au depart de l'envoi sont attendus (pas les suivants : il en
+# part un chaque minute), puis tous les assemblages/retraits en file, y
+# compris ceux que ces runs viennent de declencher. Plafonnee pour que le
+# mail parte quoi qu'il arrive.
+_WORKFLOWS_COMMANDES   = ("auto_prepa.yml",)
+_WORKFLOWS_ASSEMBLAGE  = ("anticipation_assemble.yml", "anticipation_retirer.yml")
+_ATTENTE_MAX_S         = 6 * 60
+_ATTENTE_INTERVALLE_S  = 10
+# Delai laisse au repository_dispatch d'un run aut_prep tout juste termine
+# pour apparaitre comme run anticipation_assemble en file.
+_ATTENTE_DISPATCH_S    = 15
+
+
+def _runs_en_cours(workflow):
+    """Ids des runs en file ou en cours du workflow (None si l'API GitHub est
+    inaccessible : pas de quoi attendre)."""
+    token = os.environ.get("GITHUB_TOKEN", "").strip() or os.environ.get("GH_PAT", "").strip()
+    repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if not token or not repo:
+        return None
+    ids = set()
+    for statut in ("queued", "in_progress", "waiting", "pending"):
+        url = (f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}"
+               f"/runs?status={statut}&per_page=100")
+        req = urllib.request.Request(url, headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=15) as rep:
+                ids.update(r["id"] for r in json.load(rep).get("workflow_runs", []))
+        except Exception as e:
+            print(f"  Runs {workflow} illisibles ({e}) : pas d'attente.")
+            return None
+    return ids
+
+
+def attendre_commandes_en_cours(sommeil=time.sleep, horloge=time.monotonic):
+    """Attend la fin des commandes en cours de traitement avant l'envoi (cf.
+    _WORKFLOWS_COMMANDES), au plus _ATTENTE_MAX_S. Retourne True si tout est
+    termine, False si le plafond a ete atteint ou l'API inaccessible."""
+    debut = horloge()
+    run_actuel = int(os.environ.get("GITHUB_RUN_ID", "0") or 0)
+
+    def _ids(workflows):
+        tous = set()
+        for wf in workflows:
+            ids = _runs_en_cours(wf)
+            if ids is None:
+                return None
+            tous |= ids
+        tous.discard(run_actuel)
+        return tous
+
+    commandes = _ids(_WORKFLOWS_COMMANDES)
+    if commandes is None:
+        return False
+    a_attendre_dispatch = bool(commandes)
+    while True:
+        if commandes:
+            en_cours = _ids(_WORKFLOWS_COMMANDES)
+            if en_cours is None:
+                return False
+            commandes &= en_cours
+        if not commandes:
+            if a_attendre_dispatch:
+                sommeil(_ATTENTE_DISPATCH_S)
+                a_attendre_dispatch = False
+            assemblages = _ids(_WORKFLOWS_ASSEMBLAGE)
+            if assemblages is None:
+                return False
+            if not assemblages:
+                return True
+        if horloge() - debut >= _ATTENTE_MAX_S:
+            print(f"  ATTENTION : commandes encore en cours apres {_ATTENTE_MAX_S // 60} min, "
+                  f"envoi sans les attendre.")
+            return False
+        print(f"  Commande(s) en cours de traitement, attente avant envoi...")
+        sommeil(_ATTENTE_INTERVALLE_S)
+
+
 def _aujourdhui():
     """Date du jour a Paris (isolee pour les tests)."""
     return datetime.now(_TZ).date()
@@ -1386,6 +1473,8 @@ def main():
     # (commandes notees comme envoyees, nettoyage du dossier) se base sur ce
     # meme contenu : une commande assemblee entre-temps n'est ni perdue ni
     # comptee comme envoyee (cf. _reinitialiser_dossier_jour_anticipation).
+    attendre_commandes_en_cours()
+
     print(f"Anticipation du {dossier_jj_mm}/{dossier_mm_aaaa} a partir du brouillon "
           f"Drive GITHUB/Anticipation...")
     folder_id = ap._dossier_anticipation_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm, creer=False)
