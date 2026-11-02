@@ -1068,90 +1068,126 @@ def telecharger_texte_dossier(drive_svc, folder_id, filename):
     return _telecharger_texte(drive_svc, files[0]["id"]), files[0]["id"]
 
 
-# Attente, avant l'envoi, des commandes en cours de traitement : un bon
+# Attente, avant l'envoi, d'une commande en cours de traitement : un bon
 # genere par aut_prep (auto_prepa.yml) puis assemble dans le brouillon par
 # anticipation_assemble.yml quelques secondes apres la lecture du brouillon
 # manquait dans le PDF envoye (29/10/2026, cde 56826337 : email a 6h00:02,
-# anticipation partie a 6h00:11, bon genere a 6h00:35). Les runs aut_prep
-# deja lances au depart de l'envoi sont attendus (pas les suivants : il en
-# part un chaque minute), puis tous les assemblages/retraits en file, y
-# compris ceux que ces runs viennent de declencher. Plafonnee pour que le
-# mail parte quoi qu'il arrive.
-_WORKFLOWS_COMMANDES   = ("auto_prepa.yml",)
-_WORKFLOWS_ASSEMBLAGE  = ("anticipation_assemble.yml", "anticipation_retirer.yml")
-_ATTENTE_MAX_S         = 6 * 60
-_ATTENTE_INTERVALLE_S  = 10
+# anticipation partie a 6h00:11, bon genere a 6h00:35). Sans commande en
+# cours, l'anticipation part tout de suite, a l'heure du declenchement.
+# Une commande est en cours tant qu'un run aut_prep deja lance au depart de
+# l'envoi la traite (pas les runs suivants : il en part un chaque minute),
+# puis tant que son assemblage dans le brouillon n'est pas fini. Un run
+# aut_prep sans commande (hors fenetre, ou rien de nouveau) n'est pas attendu.
+_WORKFLOW_COMMANDES   = "auto_prepa.yml"
+_WORKFLOW_ASSEMBLAGE  = "anticipation_assemble.yml"
+_ETAPE_VERIF_COMMANDES = "Vérifier nouveaux emails Gmail et bons en traitement manuel"
+_ETAPE_TRAITEMENT      = "Exécuter auto_prepa"
+_ATTENTE_INTERVALLE_S = 5
 # Delai laisse au repository_dispatch d'un run aut_prep tout juste termine
 # pour apparaitre comme run anticipation_assemble en file.
-_ATTENTE_DISPATCH_S    = 15
+_ATTENTE_DISPATCH_S   = 15
+# Garde-fou contre un run bloque, sous le timeout du job (30 min) : sans lui,
+# un run aut_prep fige empecherait l'anticipation de partir du tout.
+_ATTENTE_MAX_S        = 25 * 60
 
 
-def _runs_en_cours(workflow):
-    """Ids des runs en file ou en cours du workflow (None si l'API GitHub est
-    inaccessible : pas de quoi attendre)."""
+def _api_github(chemin):
+    """GET sur l'API GitHub du depot (None si inaccessible)."""
     token = os.environ.get("GITHUB_TOKEN", "").strip() or os.environ.get("GH_PAT", "").strip()
     repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
     if not token or not repo:
         return None
+    req = urllib.request.Request(f"https://api.github.com/repos/{repo}/{chemin}", headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=15) as rep:
+            return json.load(rep)
+    except Exception as e:
+        print(f"  API GitHub {chemin} illisible ({e})")
+        return None
+
+
+def _runs_en_cours(workflow):
+    """Ids des runs en file ou en cours du workflow (None si API inaccessible)."""
     ids = set()
     for statut in ("queued", "in_progress", "waiting", "pending"):
-        url = (f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}"
-               f"/runs?status={statut}&per_page=100")
-        req = urllib.request.Request(url, headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-        })
-        try:
-            with urllib.request.urlopen(req, timeout=15) as rep:
-                ids.update(r["id"] for r in json.load(rep).get("workflow_runs", []))
-        except Exception as e:
-            print(f"  Runs {workflow} illisibles ({e}) : pas d'attente.")
+        rep = _api_github(f"actions/workflows/{workflow}/runs?status={statut}&per_page=100")
+        if rep is None:
             return None
+        ids.update(r["id"] for r in rep.get("workflow_runs", []))
     return ids
 
 
+def _etat_run_commandes(run_id):
+    """'sans_commande', 'en_cours' ou 'termine' pour un run aut_prep, d'apres
+    ses etapes : sans commande quand la verification des nouveaux emails est
+    sautee (hors fenetre) ou que l'etape qui la suit l'est (rien de nouveau),
+    termine quand l'execution d'auto_prepa est finie ou le run clos."""
+    rep = _api_github(f"actions/runs/{run_id}/jobs")
+    if rep is None:
+        return "termine"
+    jobs = rep.get("jobs", [])
+    if not jobs:
+        return "en_cours"
+    if all(j.get("status") == "completed" for j in jobs):
+        return "termine"
+    etapes = jobs[0].get("steps", [])
+    noms = [e.get("name") for e in etapes]
+    if _ETAPE_VERIF_COMMANDES in noms:
+        i = noms.index(_ETAPE_VERIF_COMMANDES)
+        verif = etapes[i]
+        if verif.get("conclusion") == "skipped":
+            return "sans_commande"
+        suivante = etapes[i + 1] if i + 1 < len(etapes) else None
+        if (verif.get("status") == "completed" and suivante
+                and suivante.get("conclusion") == "skipped"):
+            return "sans_commande"
+    if _ETAPE_TRAITEMENT in noms:
+        if etapes[noms.index(_ETAPE_TRAITEMENT)].get("status") == "completed":
+            return "termine"
+    return "en_cours"
+
+
 def attendre_commandes_en_cours(sommeil=time.sleep, horloge=time.monotonic):
-    """Attend la fin des commandes en cours de traitement avant l'envoi (cf.
-    _WORKFLOWS_COMMANDES), au plus _ATTENTE_MAX_S. Retourne True si tout est
-    termine, False si le plafond a ete atteint ou l'API inaccessible."""
+    """Attend la fin du traitement des commandes en cours (bon genere puis
+    assemble dans le brouillon) avant l'envoi ; sans commande en cours, rend
+    la main tout de suite. Retourne True si rien n'est plus en cours."""
     debut = horloge()
-    run_actuel = int(os.environ.get("GITHUB_RUN_ID", "0") or 0)
-
-    def _ids(workflows):
-        tous = set()
-        for wf in workflows:
-            ids = _runs_en_cours(wf)
-            if ids is None:
-                return None
-            tous |= ids
-        tous.discard(run_actuel)
-        return tous
-
-    commandes = _ids(_WORKFLOWS_COMMANDES)
-    if commandes is None:
+    runs = _runs_en_cours(_WORKFLOW_COMMANDES)
+    if runs is None:
         return False
-    a_attendre_dispatch = bool(commandes)
-    while True:
-        if commandes:
-            en_cours = _ids(_WORKFLOWS_COMMANDES)
-            if en_cours is None:
-                return False
-            commandes &= en_cours
-        if not commandes:
-            if a_attendre_dispatch:
-                sommeil(_ATTENTE_DISPATCH_S)
-                a_attendre_dispatch = False
-            assemblages = _ids(_WORKFLOWS_ASSEMBLAGE)
-            if assemblages is None:
-                return False
-            if not assemblages:
-                return True
+    runs.discard(int(os.environ.get("GITHUB_RUN_ID", "0") or 0))
+    commande_traitee = False
+    annonce = False
+
+    def _attendre():
+        nonlocal annonce
         if horloge() - debut >= _ATTENTE_MAX_S:
-            print(f"  ATTENTION : commandes encore en cours apres {_ATTENTE_MAX_S // 60} min, "
-                  f"envoi sans les attendre.")
+            print(f"  ATTENTION : commande toujours en cours apres "
+                  f"{_ATTENTE_MAX_S // 60} min (run bloque ?), envoi sans l'attendre.")
             return False
-        print(f"  Commande(s) en cours de traitement, attente avant envoi...")
+        if not annonce:
+            print("  Commande en cours de traitement : envoi apres la fin de son traitement...")
+            annonce = True
         sommeil(_ATTENTE_INTERVALLE_S)
+        return True
+
+    while runs:
+        etats = {r: _etat_run_commandes(r) for r in runs}
+        commande_traitee |= any(e != "sans_commande" for e in etats.values())
+        runs = {r for r, e in etats.items() if e == "en_cours"}
+        if runs and not _attendre():
+            return False
+    if commande_traitee:
+        sommeil(_ATTENTE_DISPATCH_S)
+    while True:
+        assemblages = _runs_en_cours(_WORKFLOW_ASSEMBLAGE)
+        if not assemblages:
+            return assemblages is not None
+        if not _attendre():
+            return False
 
 
 def _aujourdhui():
