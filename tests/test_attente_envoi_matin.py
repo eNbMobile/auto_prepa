@@ -4,7 +4,8 @@ Tests de la commande arrivee pendant l'envoi de l'anticipation du matin.
 
 29/10/2026, cde 56826337 : email recu a 6h00:02, anticipation partie a
 6h00:11, bon genere a 6h00:35 -> le ramequin manquait dans l'anticipation.
-- l'envoi attend desormais les commandes en cours de traitement ;
+- l'envoi part a l'heure du declenchement, sauf commande en cours de
+  traitement : il attend alors la fin de son traitement ;
 - un mail de secours part pour une commande du jour arrivee entre 5h59 et
   6h05 (lundi-vendredi) ou 4h59 et 5h05 (samedi).
 
@@ -101,49 +102,101 @@ class TestMailSecours(unittest.TestCase):
         self.assertFalse(ok)
 
 
+def _job(*etapes):
+    """Job d'un run aut_prep : etapes (nom, status, conclusion)."""
+    return {"jobs": [{"status": "in_progress", "steps": [
+        {"name": n, "status": st, "conclusion": c} for n, st, c in etapes]}]}
+
+
+_VERIF = ac._ETAPE_VERIF_COMMANDES
+_SUIV = "Restaurer pdftotext"
+_EXEC = ac._ETAPE_TRAITEMENT
+
+
+class TestEtatRunCommandes(unittest.TestCase):
+
+    def _etat(self, rep):
+        with mock.patch.object(ac, "_api_github", return_value=rep):
+            return ac._etat_run_commandes(1)
+
+    def test_hors_fenetre(self):
+        self.assertEqual(self._etat(_job((_VERIF, "completed", "skipped"))), "sans_commande")
+
+    def test_rien_de_nouveau(self):
+        self.assertEqual(self._etat(_job((_VERIF, "completed", "success"),
+                                         (_SUIV, "completed", "skipped"))), "sans_commande")
+
+    def test_verification_en_cours(self):
+        self.assertEqual(self._etat(_job((_VERIF, "in_progress", None),
+                                         (_SUIV, "queued", None))), "en_cours")
+
+    def test_commande_en_cours(self):
+        self.assertEqual(self._etat(_job((_VERIF, "completed", "success"),
+                                         (_SUIV, "completed", "success"),
+                                         (_EXEC, "in_progress", None))), "en_cours")
+
+    def test_commande_traitee(self):
+        self.assertEqual(self._etat(_job((_VERIF, "completed", "success"),
+                                         (_SUIV, "completed", "success"),
+                                         (_EXEC, "completed", "success"))), "termine")
+
+    def test_run_en_file(self):
+        self.assertEqual(self._etat({"jobs": []}), "en_cours")
+
+
 class TestAttenteCommandes(unittest.TestCase):
 
-    def _attendre(self, etats):
-        """etats : liste de {workflow: ids} renvoyes appel apres appel."""
-        appels = {"n": 0}
+    def _attendre(self, runs, etats, assemblages):
+        """runs : ids aut_prep au depart ; etats/assemblages : listes
+        consommees a chaque passage (le dernier element se repete)."""
         sommeils = []
+        n = {"etat": 0, "assemblage": 0}
 
-        def runs(wf):
-            i = min(appels["n"], len(etats) - 1)
-            return set(etats[i].get(wf, ()))
+        def runs_en_cours(wf):
+            if wf == ac._WORKFLOW_COMMANDES:
+                return set(runs)
+            i = min(n["assemblage"], len(assemblages) - 1)
+            n["assemblage"] += 1
+            return set(assemblages[i])
+
+        def etat(run_id):
+            i = min(n["etat"], len(etats) - 1)
+            return etats[i]
 
         def sommeil(s):
             sommeils.append(s)
-            appels["n"] += 1
+            n["etat"] += 1
 
-        horloge = iter(range(0, 10_000, 10))
-        with mock.patch.object(ac, "_runs_en_cours", side_effect=runs):
+        horloge = iter(range(0, 100_000, 5))
+        with mock.patch.object(ac, "_runs_en_cours", side_effect=runs_en_cours), \
+             mock.patch.object(ac, "_etat_run_commandes", side_effect=etat):
             ok = ac.attendre_commandes_en_cours(sommeil=sommeil, horloge=lambda: next(horloge))
         return ok, sommeils
 
-    def test_rien_en_cours(self):
-        ok, sommeils = self._attendre([{}])
+    def test_rien_en_cours_envoi_immediat(self):
+        ok, sommeils = self._attendre([], ["termine"], [()])
         self.assertTrue(ok)
         self.assertEqual(sommeils, [])
 
-    def test_attend_le_run_puis_l_assemblage(self):
-        ok, sommeils = self._attendre([
-            {"auto_prepa.yml": {1}},
-            {"anticipation_assemble.yml": {2}},
-            {},
-        ])
+    def test_run_sans_commande_envoi_immediat(self):
+        ok, sommeils = self._attendre([1], ["sans_commande"], [()])
+        self.assertTrue(ok)
+        self.assertEqual(sommeils, [])
+
+    def test_attend_la_commande_puis_son_assemblage(self):
+        ok, sommeils = self._attendre([1], ["en_cours", "en_cours", "termine"],
+                                      [(2,), (2,), ()])
         self.assertTrue(ok)
         self.assertIn(ac._ATTENTE_DISPATCH_S, sommeils)
+        self.assertEqual(sommeils.count(ac._ATTENTE_INTERVALLE_S), 4)
 
-    def test_ignore_les_runs_lances_apres_le_depart(self):
-        ok, _ = self._attendre([
-            {"auto_prepa.yml": {1}},
-            {"auto_prepa.yml": {3}},
-        ])
+    def test_assemblage_en_cours_au_depart(self):
+        ok, sommeils = self._attendre([], ["termine"], [(2,), ()])
         self.assertTrue(ok)
+        self.assertEqual(sommeils, [ac._ATTENTE_INTERVALLE_S])
 
-    def test_plafond(self):
-        ok, _ = self._attendre([{"anticipation_assemble.yml": {2}}])
+    def test_garde_fou_run_bloque(self):
+        ok, _ = self._attendre([1], ["en_cours"], [()])
         self.assertFalse(ok)
 
     def test_api_inaccessible(self):
