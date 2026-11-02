@@ -59,6 +59,11 @@ EMAIL_ANTICIPATION   = ""
 EMAIL_ANTICIPATION_2 = ""
 LIVRAISON_SPREADSHEET_ID = ""
 
+# Heure (Paris) de reception de l'email de confirmation de chaque commande
+# telechargee pendant ce run, {numero: datetime} (cf. telecharger_bons_email) :
+# sert a l'alerte "commande arrivee pendant l'envoi de l'anticipation du matin".
+RECEPTION_EMAIL_COMMANDE = {}
+
 CONFIG_FILES = [
     "chemin_prepa_mono.csv",
     "chemin_prepa_ramasse.csv",
@@ -205,6 +210,9 @@ def telecharger_bons_email(gmail_svc, cache_dir):
                 print(f"    => {filename} OK")
 
             nouveaux[filename] = (dossier_jj_mm, dossier_mm_aaaa)
+            if msg.get('internalDate'):
+                RECEPTION_EMAIL_COMMANDE[numero] = datetime.fromtimestamp(
+                    int(msg['internalDate']) / 1000, tz=_TZ)
             _marquer_email(gmail_svc, m['id'], label_id)
 
         except Exception as e:
@@ -2259,6 +2267,68 @@ def _envoyer_email_km_recupere(gmail_svc, numero, nom, prenom, km):
         print(f"    Envoi email km recupere {numero} echoue : {e}")
         return False
 
+# Creneaux ou part l'anticipation du matin (heure de Paris, bornes incluses a
+# la minute) : du lundi au vendredi 5h59-6h05, le samedi 4h59-5h05. Une
+# commande du jour arrivee dans ce creneau peut avoir ete assemblee juste
+# apres l'envoi (29/10/2026, cde 56826337 : email a 6h00:02, anticipation
+# partie a 6h00:11, bon genere a 6h00:35) et manquer dans le PDF envoye.
+_CRENEAUX_ENVOI_MATIN = {
+    **{jour: ((5, 59), (6, 5)) for jour in range(5)},   # lundi..vendredi
+    5: ((4, 59), (5, 5)),                               # samedi
+}
+
+
+def _dans_creneau_envoi_matin(dt):
+    """True si dt (datetime Paris) tombe dans le creneau d'envoi de
+    l'anticipation du matin de son jour (cf. _CRENEAUX_ENVOI_MATIN)."""
+    creneau = _CRENEAUX_ENVOI_MATIN.get(dt.weekday())
+    if not creneau:
+        return False
+    (h1, m1), (h2, m2) = creneau
+    return (h1, m1) <= (dt.hour, dt.minute) <= (h2, m2)
+
+
+def _alerter_si_arrivee_pendant_envoi_matin(gmail_svc, numero, contenu_anticipation,
+                                            dossier_jj_mm, dossier_mm_aaaa, dt_reception):
+    """Mail de secours : la commande `numero`, a anticiper le jour meme, est
+    arrivee pendant le creneau d'envoi de l'anticipation du matin — ses
+    produits ne sont peut-etre pas dans l'anticipation envoyee. Rien n'est
+    envoye pour une commande d'un autre jour (son anticipation n'est pas
+    encore partie) ni sans heure de reception (bon depose a la main)."""
+    if not dt_reception or not contenu_anticipation.strip() or not EMAIL_ANTICIPATION:
+        return False
+    if (dossier_jj_mm, dossier_mm_aaaa) != (dt_reception.strftime("%d_%m"),
+                                             dt_reception.strftime("%m_%Y")):
+        return False
+    if not _dans_creneau_envoi_matin(dt_reception):
+        return False
+    from email.mime.text import MIMEText
+    produits = "\n".join(
+        f"  - {libelle} x{_formater_qte(qte)}"
+        for libelle, qte in _quantites_anticipation(contenu_anticipation).values())
+    jour = dossier_jj_mm.replace('_', '/')
+    corps = (
+        f"Bonjour,\n\n"
+        f"La commande {numero} est arrivee a {dt_reception.strftime('%Hh%M:%S')}, "
+        f"pendant l'envoi de l'anticipation du {jour} : son anticipation n'est "
+        f"peut-etre pas dans l'anticipation envoyee.\n\n"
+        f"Produits a anticiper :\n{produits}\n"
+    )
+    try:
+        msg = MIMEText(corps, "plain", "utf-8")
+        msg["to"] = EMAIL_ANTICIPATION
+        if EMAIL_ANTICIPATION_2:
+            msg["cc"] = EMAIL_ANTICIPATION_2
+        msg["subject"] = (f"Anticipation {jour} - commande {numero} peut-etre absente")
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
+        print(f"    Email commande arrivee pendant l'envoi du matin envoye (cde {numero})")
+        return True
+    except Exception as e:
+        print(f"    Envoi email commande arrivee pendant l'envoi du matin {numero} echoue : {e}")
+        return False
+
+
 def extraire_articles_produits_pdf(texte):
     """Extrait (nb_articles, nb_produits) depuis les premieres lignes du PDF."""
     articles = produits = None
@@ -2846,6 +2916,9 @@ def _traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, 
                                     ecraser=regeneration)
         declencher_assemblage_anticipation(order_num, dossier_jj_mm, dossier_mm_aaaa,
                                            regenerer=regeneration)
+        _alerter_si_arrivee_pendant_envoi_matin(
+            gmail_svc, order_num, contenu_anticipation, dossier_jj_mm, dossier_mm_aaaa,
+            RECEPTION_EMAIL_COMMANDE.get(order_num))
     elif regeneration:
         supprimer_anticipation_commande_drive(drive_svc, order_num, dossier_jj_mm, dossier_mm_aaaa)
         declencher_assemblage_anticipation(order_num, dossier_jj_mm, dossier_mm_aaaa,
