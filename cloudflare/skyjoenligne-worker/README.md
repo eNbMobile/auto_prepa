@@ -6,7 +6,7 @@ vraies cartes). Ici, chacun ouvre la page sur son téléphone, rejoint une salle
 avec un code court et joue son tour : pioche, défausse, échanges, colonnes
 identiques, fin de manche et comptage sont gérés par le worker.
 
-URL une fois déployé : `https://skyjoenligne.controle-stocks.workers.dev`
+URL une fois déployé : `https://skyjoenligne.coopu.workers.dev`
 
 ## Déroulé d'une partie
 
@@ -41,7 +41,7 @@ manche est comptée.
 ## Compteur de points Flip 7 (`/flip7`)
 
 Le même worker sert aussi un **compteur de points pour Flip 7**, joué avec les
-vraies cartes : `https://skyjoenligne.controle-stocks.workers.dev/flip7` (un
+vraies cartes : `https://skyjoenligne.coopu.workers.dev/flip7` (un
 lien y mène depuis l'accueil du Skyjo).
 
 1. Choisir le nombre de joueurs (2 à 12), leurs noms (mêmes joueurs

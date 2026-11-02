@@ -28,7 +28,7 @@ npx wrangler secret put GH_TOKEN # même token que pour "wf"
 npx wrangler deploy
 ```
 
-URL obtenue : `https://wf2.controle-stocks.workers.dev` (même sous-domaine de
+URL obtenue : `https://wf2.coopu.workers.dev` (même sous-domaine de
 compte que `wf`).
 
 

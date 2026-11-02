@@ -58,7 +58,7 @@ npx wrangler deploy
 ```
 
 Le nom du worker (`wf` dans `wrangler.toml`) détermine l'URL obtenue :
-`https://wf.controle-stocks.workers.dev` (même sous-domaine de compte que
+`https://wf.coopu.workers.dev` (même sous-domaine de compte que
 `ctrl` et `anticip` si tu déploies sur le même compte Cloudflare).
 
 Les workers `ctrl` et `anticip` continuent de fonctionner : ce tableau de bord

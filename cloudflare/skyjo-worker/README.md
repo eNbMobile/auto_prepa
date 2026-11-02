@@ -8,7 +8,7 @@ namespace KV (plus besoin du stockage local du navigateur : le lien peut être
 ouvert depuis n'importe quel téléphone, les scores suivent).
 
 URL obtenue une fois déployé (même sous-domaine de compte que `anticip`) :
-`https://skyjo.controle-stocks.workers.dev`
+`https://skyjo.coopu.workers.dev`
 
 ## Paramètres du lien
 

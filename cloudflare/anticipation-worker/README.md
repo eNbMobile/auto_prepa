@@ -2,7 +2,7 @@
 
 Page web (Cloudflare Worker) qui déclenche le workflow GitHub Actions
 `anticipation_commandes.yml` sans passer par l'interface GitHub ni par un cron,
-même principe et même style que le worker `ctrl` (`ctrl.controle-stocks.workers.dev`)
+même principe et même style que le worker `ctrl` (`ctrl.coopu.workers.dev`)
 déjà en place pour le contrôle des stocks — d'ailleurs ce worker réutilise
 directement son mécanisme de déclenchement (secret `GH_TOKEN`, appel à l'API
 GitHub Actions `dispatches`).
@@ -24,7 +24,7 @@ npx wrangler deploy
 ```
 
 Le nom du worker (`anticip` dans `wrangler.toml`) détermine l'URL obtenue :
-`https://anticip.controle-stocks.workers.dev` (même sous-domaine de compte que
+`https://anticip.coopu.workers.dev` (même sous-domaine de compte que
 `ctrl` si tu déploies sur le même compte Cloudflare).
 
 ## Secret `GH_TOKEN`
