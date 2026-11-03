@@ -12,12 +12,6 @@ concurrency:
   group: anticipation_commandes
   cancel-in-progress: false
 
-# actions: read : attente des commandes en cours de traitement avant l'envoi
-# (cf. attendre_commandes_en_cours dans anticipation_commandes.py).
-permissions:
-  actions: read
-  contents: read
-
 jobs:
   anticipation:
     runs-on: ubuntu-latest

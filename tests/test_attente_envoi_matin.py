@@ -4,10 +4,10 @@ Tests de la commande arrivee pendant l'envoi de l'anticipation du matin.
 
 29/10/2026, cde 56826337 : email recu a 6h00:02, anticipation partie a
 6h00:11, bon genere a 6h00:35 -> le ramequin manquait dans l'anticipation.
-- l'envoi part a l'heure du declenchement, sauf commande en cours de
-  traitement : il attend alors la fin de son traitement ;
+- l'envoi part a l'heure du declenchement, sans attendre ;
 - un mail de secours part pour une commande du jour arrivee entre 5h59 et
-  6h05 (lundi-vendredi) ou 4h59 et 5h05 (samedi).
+  6h05 (lundi-vendredi) ou 4h59 et 5h05 (samedi), avec ses seuls produits
+  des rayons de l'anticipation (A, B, C, D, G).
 
 Lancement : python3 -m unittest discover -s tests
 """
@@ -97,123 +97,33 @@ class TestMailSecours(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(envois, [])
 
+    def test_produit_hors_rayons_anticipation(self):
+        """03/11/2026, cde 57043406 : cheddar du rayon F -> pas de mail."""
+        cheddar = ("3060921506682;Cheddar râpé, Petit Marché, 150g;2,70;18,00;1;OUI;0;0;N;"
+                   "MARDI 03/11/2026 - 14h00-14h30,57043406,Retrait,x,x,x;M2-KK-7-4;"
+                   "FROMAGE A LA COUPE4;P;1052;10/11/2026;F\n")
+        ok, envois = self._alerte(datetime(2026, 11, 3, 6, 3, 5, tzinfo=_TZ),
+                                  jj_mm="03_11", contenu=cheddar)
+        self.assertFalse(ok)
+        self.assertEqual(envois, [])
+
+    def test_seuls_les_produits_des_rayons_anticipation(self):
+        cheddar = _LIGNE.replace("Ramequin", "Cheddar").rsplit(";", 1)[0] + ";F\n"
+        ok, envois = self._alerte(datetime(2026, 10, 29, 6, 0, 2, tzinfo=_TZ),
+                                  contenu=_LIGNE + cheddar)
+        self.assertTrue(ok)
+        import base64, email
+        corps = email.message_from_bytes(base64.urlsafe_b64decode(envois[0]["raw"]))
+        texte = corps.get_payload(decode=True).decode("utf-8")
+        self.assertIn("Ramequin", texte)
+        self.assertNotIn("Cheddar", texte)
+
+    def test_rayons_identiques_au_pdf(self):
+        self.assertEqual(ap.RAYONS_ANTICIPATION, frozenset(ac.RAYONS_LETTRE))
+
     def test_sans_heure_de_reception(self):
         ok, envois = self._alerte(None)
         self.assertFalse(ok)
-
-
-def _job(*etapes):
-    """Job d'un run aut_prep : etapes (nom, status, conclusion)."""
-    return {"jobs": [{"status": "in_progress", "steps": [
-        {"name": n, "status": st, "conclusion": c} for n, st, c in etapes]}]}
-
-
-_VERIF = ac._ETAPE_VERIF_COMMANDES
-_SUIV = "Restaurer pdftotext"
-_EXEC = ac._ETAPE_TRAITEMENT
-
-
-class TestEtatRunCommandes(unittest.TestCase):
-
-    def _etat(self, rep):
-        with mock.patch.object(ac, "_api_github", return_value=rep):
-            return ac._etat_run_commandes(1)
-
-    def test_hors_fenetre(self):
-        self.assertEqual(self._etat(_job((_VERIF, "completed", "skipped"))), "sans_commande")
-
-    def test_rien_de_nouveau(self):
-        self.assertEqual(self._etat(_job((_VERIF, "completed", "success"),
-                                         (_SUIV, "completed", "skipped"))), "sans_commande")
-
-    def test_verification_en_cours(self):
-        self.assertEqual(self._etat(_job((_VERIF, "in_progress", None),
-                                         (_SUIV, "queued", None))), "en_cours")
-
-    def test_commande_en_cours(self):
-        self.assertEqual(self._etat(_job((_VERIF, "completed", "success"),
-                                         (_SUIV, "completed", "success"),
-                                         (_EXEC, "in_progress", None))), "en_cours")
-
-    def test_commande_traitee(self):
-        self.assertEqual(self._etat(_job((_VERIF, "completed", "success"),
-                                         (_SUIV, "completed", "success"),
-                                         (_EXEC, "completed", "success"))), "termine")
-
-    def test_run_en_file(self):
-        self.assertEqual(self._etat({"jobs": []}), "en_cours")
-
-
-class TestAttenteCommandes(unittest.TestCase):
-
-    def _attendre(self, runs, etats, assemblages):
-        """runs : ids aut_prep au depart ; etats/assemblages : listes
-        consommees a chaque passage (le dernier element se repete)."""
-        sommeils = []
-        n = {"etat": 0, "assemblage": 0}
-
-        def runs_en_cours(wf, age_max_s=None):
-            if wf == ac._WORKFLOW_COMMANDES:
-                return set(runs)
-            i = min(n["assemblage"], len(assemblages) - 1)
-            n["assemblage"] += 1
-            return set(assemblages[i])
-
-        def etat(run_id):
-            i = min(n["etat"], len(etats) - 1)
-            return etats[i]
-
-        def sommeil(s):
-            sommeils.append(s)
-            n["etat"] += 1
-
-        horloge = iter(range(0, 100_000, 5))
-        with mock.patch.object(ac, "_runs_en_cours", side_effect=runs_en_cours), \
-             mock.patch.object(ac, "_etat_run_commandes", side_effect=etat):
-            ok = ac.attendre_commandes_en_cours(sommeil=sommeil, horloge=lambda: next(horloge))
-        return ok, sommeils
-
-    def test_rien_en_cours_envoi_immediat(self):
-        ok, sommeils = self._attendre([], ["termine"], [()])
-        self.assertTrue(ok)
-        self.assertEqual(sommeils, [])
-
-    def test_run_sans_commande_envoi_immediat(self):
-        ok, sommeils = self._attendre([1], ["sans_commande"], [()])
-        self.assertTrue(ok)
-        self.assertEqual(sommeils, [])
-
-    def test_attend_la_commande_puis_son_assemblage(self):
-        ok, sommeils = self._attendre([1], ["en_cours", "en_cours", "termine"],
-                                      [(2,), (2,), ()])
-        self.assertTrue(ok)
-        self.assertIn(ac._ATTENTE_DISPATCH_S, sommeils)
-        self.assertEqual(sommeils.count(ac._ATTENTE_INTERVALLE_S), 4)
-
-    def test_assemblage_en_cours_au_depart(self):
-        ok, sommeils = self._attendre([], ["termine"], [(2,), ()])
-        self.assertTrue(ok)
-        self.assertEqual(sommeils, [ac._ATTENTE_INTERVALLE_S])
-
-    def test_garde_fou_run_bloque(self):
-        ok, _ = self._attendre([1], ["en_cours"], [()])
-        self.assertFalse(ok)
-
-    def test_run_fantome_ignore(self):
-        """03/11/2026 : run 36803839599 « queued » depuis le 01/10, sans job,
-        attendu 25 min -> il doit etre ignore."""
-        rep = {"workflow_runs": [
-            {"id": 36803839599, "created_at": "2026-10-01T02:01:10Z"},
-            {"id": 2, "created_at": datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ")},
-        ]}
-        with mock.patch.object(ac, "_api_github", return_value=rep):
-            self.assertEqual(ac._runs_en_cours(ac._WORKFLOW_COMMANDES,
-                                               ac._AGE_MAX_RUN_COMMANDES_S), {2})
-            self.assertEqual(ac._runs_en_cours(ac._WORKFLOW_ASSEMBLAGE), {36803839599, 2})
-
-    def test_api_inaccessible(self):
-        with mock.patch.object(ac, "_runs_en_cours", return_value=None):
-            self.assertFalse(ac.attendre_commandes_en_cours(sommeil=lambda s: None))
 
 
 if __name__ == "__main__":

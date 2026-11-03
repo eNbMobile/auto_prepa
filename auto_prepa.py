@@ -2288,13 +2288,29 @@ def _dans_creneau_envoi_matin(dt):
     return (h1, m1) <= (dt.hour, dt.minute) <= (h2, m2)
 
 
+# Rayons repris dans le PDF d'anticipation (RAYONS_LETTRE d'anticipation_commandes) :
+# lettre = dernier champ d'une ligne de bon_anticipation. Les autres rayons
+# (ex. F fromage a la coupe) ne sont pas de l'anticipation.
+RAYONS_ANTICIPATION = frozenset("ABCDG")
+
+
+def _lignes_rayons_anticipation(contenu):
+    """Lignes de bon_anticipation dont le rayon est repris dans le PDF."""
+    return "".join(l for l in (contenu or "").splitlines(keepends=True)
+                   if l.strip() and l.rstrip("\r\n").split(";")[-1].strip().upper()
+                   in RAYONS_ANTICIPATION)
+
+
 def _alerter_si_arrivee_pendant_envoi_matin(gmail_svc, numero, contenu_anticipation,
                                             dossier_jj_mm, dossier_mm_aaaa, dt_reception):
     """Mail de secours : la commande `numero`, a anticiper le jour meme, est
     arrivee pendant le creneau d'envoi de l'anticipation du matin — ses
     produits ne sont peut-etre pas dans l'anticipation envoyee. Rien n'est
     envoye pour une commande d'un autre jour (son anticipation n'est pas
-    encore partie) ni sans heure de reception (bon depose a la main)."""
+    encore partie) ni sans heure de reception (bon depose a la main). Seuls
+    les produits des rayons de l'anticipation comptent (03/11/2026 : mail
+    parti pour un cheddar du rayon F, absent du PDF d'anticipation)."""
+    contenu_anticipation = _lignes_rayons_anticipation(contenu_anticipation)
     if not dt_reception or not contenu_anticipation.strip() or not EMAIL_ANTICIPATION:
         return False
     if (dossier_jj_mm, dossier_mm_aaaa) != (dt_reception.strftime("%d_%m"),
