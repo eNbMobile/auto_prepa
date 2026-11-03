@@ -431,8 +431,25 @@ class Moteur:
                 and L[j - 3] == -84 and L[j - 2] == _o("/"))
 
     @staticmethod
-    def _prix_pu(L, j, sortie, prefixe=""):
-        """Prix unitaire en fin de ligne (« 12,34 € »)."""
+    def _decalage_pu(L, j):
+        """Decalage du prix unitaire en fin de ligne : 0 pour « 12.34 € »,
+        4 quand la ligne se termine par le prix sans « € » (« 179.00 ») : a
+        partir de 100 €, pdftotext -layout n'accole plus le « € » au prix et le
+        C lisait alors les chiffres 4 octets trop a gauche (PU « ,17 »)."""
+        if (L[j - 3] == _o(".") and 48 <= L[j - 2] <= 57 and 48 <= L[j - 1] <= 57
+                and 48 <= L[j - 4] <= 57):
+            return 4
+        return 0
+
+    @classmethod
+    def _pu_nul(cls, L, j):
+        d = cls._decalage_pu(L, j)
+        return L[j - 8 + d] == _o("0") and L[j - 6 + d] == _o("0")
+
+    @classmethod
+    def _prix_pu(cls, L, j, sortie, prefixe=""):
+        """Prix unitaire en fin de ligne (« 12,34 € », ou « 179.00 » sans €)."""
+        j += cls._decalage_pu(L, j)
         if L[j - 10] == SP:
             if L[j - 9] == SP and (L[j - 8] != _o("0") or L[j - 6] != _o("0")):
                 sortie.ajouter(prefixe.encode() + _p("%c.%c%c;", L[j - 8], L[j - 6], L[j - 5]))
@@ -837,9 +854,9 @@ class Moteur:
                                 and L[j - 11] != _o('"') and L[j - 11] != 0 and L[j - 11] != 1
                                 and compte <= 1):
                             new.car(L[j - 11])
-                        if L[j] == NL and L[j - 3] == -30:
+                        if L[j] == NL and (L[j - 3] == -30 or self._decalage_pu(L, j)):
                             self._prix_pu(L, j, new, ";")
-                            if L[j - 8] != _o("0") or L[j - 6] != _o("0"):
+                            if not self._pu_nul(L, j):
                                 recup_lib = 2
                                 i_lib = i
                             else:
@@ -856,9 +873,9 @@ class Moteur:
                                 and L[j - 11] != _o('"') and L[j - 11] != 0 and L[j - 11] != 1
                                 and compte <= 1):
                             new.car(L[j - 11])
-                        if L[j] == NL and L[j - 3] == -30:
+                        if L[j] == NL and (L[j - 3] == -30 or self._decalage_pu(L, j)):
                             self._prix_pu(L, j, temp)
-                            if L[j - 8] != _o("0") or L[j - 6] != _o("0"):
+                            if not self._pu_nul(L, j):
                                 recup_lib = 21
                                 i_lib = i
                                 new.ajouter(" ")
