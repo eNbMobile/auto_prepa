@@ -152,7 +152,7 @@ class TestAttenteCommandes(unittest.TestCase):
         sommeils = []
         n = {"etat": 0, "assemblage": 0}
 
-        def runs_en_cours(wf):
+        def runs_en_cours(wf, age_max_s=None):
             if wf == ac._WORKFLOW_COMMANDES:
                 return set(runs)
             i = min(n["assemblage"], len(assemblages) - 1)
@@ -198,6 +198,18 @@ class TestAttenteCommandes(unittest.TestCase):
     def test_garde_fou_run_bloque(self):
         ok, _ = self._attendre([1], ["en_cours"], [()])
         self.assertFalse(ok)
+
+    def test_run_fantome_ignore(self):
+        """03/11/2026 : run 36803839599 « queued » depuis le 01/10, sans job,
+        attendu 25 min -> il doit etre ignore."""
+        rep = {"workflow_runs": [
+            {"id": 36803839599, "created_at": "2026-10-01T02:01:10Z"},
+            {"id": 2, "created_at": datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ")},
+        ]}
+        with mock.patch.object(ac, "_api_github", return_value=rep):
+            self.assertEqual(ac._runs_en_cours(ac._WORKFLOW_COMMANDES,
+                                               ac._AGE_MAX_RUN_COMMANDES_S), {2})
+            self.assertEqual(ac._runs_en_cours(ac._WORKFLOW_ASSEMBLAGE), {36803839599, 2})
 
     def test_api_inaccessible(self):
         with mock.patch.object(ac, "_runs_en_cours", return_value=None):

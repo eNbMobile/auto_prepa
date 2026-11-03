@@ -1089,6 +1089,12 @@ _ATTENTE_DISPATCH_S   = 15
 # Garde-fou contre un run bloque, sous le timeout du job (30 min) : sans lui,
 # un run aut_prep fige empecherait l'anticipation de partir du tout.
 _ATTENTE_MAX_S        = 25 * 60
+# Un run aut_prep cree il y a plus longtemps que son timeout (15 min) n'est
+# pas une commande en cours mais un run fantome reste « queued » (run
+# 36803839599, en file depuis le 01/10/2026 sans job) : il n'est pas attendu.
+# Sans ce filtre, l'envoi du 03/11/2026 a attendu 25 min pour rien puis a
+# plante (connexion Drive coupee pendant l'attente).
+_AGE_MAX_RUN_COMMANDES_S = 20 * 60
 
 
 def _api_github(chemin):
@@ -1109,14 +1115,29 @@ def _api_github(chemin):
         return None
 
 
-def _runs_en_cours(workflow):
-    """Ids des runs en file ou en cours du workflow (None si API inaccessible)."""
+def _run_trop_ancien(run, age_max_s):
+    """True si le run a ete cree il y a plus de age_max_s secondes."""
+    try:
+        cree = datetime.fromisoformat(run["created_at"].replace("Z", "+00:00"))
+    except Exception:
+        return False
+    return (datetime.now(cree.tzinfo) - cree).total_seconds() > age_max_s
+
+
+def _runs_en_cours(workflow, age_max_s=None):
+    """Ids des runs en file ou en cours du workflow (None si API inaccessible),
+    sans les runs crees il y a plus de age_max_s secondes (runs fantomes)."""
     ids = set()
     for statut in ("queued", "in_progress", "waiting", "pending"):
         rep = _api_github(f"actions/workflows/{workflow}/runs?status={statut}&per_page=100")
         if rep is None:
             return None
-        ids.update(r["id"] for r in rep.get("workflow_runs", []))
+        for r in rep.get("workflow_runs", []):
+            if age_max_s is not None and _run_trop_ancien(r, age_max_s):
+                print(f"  Run {r['id']} ({workflow}) en file depuis {r.get('created_at')} "
+                      f"ignore (run fantome).")
+                continue
+            ids.add(r["id"])
     return ids
 
 
@@ -1155,7 +1176,7 @@ def attendre_commandes_en_cours(sommeil=time.sleep, horloge=time.monotonic):
     assemble dans le brouillon) avant l'envoi ; sans commande en cours, rend
     la main tout de suite. Retourne True si rien n'est plus en cours."""
     debut = horloge()
-    runs = _runs_en_cours(_WORKFLOW_COMMANDES)
+    runs = _runs_en_cours(_WORKFLOW_COMMANDES, _AGE_MAX_RUN_COMMANDES_S)
     if runs is None:
         return False
     runs.discard(int(os.environ.get("GITHUB_RUN_ID", "0") or 0))
@@ -1510,6 +1531,11 @@ def main():
     # meme contenu : une commande assemblee entre-temps n'est ni perdue ni
     # comptee comme envoyee (cf. _reinitialiser_dossier_jour_anticipation).
     attendre_commandes_en_cours()
+    # Connexions recreees apres l'attente : celles ouvertes avant peuvent
+    # avoir ete coupees par Google pendant une longue attente (BrokenPipe le
+    # 03/11/2026 apres 25 min).
+    drive_svc = build("drive", "v3", credentials=creds)
+    gmail_svc = build("gmail", "v1", credentials=creds)
 
     print(f"Anticipation du {dossier_jj_mm}/{dossier_mm_aaaa} a partir du brouillon "
           f"Drive GITHUB/Anticipation...")
