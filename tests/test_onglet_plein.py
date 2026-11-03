@@ -148,12 +148,21 @@ class TestOngletPlein(unittest.TestCase):
 
 def _feuille_facture(fin):
     """Onglet du mois vu en FORMULA : facture en H5:I9 comptant E2:E<fin>."""
-    lignes = [[""] * 9 for _ in range(10)]
+    lignes = [[""] * 9 for _ in range(15)]
     lignes[4][7:9] = ["Distance", "Nb LAD"]
     lignes[5][7:9] = ["0-5", f'=COUNTIFS(E2:E{fin},"<5")']
     lignes[6][7:9] = ["5-10", f'=COUNTIFS($E$2:$E${fin},">=5",E2:E{fin},"<10")']
     lignes[7][7:9] = ["10-15", "=SUM(I6:I7)"]
     lignes[8][7:9] = ["15 +", f"=COUNTIFS('AOUT'!E2:E{fin},\">=15\")"]
+    return lignes
+
+
+def _feuille_facture_octobre(fin):
+    """Facture comme dans OCTOBRE 2026 : plages partant de E1 et de F10."""
+    lignes = [[""] * 9 for _ in range(15)]
+    lignes[6][8] = f'=COUNTIFS(E1:E{fin};">5";E1:E{fin};"<10")'
+    lignes[10][7] = "=SUM(I6:I9)"
+    lignes[14][8] = f'=COUNTIFS(F10:F{fin + 10};">0")*9'
     return lignes
 
 
@@ -181,6 +190,20 @@ class TestPlagesFacture(unittest.TestCase):
         # SEPTEMBRE deja agrandi a 136 lignes, facture restee sur E2:E134.
         maj = self._inscrire(fin=134, ligne_libre=137, nb_lignes=136)
         self.assertIn('=COUNTIFS(E2:E137,"<5")', maj[0]["data"][0]["values"][0])
+
+    def test_plages_ne_partant_pas_de_la_ligne_2_etendues(self):
+        classeur = {"OCTOBRE": _mois_plein(166)}
+        formules = {"OCTOBRE": {165: ["x", "31/10", "NOM", "PRENOM", "5"]}}
+        sheets = _FakeSheets(classeur, {"OCTOBRE": 166}, formules,
+                             {"OCTOBRE": _feuille_facture_octobre(156)})
+        ld._inscrire_commande(sheets, SPREADSHEET_ID, date(2026, 10, 31),
+                              "PAUMIER", "MARILYNE", "55542291", "6,36")
+        maj = sheets.spreadsheets().values().batch_updates
+        self.assertEqual(maj[0]["data"], [
+            {"range": "'OCTOBRE'!I7",
+             "values": [['=COUNTIFS(E1:E167;">5";E1:E167;"<10")']]},
+            {"range": "'OCTOBRE'!I15", "values": [['=COUNTIFS(F10:F167;">0")*9']]},
+        ])
 
     def test_plages_suffisantes_inchangees(self):
         self.assertEqual(self._inscrire(fin=1000, ligne_libre=135, nb_lignes=1000), [])

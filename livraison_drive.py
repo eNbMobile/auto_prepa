@@ -338,10 +338,12 @@ def _assurer_ligne(sheets_svc, spreadsheet_id, titre_onglet, ligne):
     print(f"    Onglet '{titre_onglet}' plein : {ligne - nb_lignes} ligne(s) ajoutee(s).")
 
 
-# Plage commencant a la ligne 2 (premiere ligne de donnees sous l'en-tete),
-# ex. E2:E134 ou $E$2:$E$134 dans =COUNTIFS(E2:E134,"<5") de la facture du
-# mois. Les references vers un autre onglet ('AOUT'!E2:E134) sont ignorees.
-_PLAGE_DONNEES = re.compile(r"(?<![A-Za-z0-9$!_])(\$?[A-Z]{1,3}\$?2:\$?[A-Z]{1,3}\$?)(\d+)(?![0-9A-Za-z_(])")
+# Plage A1 d'une formule, ex. E2:E134, E1:E134, $E$2:$E$134 ou F10:F176 dans
+# les formules de la facture du mois (=COUNTIFS(E1:E166;"<5"),
+# =COUNTIFS(F10:F176;">0")*9). Groupe 1 = tout jusqu'a la colonne de fin,
+# groupe 2 = ligne de fin. Les references vers un autre onglet
+# ('AOUT'!E2:E134) sont ignorees.
+_PLAGE_DONNEES = re.compile(r"(?<![A-Za-z0-9$!_])(\$?[A-Z]{1,3}\$?\d+:\$?[A-Z]{1,3}\$?)(\d+)(?![0-9A-Za-z_(])")
 
 
 def _colonne_a1(j):
@@ -355,12 +357,15 @@ def _colonne_a1(j):
 
 
 def _etendre_plages(sheets_svc, spreadsheet_id, titre_onglet, ligne):
-    """Etend jusqu'a `ligne` les plages des formules de l'onglet qui partent
-    de la ligne 2 et s'arretent avant `ligne` (ex. la facture du mois :
-    =COUNTIFS(E2:E134,"<5") en I6:I9), pour qu'elles comptent aussi les
-    lignes ajoutees par _assurer_ligne — Sheets n'agrandit pas une plage
-    quand des lignes sont ajoutees apres sa derniere ligne. Rattrape aussi
-    les plages restees trop courtes lors d'un ajout precedent."""
+    """Etend jusqu'a `ligne` les plages des formules de l'onglet qui
+    descendent sous la cellule de la formule et s'arretent avant `ligne`
+    (ex. la facture du mois : =COUNTIFS(E2:E134,"<5") ou
+    =COUNTIFS(E1:E134,...) en I6:I9, =COUNTIFS(F10:F176,">0")*9 en I15),
+    pour qu'elles comptent aussi les lignes ajoutees par _assurer_ligne —
+    Sheets n'agrandit pas une plage quand des lignes sont ajoutees apres sa
+    derniere ligne. Les totaux d'un bloc situe au-dessus de la formule
+    (=SUM(I6:I9) en H11) ne sont pas touches. Rattrape aussi les plages
+    restees trop courtes lors d'un ajout precedent."""
     res = sheets_svc.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id, range=f"'{titre_onglet}'",
         valueRenderOption="FORMULA").execute()
@@ -370,7 +375,8 @@ def _etendre_plages(sheets_svc, spreadsheet_id, titre_onglet, ligne):
             if not (isinstance(v, str) and v.startswith("=")):
                 continue
             nouvelle = _PLAGE_DONNEES.sub(
-                lambda m: m.group(1) + str(ligne) if int(m.group(2)) < ligne else m.group(0), v)
+                lambda m: m.group(1) + str(ligne)
+                if i + 1 < int(m.group(2)) < ligne else m.group(0), v)
             if nouvelle != v:
                 maj.append({"range": f"'{titre_onglet}'!{_colonne_a1(j)}{i + 1}",
                             "values": [[nouvelle]]})
