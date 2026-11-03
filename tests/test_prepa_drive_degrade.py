@@ -99,5 +99,32 @@ class TestNomClientAgp(unittest.TestCase):
         self.assertIn(b",Mme DUPONT MARIE", en_tetes[0])
 
 
+class TestPrixUnitaire(unittest.TestCase):
+    """PU en fin de ligne apres « PU » : « 12.34 € », ou, a partir de 100 €,
+    « 179.00 » sans « € » (commande 57029308 : PU sorti « ,17 »)."""
+
+    @staticmethod
+    def _pu(ligne):
+        L = pdd.Buf()
+        data = ligne.encode("utf-8") + b"\n"
+        for k, c in enumerate(data):
+            L[k] = pdd._s(c)
+        sortie = pdd.Fichier()
+        pdd.Moteur._prix_pu(L, len(data) - 1, sortie)
+        return sortie.data
+
+    def test_prix_avec_euro(self):
+        self.assertEqual(self._pu(" " * 60 + "4.49 €"), b"4.49;")
+        self.assertEqual(self._pu(" " * 60 + "34.99 €"), b"34.99;")
+        self.assertEqual(self._pu(" " * 60 + "179.00 €"), b"179.00;")
+
+    def test_prix_a_trois_chiffres_sans_euro(self):
+        self.assertEqual(self._pu(" " * 60 + "179.00"), b"179.00;")
+        self.assertEqual(self._pu(" " * 60 + "12.50"), b"12.50;")
+
+    def test_prix_nul_ignore(self):
+        self.assertIn(self._pu(" " * 60 + "0.00 €"), (None, b""))
+
+
 if __name__ == "__main__":
     unittest.main()
