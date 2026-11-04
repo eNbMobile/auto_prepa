@@ -1210,7 +1210,9 @@ function valeurLot(salle, idx, cases, proprioApres) {
     total += salle.hypo[i] ? c.prix / 2 : c.prix;
     if (c.t === 'rue') {
       const complet = ruesDuQuartier(c.g).every((k) => proprioApres(k) === idx);
-      if (complet) total += c.prix;
+      // Bonus du quartier complet, diminué de la levée d'hypothèque que le nouveau
+      // propriétaire devra payer avant de pouvoir bâtir sur cette rue.
+      if (complet) total += Math.max(0, c.prix - (salle.hypo[i] ? c.leve : 0));
     }
   }
   return total;
