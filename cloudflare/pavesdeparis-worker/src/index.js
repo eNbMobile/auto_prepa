@@ -167,6 +167,73 @@ const CARTES = {
   ],
 };
 
+/* Cartes d'origine ; celles de la base D1 (page de réglages) les remplacent. */
+const CARTES_ORIGINE = JSON.parse(JSON.stringify(CARTES));
+const EFFETS = ['gain', 'paie', 'aller', 'recule', 'prison', 'sortie', 'chacun', 'anniversaire'];
+const CARTES_MAX = 30;
+const TEXTE_CARTE_MAX = 160;
+
+/** Carte au format de la page de réglages : { texte, effet, valeur, sansDepart }. */
+function versReglage(c) {
+  const effet = EFFETS.find((e) => c[e] !== undefined && c[e] !== false) || 'gain';
+  const valeur = typeof c[effet] === 'number' ? c[effet] : 0;
+  return { texte: c.texte, effet, valeur, sansDepart: !!c.sansDepart };
+}
+
+/** Valide les paquets envoyés par la page (1 à 30 cartes chacun) et les met au format du jeu. */
+function cartesValides(brut) {
+  const propres = {};
+  if (!brut || typeof brut !== 'object') return propres;
+  for (const paquet of ['surprise', 'mairie']) {
+    if (!Array.isArray(brut[paquet])) continue;
+    const liste = [];
+    for (const v of brut[paquet].slice(0, CARTES_MAX)) {
+      if (!v || typeof v !== 'object' || !EFFETS.includes(v.effet)) continue;
+      const texte = String(v.texte || '').trim().replace(/\s+/g, ' ').slice(0, TEXTE_CARTE_MAX);
+      if (!texte) continue;
+      const n = parseInt(v.valeur, 10);
+      const carte = { texte };
+      if (v.effet === 'prison' || v.effet === 'sortie') carte[v.effet] = true;
+      else if (v.effet === 'aller') {
+        carte.aller = Number.isInteger(n) && n >= 0 && n < PLATEAU.length ? n : 0;
+        if (v.sansDepart) carte.sansDepart = true;
+      } else if (v.effet === 'recule') carte.recule = Number.isInteger(n) && n >= 1 && n <= 12 ? n : 3;
+      else carte[v.effet] = Number.isInteger(n) && n >= 1 && n <= 5000 ? n : 10;
+      liste.push(carte);
+    }
+    if (liste.length) propres[paquet] = liste;
+  }
+  return propres;
+}
+
+function appliquerCartes(cartes) {
+  for (const paquet of ['surprise', 'mairie']) {
+    const l = cartes && Array.isArray(cartes[paquet]) && cartes[paquet].length ? cartes[paquet] : CARTES_ORIGINE[paquet];
+    CARTES[paquet] = JSON.parse(JSON.stringify(l));
+  }
+}
+
+/**
+ * Remet un paquet de la salle en cohérence avec les cartes actuelles (cartes
+ * ajoutées ou retirées entre-temps) : numéros inconnus retirés, nouvelles
+ * cartes glissées au hasard, cartes « libéré » détenues par un joueur exclues.
+ */
+function reparerPaquet(salle, paquet) {
+  const n = CARTES[paquet].length;
+  let p = (salle.paquets[paquet] || []).filter((k) => Number.isInteger(k) && k >= 0 && k < n);
+  p = p.filter((k, pos) => p.indexOf(k) === pos);
+  const detenues = salle.joueurs.reduce((t, j) => t + j.cartesSortie.filter((x) => x === paquet).length, 0);
+  const sorties = CARTES[paquet].map((c, k) => (c.sortie ? k : -1)).filter((k) => k >= 0);
+  const absentes = sorties.filter((k) => !p.includes(k));
+  const aGarderHors = new Set(absentes.slice(0, detenues));
+  for (let k = 0; k < n; k++) {
+    if (!p.includes(k) && !aGarderHors.has(k)) p.splice(aleatoire(p.length + 1), 0, k);
+  }
+  if (!p.length) p = CARTES[paquet].map((c, k) => k);
+  salle.paquets[paquet] = p;
+}
+
+
 /* ---------------------------------------------------------------- helpers */
 
 class ErreurJeu extends Error {}
@@ -497,12 +564,14 @@ function deplacer(salle, idx, destination, avecDepart) {
 
 function tirerCarte(salle, idx, paquet) {
   const j = salle.joueurs[idx];
+  reparerPaquet(salle, paquet);
   const numero = salle.paquets[paquet].shift();
   const carte = CARTES[paquet][numero];
   if (carte.sortie) j.cartesSortie.push(paquet);
   else salle.paquets[paquet].push(numero);
   salle.derniereCarte = { paquet, texte: carte.texte, joueur: idx };
-  salle.carteEnAttente = { paquet, numero };
+  // La carte est gardée telle quelle : un réglage modifié avant le « OK » ne la change pas.
+  salle.carteEnAttente = { paquet, numero, carte: JSON.parse(JSON.stringify(carte)) };
   salle.etape = 'carte';
   noter(salle, j.nom + ' tire une carte ' + (paquet === 'mairie' ? 'Caisse commune' : 'Surprise') + '.');
 }
@@ -512,7 +581,7 @@ function appliquerCarte(salle) {
   const idx = salle.tour;
   const j = salle.joueurs[idx];
   const { paquet, numero } = salle.carteEnAttente;
-  const carte = CARTES[paquet][numero];
+  const carte = salle.carteEnAttente.carte || CARTES[paquet][numero] || { texte: '…' };
   salle.carteEnAttente = null;
   salle.etape = 'deplacement';
   noter(salle, j.nom + ' : ' + carte.texte);
@@ -2572,11 +2641,20 @@ function clientNoms() {
     statut.className = 'statut';
     return fetch('/api/noms', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(corps) })
       .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.erreur || 'Erreur'); return d; }); })
-      .then(function (d) { remplir(d.plateau); statut.textContent = message; })
+      .then(function (d) {
+        remplir(d.plateau);
+        if (d.cartes) {
+          CARTES_COURANTES = d.cartes;
+          rendreCartes('surprise');
+          rendreCartes('mairie');
+        }
+        statut.textContent = message;
+      })
       .catch(function (err) { statut.textContent = err.message; statut.className = 'statut erreur'; });
   }
 
   app.appendChild(el('h1', '', 'Réglages du plateau'));
+  app.appendChild(el('h2', 'titre-section', '🏠 Rues, gares et services'));
   app.appendChild(el('div', 'sous', 'Nom complet (titres, journal), nom court (plateau, vide = nom complet), prix et loyers. '
     + 'Quartier complet = 2 × le loyer nu. Les prix sont arrondis à 10 €.'));
   var bloc = el('div', 'bloc');
@@ -2619,6 +2697,92 @@ function clientNoms() {
     bloc.appendChild(carte);
   });
   app.appendChild(bloc);
+
+  /* -------- cartes Surprise et Caisse commune -------- */
+  var EFFETS_LIBELLES = [
+    ['gain', 'Gagne (€)'], ['paie', 'Paie à la banque (€)'], ['aller', 'Va à la case'], ['recule', 'Recule de (cases)'],
+    ['prison', 'Va au poste'], ['sortie', 'Libéré sur parole'], ['chacun', 'Paie à chaque joueur (€)'],
+    ['anniversaire', 'Reçoit de chaque joueur (€)']
+  ];
+  var CARTES_COURANTES = { surprise: CARTES_REGLAGE.surprise.slice(), mairie: CARTES_REGLAGE.mairie.slice() };
+  var zonesCartes = {};
+  function rendreCartes(paquet) {
+    var zone = zonesCartes[paquet];
+    zone.innerHTML = '';
+    CARTES_COURANTES[paquet].forEach(function (carte, k) {
+      var b = el('div', 'reglage carte-reglage');
+      var texte = el('textarea');
+      texte.maxLength = TEXTE_CARTE_MAX;
+      texte.rows = 2;
+      texte.value = carte.texte;
+      texte.oninput = function () { carte.texte = texte.value; };
+      b.appendChild(texte);
+      var ligne = el('div', 'effet');
+      var effet = el('select');
+      EFFETS_LIBELLES.forEach(function (e) {
+        var o = el('option', '', e[1]);
+        o.value = e[0];
+        if (e[0] === carte.effet) o.selected = true;
+        effet.appendChild(o);
+      });
+      effet.onchange = function () {
+        carte.effet = effet.value;
+        if (carte.effet === 'recule') carte.valeur = 3;
+        else if (carte.effet === 'aller') carte.valeur = 0;
+        else if (!carte.valeur || carte.valeur < 1) carte.valeur = 50;
+        rendreCartes(paquet);
+      };
+      ligne.appendChild(effet);
+      if (carte.effet === 'aller') {
+        var dest = el('select');
+        PLATEAU.forEach(function (c, i) {
+          var o = el('option', '', i + ' · ' + c.nom);
+          o.value = i;
+          if (i === carte.valeur) o.selected = true;
+          dest.appendChild(o);
+        });
+        dest.onchange = function () { carte.valeur = parseInt(dest.value, 10); };
+        ligne.appendChild(dest);
+        var lab = el('label', 'sans-depart');
+        var coche = el('input');
+        coche.type = 'checkbox';
+        coche.checked = !!carte.sansDepart;
+        coche.onchange = function () { carte.sansDepart = coche.checked; };
+        lab.appendChild(coche);
+        lab.appendChild(document.createTextNode(' sans toucher le Départ'));
+        ligne.appendChild(lab);
+      } else if (carte.effet !== 'prison' && carte.effet !== 'sortie') {
+        var val = el('input');
+        val.type = 'number';
+        val.inputMode = 'numeric';
+        val.min = '1';
+        val.value = carte.valeur;
+        val.oninput = function () { carte.valeur = val.value; };
+        ligne.appendChild(val);
+      }
+      var suppr = el('button', 'mini', 'Supprimer');
+      suppr.disabled = CARTES_COURANTES[paquet].length <= 1;
+      suppr.onclick = function () { CARTES_COURANTES[paquet].splice(k, 1); rendreCartes(paquet); };
+      ligne.appendChild(suppr);
+      b.appendChild(ligne);
+      zone.appendChild(b);
+    });
+    var ajout = el('button', 'second', '+ Ajouter une carte');
+    ajout.disabled = CARTES_COURANTES[paquet].length >= CARTES_MAX;
+    ajout.onclick = function () {
+      CARTES_COURANTES[paquet].push({ texte: 'Nouvelle carte : tu gagnes 50 €.', effet: 'gain', valeur: 50, sansDepart: false });
+      rendreCartes(paquet);
+    };
+    zone.appendChild(ajout);
+  }
+  [['surprise', '❓ Cartes Surprise'], ['mairie', '🧰 Cartes Caisse commune']].forEach(function (x) {
+    app.appendChild(el('h2', 'titre-section', x[1]));
+    var zone = el('div', 'bloc');
+    zonesCartes[x[0]] = zone;
+    app.appendChild(zone);
+    rendreCartes(x[0]);
+  });
+
   var enregistrer = el('button', 'principal', 'Enregistrer');
   enregistrer.onclick = function () {
     var noms = {}, valeurs = {};
@@ -2627,7 +2791,7 @@ function clientNoms() {
       noms[i] = { nom: f.nom.value, court: f.court.value };
       valeurs[i] = { prix: f.prix.value, loyers: f.loyers.map(function (x) { return x.value; }) };
     });
-    envoyer({ noms: noms, valeurs: valeurs }, '✔ Enregistré : s\u2019applique aussitôt à toutes les parties.');
+    envoyer({ noms: noms, valeurs: valeurs, cartes: CARTES_COURANTES }, '✔ Enregistré : s\u2019applique aussitôt à toutes les parties.');
   };
   app.appendChild(enregistrer);
   app.appendChild(statut);
@@ -2637,6 +2801,9 @@ function clientNoms() {
   var r2 = el('button', 'discret', 'Rétablir les prix et loyers d\u2019origine');
   r2.onclick = function () { if (confirm('Remettre tous les prix et loyers d\u2019origine ?')) envoyer({ retablir: 'valeurs' }, '✔ Prix et loyers d\u2019origine rétablis.'); };
   app.appendChild(r2);
+  var r3 = el('button', 'discret', 'Rétablir les cartes d\u2019origine');
+  r3.onclick = function () { if (confirm('Remettre toutes les cartes d\u2019origine ?')) envoyer({ retablir: 'cartes' }, '✔ Cartes d\u2019origine rétablies.'); };
+  app.appendChild(r3);
   var retour = el('a', 'discret', '← Retour au jeu');
   retour.href = '/';
   retour.style.display = 'block';
@@ -2650,8 +2817,18 @@ function pageNomsHtml() {
     + 'var PLATEAU = ' + toScriptJson(PLATEAU) + ';'
     + 'var ORIGINE = ' + toScriptJson(NOMS_ORIGINE) + ';'
     + 'var GROUPES = ' + toScriptJson(GROUPES) + ';'
-    + 'var NOM_MAX = ' + NOM_MAX + ', COURT_MAX = ' + COURT_MAX + ';';
+    + 'var NOM_MAX = ' + NOM_MAX + ', COURT_MAX = ' + COURT_MAX + ';'
+    + 'var CARTES_REGLAGE = ' + toScriptJson({ surprise: CARTES.surprise.map(versReglage), mairie: CARTES.mairie.map(versReglage) }) + ';'
+    + 'var CARTES_MAX = ' + CARTES_MAX + ', TEXTE_CARTE_MAX = ' + TEXTE_CARTE_MAX + ';';
   const css = CSS + `
+  .titre-section{font-size:1.1rem; margin:18px 4px 6px;}
+  .carte-reglage textarea{width:100%; border-radius:10px; border:1px solid #ccc; padding:8px; font-size:0.9rem;
+    font-family:inherit; color:var(--ink); resize:vertical;}
+  .effet{display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:6px;}
+  .effet select{width:auto; flex:1 1 150px; padding:7px; font-size:0.85rem; text-align:left;}
+  .effet input[type=number]{width:90px; flex:none; padding:7px;}
+  .sans-depart{display:flex; align-items:center; gap:4px; margin:0; font-size:0.8rem;}
+  .sans-depart input{width:18px; height:18px; margin:0;}
   .reglage{padding:8px 0 10px; border-bottom:1px solid rgba(255,255,255,0.08);}
   .ligne-nom{display:grid; grid-template-columns:14px 1fr 34%; gap:6px; align-items:center; margin:4px 0;}
   .ligne-nom input{text-align:left; padding:8px; font-size:0.9rem;}
@@ -2709,17 +2886,27 @@ export default {
     const api = chemin.startsWith('/api/');
     try {
       await preparerTables(env);
-      const [nomsEnregistres, valeursEnregistrees] = await Promise.all([lireNoms(env), lireNoms(env, 'valeurs')]);
+      const [nomsEnregistres, valeursEnregistrees, cartesEnregistrees] = await Promise.all([
+        lireNoms(env), lireNoms(env, 'valeurs'), lireNoms(env, 'cartes'),
+      ]);
       appliquerNoms(nomsEnregistres, valeursEnregistrees);
+      appliquerCartes(cartesEnregistrees);
 
       if (chemin === '/api/noms' && request.method === 'POST') {
         const corps = await corpsJson(request);
         const noms = corps.retablir === true || corps.retablir === 'noms' ? {} : (corps.noms ? nomsValides(corps.noms) : nomsEnregistres);
         const valeurs = corps.retablir === true || corps.retablir === 'valeurs' ? {}
           : (corps.valeurs ? valeursValides(corps.valeurs) : valeursEnregistrees);
-        await Promise.all([ecrireNoms(env, noms), ecrireNoms(env, valeurs, 'valeurs')]);
+        const cartes = corps.retablir === true || corps.retablir === 'cartes' ? {}
+          : (corps.cartes ? cartesValides(corps.cartes) : cartesEnregistrees);
+        await Promise.all([ecrireNoms(env, noms), ecrireNoms(env, valeurs, 'valeurs'), ecrireNoms(env, cartes, 'cartes')]);
         appliquerNoms(noms, valeurs);
-        return json({ ok: true, plateau: PLATEAU.map((c) => ({ nom: c.nom, court: c.court, prix: c.prix, loyers: c.loyers })) });
+        appliquerCartes(cartes);
+        return json({
+          ok: true,
+          plateau: PLATEAU.map((c) => ({ nom: c.nom, court: c.court, prix: c.prix, loyers: c.loyers })),
+          cartes: { surprise: CARTES.surprise.map(versReglage), mairie: CARTES.mairie.map(versReglage) },
+        });
       }
       if (chemin === '/noms' || chemin === '/reglages') {
         return new Response(pageNomsHtml(), {
