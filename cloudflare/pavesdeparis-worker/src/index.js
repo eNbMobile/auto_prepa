@@ -347,6 +347,7 @@ function faillite(salle, idx) {
   j.argent = 0;
   j.dus = [];
   j.faillite = true;
+  if (salle.echange && (salle.echange.de === idx || salle.echange.a === idx)) salle.echange = null;
   j.enPrison = false;
   salle.proprio.forEach((p, i) => {
     if (p !== idx) return;
@@ -740,6 +741,100 @@ function actionGestion(salle, moi, action, pos) {
   }
 }
 
+/* ---------------------------------------------------------------- échanges */
+
+/**
+ * Un échange : `de` propose à `a` de lui donner des biens (`donne`) et de
+ * l'argent (`argentDonne`) contre ses biens (`recoit`) et de l'argent
+ * (`argentRecu`). Une seule proposition à la fois dans la salle ; tout est
+ * revérifié au moment de l'acceptation.
+ */
+function lireEchange(salle, de, brut) {
+  const v = brut && typeof brut === 'object' ? brut : {};
+  const liste = (x) => (Array.isArray(x) ? [...new Set(x.map((n) => parseInt(n, 10)))] : []);
+  const somme = (x) => Math.max(0, Math.min(MISE_MAX * 4, parseInt(x, 10) || 0));
+  return {
+    de,
+    a: parseInt(v.a, 10),
+    donne: liste(v.donne),
+    recoit: liste(v.recoit),
+    argentDonne: somme(v.argentDonne),
+    argentRecu: somme(v.argentRecu),
+    depuis: Date.now(),
+  };
+}
+
+function validerEchange(salle, e) {
+  const J = salle.joueurs;
+  if (!J[e.a] || e.a === e.de) refuser('Choisis avec qui échanger.');
+  if (J[e.de].faillite || J[e.a].faillite) refuser('Ce joueur n\'est plus dans la partie.');
+  if (!e.donne.length && !e.recoit.length && !e.argentDonne && !e.argentRecu) refuser('L\'échange est vide.');
+  if (e.argentDonne && e.argentRecu) refuser('L\'argent ne va que dans un sens.');
+  const verifier = (cases, proprio) => cases.forEach((i) => {
+    const c = PLATEAU[i];
+    if (!c || !c.prix || salle.proprio[i] !== proprio) refuser('Un des biens a changé de main.');
+    if (c.t === 'rue' && ruesDuQuartier(c.g).some((k) => salle.maisons[k] > 0)) {
+      refuser('Il faut d\'abord revendre les maisons du quartier de ' + c.nom + '.');
+    }
+  });
+  verifier(e.donne, e.de);
+  verifier(e.recoit, e.a);
+  if (e.argentDonne > J[e.de].argent) refuser(J[e.de].nom + ' n\'a pas ' + e.argentDonne + ' €.');
+  if (e.argentRecu > J[e.a].argent) refuser(J[e.a].nom + ' n\'a pas ' + e.argentRecu + ' €.');
+}
+
+function texteEchange(salle, e) {
+  const noms = (cases) => cases.map((i) => PLATEAU[i].nom);
+  const part = (cases, argent) => [...noms(cases), ...(argent ? [argent + ' €'] : [])].join(', ') || 'rien';
+  return salle.joueurs[e.de].nom + ' donne ' + part(e.donne, e.argentDonne)
+    + ' contre ' + part(e.recoit, e.argentRecu) + ' de ' + salle.joueurs[e.a].nom;
+}
+
+function realiserEchange(salle, e) {
+  const J = salle.joueurs;
+  e.donne.forEach((i) => { salle.proprio[i] = e.a; });
+  e.recoit.forEach((i) => { salle.proprio[i] = e.de; });
+  J[e.de].argent += e.argentRecu - e.argentDonne;
+  J[e.a].argent += e.argentDonne - e.argentRecu;
+  noter(salle, 'Échange conclu : ' + texteEchange(salle, e) + '.');
+}
+
+function actionEchange(salle, moi, action, valeur) {
+  if (salle.etape === 'enchere') refuser('Attends la fin de l\'enchère.');
+  const e = salle.echange;
+  if (action === 'proposerEchange') {
+    if (e) refuser('Un échange est déjà en cours de discussion.');
+    const nouveau = lireEchange(salle, moi, valeur);
+    validerEchange(salle, nouveau);
+    salle.echange = nouveau;
+    noter(salle, 'Proposition : ' + texteEchange(salle, nouveau) + '.');
+    return;
+  }
+  if (!e) refuser('Aucun échange en cours.');
+  if (action === 'annulerEchange') {
+    if (moi !== e.de) refuser('Seul celui qui propose peut annuler.');
+    salle.echange = null;
+    noter(salle, salle.joueurs[moi].nom + ' retire sa proposition d\'échange.');
+    return;
+  }
+  if (moi !== e.a) refuser('Cette proposition ne t\'est pas adressée.');
+  salle.echange = null;
+  if (action === 'refuserEchange') {
+    noter(salle, salle.joueurs[moi].nom + ' refuse l\'échange.');
+    return;
+  }
+  try {
+    validerEchange(salle, e);
+  } catch (err) {
+    noter(salle, 'Échange impossible : ' + err.message);
+    return;
+  }
+  realiserEchange(salle, e);
+  verifierDettes(salle);
+}
+
+const ECHANGE = ['proposerEchange', 'annulerEchange', 'accepterEchange', 'refuserEchange'];
+
 const GESTION = ['construire', 'demolir', 'hypothequer', 'lever'];
 const ENCHERE = ['miser', 'passerEnchere', 'clore'];
 
@@ -817,6 +912,11 @@ function appliquerAction(salle, jeton, action, valeur) {
     if (salle.etape === 'dette' && salle.joueurs[moi].argent >= 0) refuser('Attends que les dettes soient réglées.');
     actionGestion(salle, moi, action, parseInt(valeur, 10));
     verifierDettes(salle);
+    return;
+  }
+  if (ECHANGE.includes(action)) {
+    actionEchange(salle, moi, action, valeur);
+    salle.dernierCoup = Date.now();
     return;
   }
   if (action === 'robotDette') {
@@ -919,8 +1019,38 @@ function robotEstDu(salle) {
 }
 
 /** Coup qu'un robot doit jouer maintenant, ou null si c'est à un humain. */
+/** Valeur d'un lot de biens pour `idx` une fois l'échange fait (quartier complété = bonus). */
+function valeurLot(salle, idx, cases, proprioApres) {
+  let total = 0;
+  for (const i of cases) {
+    const c = PLATEAU[i];
+    total += salle.hypo[i] ? c.prix / 2 : c.prix;
+    if (c.t === 'rue') {
+      const complet = ruesDuQuartier(c.g).every((k) => proprioApres(k) === idx);
+      if (complet) total += c.prix;
+    }
+  }
+  return total;
+}
+
+function robotAccepteEchange(salle, e) {
+  const apres = (k) => (e.donne.includes(k) ? e.a : e.recoit.includes(k) ? e.de : salle.proprio[k]);
+  const gagne = valeurLot(salle, e.a, e.donne, apres) + e.argentDonne;
+  // Ce que le robot cède vaut aussi ce que l'autre y gagne (quartier complété en face).
+  const cede = valeurLot(salle, e.de, e.recoit, apres) + e.argentRecu;
+  return gagne >= cede * 1.15 && salle.joueurs[e.a].argent - e.argentRecu >= 50;
+}
+
 function choisirCoupRobot(salle) {
   const J = salle.joueurs;
+  if (salle.echange && J[salle.echange.a] && J[salle.echange.a].robot && salle.etape !== 'enchere') {
+    const e = salle.echange;
+    return { jeton: J[e.a].jeton, action: robotAccepteEchange(salle, e) ? 'accepterEchange' : 'refuserEchange' };
+  }
+  // Un robot retire sa proposition restée sans réponse une minute.
+  if (salle.echange && J[salle.echange.de].robot && Date.now() - salle.echange.depuis > 60000 && salle.etape !== 'enchere') {
+    return { jeton: J[salle.echange.de].jeton, action: 'annulerEchange' };
+  }
   if (salle.etape === 'enchere' && salle.enchere) {
     const e = salle.enchere;
     const r = enLice(salle).find((i) => J[i].robot);
@@ -943,7 +1073,23 @@ function choisirCoupRobot(salle) {
   if (salle.etape === 'carte') return coup('okCarte');
   if (salle.etape === 'prison') return coup(t.cartesSortie.length ? 'carte' : (t.argent >= 400 ? 'caution' : 'lancer'));
   if (salle.etape !== 'lancer') return null;
-  // Avant de lancer : construire s'il a un quartier et de la marge, ou lever une hypothèque.
+  // Avant de lancer : proposer d'acheter la rue qui lui manque pour compléter un quartier…
+  if (!salle.echange) {
+    for (let g = 0; g < GROUPES.length; g++) {
+      const rues = ruesDuQuartier(g);
+      const manque = rues.filter((k) => salle.proprio[k] !== salle.tour);
+      if (manque.length !== 1 || manque.length === rues.length) continue;
+      const k = manque[0];
+      const autre = salle.proprio[k];
+      if (autre === null || J[autre].faillite || rues.some((x) => salle.maisons[x] > 0)) continue;
+      const essai = (salle.essaisEchange || {})[salle.tour + '-' + k];
+      if (essai !== undefined && salle.tourNo - essai < 5) continue;
+      const offre = Math.ceil((PLATEAU[k].prix * 2.4) / 10) * 10;
+      if (t.argent - offre < 150) continue;
+      return Object.assign(coup('proposerEchange', { a: autre, recoit: [k], argentDonne: offre }), { essai: salle.tour + '-' + k });
+    }
+  }
+  // … puis construire s'il a un quartier et de la marge, ou lever une hypothèque.
   const mien = proprietesDe(salle, salle.tour);
   for (const i of mien) {
     const c = PLATEAU[i];
@@ -977,6 +1123,10 @@ async function faireJouerRobot(env, code, courant) {
     const repli = { achat: 'passer', carte: 'okCarte', enchere: 'passerEnchere' }[salle.etape] || 'lancer';
     try { appliquerAction(salle, coup.jeton, repli); } catch (err2) { return courant; }
   }
+  if (coup.essai) {
+    salle.essaisEchange = salle.essaisEchange || {};
+    salle.essaisEchange[coup.essai] = salle.tourNo;
+  }
   salle.horodatage = Date.now();
   const version = courant.version + 1;
   const res = await bdd(env)
@@ -1005,6 +1155,7 @@ function vuePour(salle, version, jeton) {
     maisons: salle.maisons,
     hypo: salle.hypo,
     loyers: PLATEAU.map((c, i) => (c.prix && salle.proprio[i] !== null && c.t !== 'service' ? loyerDe(salle, i) : null)),
+    echange: salle.echange || null,
     enchere: salle.enchere ? {
       case: salle.enchere.case, prix: salle.enchere.prix, meneur: salle.enchere.meneur,
       passe: salle.enchere.passe, depuis: salle.enchere.depuis,
@@ -1130,10 +1281,10 @@ const CSS = `
   .liste-j li{display:flex; align-items:center; gap:8px; padding:6px 0;}
   .pastille{width:14px; height:14px; border-radius:50%; display:inline-block; flex:none; border:2px solid #fff;}
 
-  .plateau{ display:grid; grid-template-columns:1.9fr repeat(9, 1fr) 1.9fr;
-    grid-template-rows:1.9fr repeat(9, 1fr) 1.9fr; gap:1px; background:#3D5A40;
+  .plateau{ display:grid; grid-template-columns:minmax(0, 1.9fr) repeat(9, minmax(0, 1fr)) minmax(0, 1.9fr);
+    grid-template-rows:minmax(0, 1.9fr) repeat(9, minmax(0, 1fr)) minmax(0, 1.9fr); gap:1px; background:#3D5A40;
     border:2px solid #3D5A40; border-radius:6px; aspect-ratio:1/1; width:100%; color:var(--ink); }
-  .case{ background:var(--plateau); position:relative; overflow:hidden; display:flex;
+  .case{ background:var(--plateau); position:relative; overflow:hidden; display:flex; min-width:0; min-height:0;
     align-items:stretch; cursor:pointer; line-height:1.05; text-align:center; }
   .case.bas{flex-direction:column;} .case.haut{flex-direction:column-reverse;}
   .case.gauche{flex-direction:row-reverse;} .case.droite{flex-direction:row;}
@@ -1146,7 +1297,7 @@ const CSS = `
   .case .ico{font-size:clamp(8px, 2.4vw, 14px); line-height:1;}
   .case .prix{font-size:clamp(7.5px, 2.25vw, 12px); font-weight:800; color:#1B2A41; margin-top:1px;}
   .case.coin .texte{font-weight:700;} .case.coin .nom{font-size:clamp(6.5px, 1.8vw, 11px);}
-  .case .hypo{font-size:clamp(5px, 1.4vw, 8px); font-weight:800; color:#B00020;}
+  .case .hypo{font-size:clamp(4.5px, 1.25vw, 8px); font-weight:800; color:#B00020; max-width:100%; overflow:hidden;}
   .maison{width:clamp(4px, 1.3vw, 7px); height:clamp(4px, 1.3vw, 7px); background:#1FA84A;
     border:1px solid #0B5E25; border-radius:1px;}
   .hotel{width:clamp(9px, 2.8vw, 15px); height:clamp(5px, 1.5vw, 8px); background:#D62828;
@@ -1157,6 +1308,12 @@ const CSS = `
   .gestion button{flex:1 1 45%; background:rgba(255,255,255,0.15); color:var(--panel); padding:8px;}
   .gestion button.btn-or{background:var(--or); color:var(--ink);}
   .titre-mini.hypo{opacity:0.35;}
+  .echange{border:2px solid var(--or); margin-top:10px;}
+  .echange h3{font-size:0.85rem; margin:10px 0 4px; color:var(--or);}
+  .echange .colonnes{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+  .echange .bien{display:flex; align-items:center; gap:4px; font-size:0.82rem; padding:3px 0;}
+  .echange .bien input{width:18px; height:18px; flex:none; margin:0;}
+  .echange select{margin-bottom:4px;}
   .case-robot{display:flex; align-items:center; gap:4px; margin:6px 0 0; font-size:0.8rem; color:var(--muted); cursor:pointer;}
   .case-robot input{width:18px; height:18px; margin:0; flex:none;}
   button.mini{margin-left:auto; padding:3px 8px; font-size:0.75rem; background:rgba(255,255,255,0.15); color:var(--panel);}
@@ -1310,6 +1467,9 @@ function client() {
   /* Animation : le serveur résout le coup d'un bloc et en décrit les étapes
      (dés, déplacements, messages) ; chaque téléphone les rejoue au rythme
      d'un vrai plateau avant d'afficher l'état final. */
+  var BROUILLON = null;
+  var EDITION = false;
+  var RENDU_DIFFERE = false;
   var AFF = null;
   var ANIM = null;
   var ANIM_VUE = null;
@@ -1610,7 +1770,7 @@ function client() {
       var lettres = c.court.length;
       texte.appendChild(el('div', 'nom' + (lettres >= 10 ? ' tres-long' : lettres >= 8 ? ' long' : ''), c.court));
       if (c.prix) texte.appendChild(el('div', 'prix', c.prix + ' €'));
-      if (p !== null && ETAT.hypo[i]) texte.appendChild(el('div', 'hypo', 'HYPOTHÉQUÉ'));
+      if (p !== null && ETAT.hypo[i]) texte.appendChild(el('div', 'hypo', 'HYPO'));
       d.appendChild(texte);
       if (p !== null) {
         d.style.boxShadow = 'inset 0 0 0 2px ' + ETAT.joueurs[p].couleur;
@@ -1915,6 +2075,123 @@ function client() {
     return g;
   }
 
+  /* --------------------------------------------------------------- échanges */
+
+  function biensDe(k) {
+    return ETAT.proprio.map(function (p, i) { return p === k ? i : -1; }).filter(function (i) { return i >= 0; });
+  }
+  function quartierBati(i) {
+    var c = PLATEAU[i];
+    return c.t === 'rue' && PLATEAU.some(function (x, k) { return x.t === 'rue' && x.g === c.g && ETAT.maisons[k] > 0; });
+  }
+  function pastilleBien(i) {
+    var c = PLATEAU[i];
+    var m = el('span', 'titre-mini');
+    m.style.background = c.t === 'rue' ? GROUPES[c.g] : (c.t === 'gare' ? '#222' : '#999');
+    m.style.display = 'inline-block';
+    m.style.verticalAlign = 'middle';
+    m.style.marginRight = '6px';
+    return m;
+  }
+
+  function colonneEchange(titre, k, cle, cleArgent) {
+    var col = el('div', 'colonne');
+    col.appendChild(el('h3', '', titre));
+    var biens = biensDe(k);
+    if (!biens.length) col.appendChild(el('div', 'sous', 'Aucun bien.'));
+    biens.forEach(function (i) {
+      var lab = el('label', 'bien');
+      var coche = el('input');
+      coche.type = 'checkbox';
+      coche.checked = BROUILLON[cle].indexOf(i) !== -1;
+      coche.disabled = quartierBati(i);
+      coche.onchange = function () {
+        var l = BROUILLON[cle];
+        if (coche.checked) l.push(i); else l.splice(l.indexOf(i), 1);
+      };
+      lab.appendChild(coche);
+      lab.appendChild(pastilleBien(i));
+      lab.appendChild(document.createTextNode(PLATEAU[i].nom + (ETAT.hypo[i] ? ' (hypo)' : '')
+        + (quartierBati(i) ? ' — maisons à revendre' : '')));
+      col.appendChild(lab);
+    });
+    var argent = el('input');
+    argent.type = 'number';
+    argent.min = '0';
+    argent.step = '10';
+    argent.inputMode = 'numeric';
+    argent.placeholder = '0 €';
+    argent.value = BROUILLON[cleArgent];
+    argent.oninput = function () { BROUILLON[cleArgent] = argent.value; };
+    argent.onfocus = function () { EDITION = true; };
+    argent.onblur = function () { EDITION = false; if (RENDU_DIFFERE) rendre(); };
+    var l = el('label', '', 'Argent (max ' + euros(Math.max(0, ETAT.joueurs[k].argent)) + ')');
+    col.appendChild(l);
+    col.appendChild(argent);
+    return col;
+  }
+
+  function rendreEditeur() {
+    var b = el('div', 'bloc echange');
+    b.appendChild(el('h2', '', '🤝 Proposer un échange'));
+    var autres = ETAT.joueurs.map(function (j, k) { return k; })
+      .filter(function (k) { return k !== ETAT.moi && !ETAT.joueurs[k].faillite; });
+    if (autres.indexOf(BROUILLON.a) === -1) { BROUILLON.a = autres[0]; BROUILLON.recoit = []; }
+    var choix = el('select');
+    autres.forEach(function (k) {
+      var o = el('option', '', (ETAT.joueurs[k].robot ? '🤖 ' : '') + ETAT.joueurs[k].nom);
+      o.value = k;
+      if (k === BROUILLON.a) o.selected = true;
+      choix.appendChild(o);
+    });
+    choix.onchange = function () { BROUILLON.a = parseInt(choix.value, 10); BROUILLON.recoit = []; BROUILLON.argentRecu = ''; rendre(); };
+    b.appendChild(el('label', '', 'Avec qui ?'));
+    b.appendChild(choix);
+    var grille = el('div', 'colonnes');
+    grille.appendChild(colonneEchange('Je donne', ETAT.moi, 'donne', 'argentDonne'));
+    grille.appendChild(colonneEchange('Je reçois de ' + ETAT.joueurs[BROUILLON.a].nom, BROUILLON.a, 'recoit', 'argentRecu'));
+    b.appendChild(grille);
+    b.appendChild(el('div', 'sous', 'Les biens d\u2019un quartier bâti ne s\u2019échangent pas : revends d\u2019abord ses maisons. '
+      + 'Un bien hypothéqué reste hypothéqué.'));
+    b.appendChild(bouton('Envoyer la proposition', 'principal', function () {
+      agir('proposerEchange', {
+        a: BROUILLON.a, donne: BROUILLON.donne, recoit: BROUILLON.recoit,
+        argentDonne: BROUILLON.argentDonne, argentRecu: BROUILLON.argentRecu
+      }).then(function () { if (ETAT.echange) { BROUILLON = null; rendre(); } });
+    }));
+    b.appendChild(bouton('Annuler', 'discret', function () { BROUILLON = null; rendre(); }));
+    return b;
+  }
+
+  function rendreEchangeEnCours() {
+    var e = ETAT.echange;
+    var J = ETAT.joueurs;
+    var b = el('div', 'bloc echange en-cours');
+    b.appendChild(el('h2', '', '🤝 Échange proposé'));
+    function lot(titre, cases, argent) {
+      b.appendChild(el('h3', '', titre));
+      if (!cases.length && !argent) b.appendChild(el('div', 'sous', 'rien'));
+      cases.forEach(function (i) {
+        var l = el('div', 'bien');
+        l.appendChild(pastilleBien(i));
+        l.appendChild(document.createTextNode(PLATEAU[i].nom + (ETAT.hypo[i] ? ' (hypo)' : '') + ' — ' + euros(PLATEAU[i].prix)));
+        b.appendChild(l);
+      });
+      if (argent) b.appendChild(el('div', 'bien', '💶 ' + euros(argent)));
+    }
+    lot(J[e.de].nom + ' donne :', e.donne, e.argentDonne);
+    lot(J[e.a].nom + ' donne :', e.recoit, e.argentRecu);
+    var moi = ETAT.moi !== null ? J[ETAT.moi] : null;
+    if (ETAT.moi === e.a && moi && !moi.robot) {
+      b.appendChild(bouton('Accepter', 'principal', function () { agir('accepterEchange'); }));
+      b.appendChild(bouton('Refuser', 'second', function () { agir('refuserEchange'); }));
+    } else {
+      b.appendChild(el('div', 'sous', 'En attente de la réponse de ' + (J[e.a].robot ? '🤖 ' : '') + J[e.a].nom + '…'));
+      if (ETAT.moi === e.de) b.appendChild(bouton('Retirer ma proposition', 'discret', function () { agir('annulerEchange'); }));
+    }
+    return b;
+  }
+
   function rendreJoueurs() {
     var z = el('div', 'joueurs');
     ETAT.joueurs.forEach(function (j, i) {
@@ -1979,6 +2256,19 @@ function client() {
       app.appendChild(rendreDette());
     }
     if (ETAT.phase === 'fin') app.appendChild(rendreClassement());
+    if (ETAT.phase === 'jeu') {
+      var moiJ = ETAT.moi !== null ? ETAT.joueurs[ETAT.moi] : null;
+      var peutEchanger = moiJ && !moiJ.faillite && !moiJ.robot && ETAT.etape !== 'enchere'
+        && ETAT.joueurs.some(function (j, k) { return k !== ETAT.moi && !j.faillite; });
+      if (ETAT.echange) { BROUILLON = null; app.appendChild(rendreEchangeEnCours()); }
+      else if (BROUILLON && peutEchanger) app.appendChild(rendreEditeur());
+      else if (peutEchanger) {
+        app.appendChild(bouton('🤝 Proposer un échange', 'second', function () {
+          BROUILLON = { a: null, donne: [], recoit: [], argentDonne: '', argentRecu: '' };
+          rendre();
+        }));
+      }
+    }
     if (CHOISIE !== null) app.appendChild(rendreDetail());
     app.appendChild(rendreJoueurs());
     var jb = el('div', 'bloc');
@@ -1998,6 +2288,9 @@ function client() {
   }
 
   function rendre() {
+    // Ne pas effacer un montant en cours de saisie dans l'éditeur d'échange.
+    if (EDITION) { RENDU_DIFFERE = true; return; }
+    RENDU_DIFFERE = false;
     app.innerHTML = '';
     if (!ETAT) rendreAccueil();
     else if (ETAT.phase === 'attente') rendreAttente();
