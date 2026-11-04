@@ -1314,13 +1314,15 @@ const CSS = `
     border:2px solid #3D5A40; border-radius:6px; aspect-ratio:1/1; width:100%; color:var(--ink); }
   .case{ background:var(--plateau); position:relative; overflow:hidden; display:flex; min-width:0; min-height:0;
     align-items:stretch; cursor:pointer; line-height:1.05; text-align:center; }
-  .case.bas{flex-direction:column;} .case.haut{flex-direction:column-reverse;}
-  .case.gauche{flex-direction:row-reverse;} .case.droite{flex-direction:row;}
+  /* Comme une carte de propriété : bande de couleur en haut, nom juste dessous, prix en bas. */
+  .case.bas, .case.haut, .case.gauche, .case.droite{flex-direction:column;}
   .case .bande{flex:none; display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:1px;}
-  .case.bas .bande, .case.haut .bande{height:30%; width:100%;}
-  .case.gauche .bande, .case.droite .bande{width:30%; height:100%; flex-direction:column;}
-  .case .texte{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
-    padding:1px; min-width:0; min-height:0;}
+  .case.bas .bande, .case.haut .bande{height:28%; width:100%;}
+  .case.gauche .bande, .case.droite .bande{height:30%; width:100%;}
+  .case .texte{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:space-between;
+    padding:1px 1px 2px; min-width:0; min-height:0;}
+  .case.coin .texte{justify-content:center;}
+  .case > .texte:first-child{padding-top:3px;}
   .case .nom{font-size:clamp(5.5px, 1.55cqw, 20.7px); word-break:break-word; hyphens:auto;}
   .case .ico{font-size:clamp(8px, 2.4cqw, 32.2px); line-height:1;}
   .case .prix{font-size:clamp(7.5px, 2.25cqw, 27.6px); font-weight:800; color:#1B2A41; margin-top:1px;}
@@ -1352,7 +1354,7 @@ const CSS = `
   .case.choisie{outline:2px solid #000; outline-offset:-2px; z-index:2;}
   .case .pions{position:absolute; display:flex; flex-wrap:wrap; align-items:center; align-content:center;
     justify-content:center; gap:1px; pointer-events:none;}
-  .case.bas .pions{left:0; right:0; bottom:1px;} .case.haut .pions{left:0; right:0; top:1px;}
+  .case.bas .pions, .case.haut .pions{left:0; right:0; bottom:1px;}
   .case.gauche .pions{top:0; bottom:0; left:1px; flex-direction:column;}
   .case.droite .pions{top:0; bottom:0; right:1px; flex-direction:column;}
   .case.bas .pion + .pion, .case.haut .pion + .pion{margin-left:-7px;}
@@ -1735,7 +1737,7 @@ function client() {
     return [1 + (i - 30), 11];
   }
   function icone(c) {
-    return { depart: '➜', poste: '🚓', pause: '☕', police: '👮', carte: c.p === 'mairie' ? '' : '❓',
+    return { depart: '⬅', poste: '🚓', pause: '☕', police: '👮', carte: c.p === 'mairie' ? '' : '❓',
       gare: '🚆', service: c.court === 'Gaz' ? '🔥' : '📶', taxe: '💶' }[c.t] || '';
   }
   function loyerAffiche(i) {
@@ -1794,10 +1796,14 @@ function client() {
         d.appendChild(bande);
       }
       var texte = el('div', 'texte');
-      if (c.t === 'carte' && c.p === 'mairie') texte.appendChild(logoCaisse('ico'));
-      else if (c.t !== 'rue') texte.appendChild(el('div', 'ico', icone(c)));
       var lettres = c.court.length;
-      texte.appendChild(el('div', 'nom' + (lettres >= 10 ? ' tres-long' : lettres >= 8 ? ' long' : ''), c.court));
+      var nom = el('div', 'nom' + (lettres >= 10 ? ' tres-long' : lettres >= 8 ? ' long' : ''), c.court);
+      var ico = null;
+      if (c.t === 'carte' && c.p === 'mairie') ico = logoCaisse('ico');
+      else if (c.t !== 'rue') ico = el('div', 'ico', icone(c));
+      // Coins : icône puis nom, centrés. Autres cases : nom en haut, icône au milieu, prix en bas.
+      if (i % 10 === 0) { if (ico) texte.appendChild(ico); texte.appendChild(nom); }
+      else { texte.appendChild(nom); if (ico) texte.appendChild(ico); }
       if (c.prix) texte.appendChild(el('div', 'prix', c.prix + ' €'));
       else if (c.t === 'taxe') texte.appendChild(el('div', 'prix taxe', c.montant + ' €'));
       if (p !== null && ETAT.hypo[i]) texte.appendChild(el('div', 'hypo', 'HYPO'));
