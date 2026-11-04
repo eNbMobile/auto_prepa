@@ -1,0 +1,10 @@
+name = "pavesdeparis"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+# Même base D1 que skyjoenligne : table paves_salles (créée au besoin) et
+# liste partagée des joueurs enregistrés.
+[[d1_databases]]
+binding = "DB"
+database_name = "skyjoenligne"
+database_id = "c7f4673d-ecf1-4b71-a1b4-de3bf7b3c672"
