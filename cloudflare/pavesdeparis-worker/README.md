@@ -14,10 +14,13 @@ URL une fois déployé : `https://pavesdeparis.coopu.workers.dev`
 2. Les autres rejoignent avec le code (2 à 6 joueurs) ; l'hôte lance la partie,
    l'ordre de jeu est tiré au sort. Chacun part avec 1 500 €.
 3. À son tour : lancer les dés et avancer. Passer par le Départ rapporte 200 €.
-   - Rue, gare ou service libre : l'acheter ou la laisser à la banque.
+   - Rue, gare ou service libre : l'acheter, ou le refuser : il part alors aux
+     enchères (aussi quand le joueur n'a pas de quoi l'acheter).
    - Bien d'un autre joueur : le loyer est payé automatiquement. Loyer d'une
-     rue doublé si le propriétaire a tout le quartier (même couleur) ; gares
+     rue doublé si le propriétaire a tout le quartier (même couleur), puis
+     ×5, ×15, ×40, ×55 avec 1 à 4 maisons et ×70 avec un hôtel ; gares
      25/50/100/200 € selon le nombre possédé ; services 4× ou 10× les dés.
+     Un bien hypothéqué ne rapporte rien.
    - Taxe foncière (200 €), amende de stationnement (100 €).
    - Cartes Surprise et Mairie (gains, frais, déplacements, poste de police,
      carte « Libéré sur parole »).
@@ -25,18 +28,27 @@ URL une fois déployé : `https://pavesdeparis.coopu.workers.dev`
 4. Au poste de police : tenter un double (3 essais, puis 50 € de caution
    obligatoire), payer 50 € tout de suite, ou utiliser une carte « Libéré sur
    parole ».
-5. Un joueur qui ne peut pas payer revend automatiquement ses biens à la
-   banque (moitié du prix, les moins chers d'abord) ; s'il reste à court, il
-   fait faillite et ses biens redeviennent libres.
-6. La partie s'arrête quand il ne reste qu'un joueur, ou à la fin du nombre de
-   tours choisi : la plus grosse fortune (argent + prix des biens) gagne.
+5. **Constructions et hypothèques** (à tout moment, sauf pendant une enchère,
+   en touchant un de ses biens) :
+   - avec tout un quartier non hypothéqué, construire des maisons puis un
+     hôtel (5e construction), de façon équilibrée entre les rues ; coût de
+     50 € (marron, bleu ciel) à 200 € (vert, bleu foncé), revente moitié prix ;
+   - hypothéquer un bien sans construction dans son quartier (+ moitié du
+     prix) ; lever l'hypothèque coûte la moitié du prix + 10 %.
+6. **Enchères** : chacun mise +10/+50/+100 € ou passe ; dès qu'il ne reste
+   qu'un enchérisseur, il emporte le bien. Après 20 s sans nouvelle offre,
+   n'importe qui peut clore l'enchère. Sans offre, le bien reste à la banque.
+7. Un joueur qui ne peut pas payer revend automatiquement ses constructions
+   puis hypothèque ses biens ; s'il reste à court, il fait faillite et ses
+   biens redeviennent libres.
+8. La partie s'arrête quand il ne reste qu'un joueur, ou à la fin du nombre de
+   tours choisi : la plus grosse fortune (argent + biens + constructions, un bien hypothéqué comptant pour moitié) gagne.
 
 Si un joueur ne joue plus depuis 60 s, les autres voient « Jouer à sa place »
 (lancer de dés, ou refus d'achat). « Abandonner la partie » le met en faillite.
 On reprend sa place en rouvrant le lien sur le même téléphone.
 
-Pas encore inclus (version suivante) : maisons/hôtels, hypothèques, enchères,
-échanges entre joueurs.
+Pas encore inclus (version suivante) : échanges entre joueurs.
 
 ## Technique
 
