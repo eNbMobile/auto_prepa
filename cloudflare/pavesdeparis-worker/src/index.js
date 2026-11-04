@@ -23,6 +23,12 @@ const SALLE_TTL_H = 72;
 const TOURS_CHOIX = [0, 15, 25, 40];
 const TOURS_DEFAUT = 25;
 const CASE_POSTE = 10;
+const DELAI_ENCHERE_S = 20;
+const MISE_MAX = 5000;
+// Loyer d'une rue selon ses constructions (0 à 4 maisons, 5 = hôtel), en multiples du loyer de base.
+const MULT_MAISONS = [1, 5, 15, 40, 55, 70];
+// Coût d'une maison (ou de l'hôtel) par quartier.
+const COUT_MAISON = [50, 50, 100, 100, 150, 150, 200, 200];
 
 const COULEURS = ['#E63946', '#2A9D8F', '#F4A261', '#7B8FD6', '#B5179E', '#90BE6D'];
 const GROUPES = ['#8B5E3C', '#7EC8E3', '#D16BA5', '#F28C28', '#E03B3B', '#F2C14E', '#2E9E5B', '#2B4C9B'];
@@ -74,7 +80,11 @@ const PLATEAU = [
 
 // Loyer de base d'une rue : un huitième du prix, arrondi au pair supérieur.
 for (const c of PLATEAU) {
-  if (c.t === 'rue') c.loyer = Math.ceil(c.prix / 16) * 2;
+  if (c.t === 'rue') {
+    c.loyer = Math.ceil(c.prix / 16) * 2;
+    c.maison = COUT_MAISON[c.g];
+  }
+  if (c.prix) c.leve = Math.ceil((c.prix * 11) / 100) * 5; // levée d'hypothèque : moitié du prix + 10 %, au 5 € supérieur
 }
 
 const CARTES = {
@@ -185,6 +195,9 @@ function nouvelleSalle(code, toursMax) {
     hote: null,
     joueurs: [],
     proprio: PLATEAU.map(() => null),
+    maisons: PLATEAU.map(() => 0),
+    hypo: PLATEAU.map(() => false),
+    enchere: null,
     paquets: { surprise: [], mairie: [] },
     tour: null,
     etape: null,
@@ -224,6 +237,9 @@ function demarrer(salle) {
   melanger(salle.joueurs);
   for (const j of salle.joueurs) Object.assign(j, nouveauJoueur(j.jeton, j.nom, j.couleur));
   salle.proprio = PLATEAU.map(() => null);
+  salle.maisons = PLATEAU.map(() => 0);
+  salle.hypo = PLATEAU.map(() => false);
+  salle.enchere = null;
   salle.paquets = {
     surprise: melanger(CARTES.surprise.map((c, i) => i)),
     mairie: melanger(CARTES.mairie.map((c, i) => i)),
@@ -243,7 +259,11 @@ function demarrer(salle) {
 
 function fortune(salle, idx) {
   let total = salle.joueurs[idx].argent;
-  salle.proprio.forEach((p, i) => { if (p === idx) total += PLATEAU[i].prix; });
+  salle.proprio.forEach((p, i) => {
+    if (p !== idx) return;
+    total += salle.hypo[i] ? PLATEAU[i].prix / 2 : PLATEAU[i].prix;
+    if (salle.maisons[i]) total += salle.maisons[i] * PLATEAU[i].maison;
+  });
   return total;
 }
 
@@ -276,16 +296,30 @@ function proprietesDe(salle, idx) {
   return salle.proprio.map((p, i) => (p === idx ? i : -1)).filter((i) => i >= 0);
 }
 
-/** Revend des biens à la banque (moitié du prix, les moins chers d'abord). */
+/**
+ * Trouve l'argent manquant : revend d'abord les constructions (à moitié prix,
+ * toujours sur la rue la plus bâtie pour rester équilibré), puis hypothèque
+ * les biens, les moins chers d'abord.
+ */
 function liquider(salle, idx, montant) {
   const j = salle.joueurs[idx];
-  const biens = proprietesDe(salle, idx).sort((a, b) => PLATEAU[a].prix - PLATEAU[b].prix);
-  for (const i of biens) {
+  const mien = proprietesDe(salle, idx);
+  let vendues = 0;
+  while (j.argent < montant) {
+    const batie = mien.filter((i) => salle.maisons[i] > 0)
+      .sort((a, b) => salle.maisons[b] - salle.maisons[a] || PLATEAU[b].maison - PLATEAU[a].maison)[0];
+    if (batie === undefined) break;
+    salle.maisons[batie] -= 1;
+    j.argent += PLATEAU[batie].maison / 2;
+    vendues++;
+  }
+  if (vendues) noter(salle, j.nom + ' revend ' + vendues + ' construction' + (vendues > 1 ? 's' : '') + ' à la banque.');
+  const libres = mien.filter((i) => !salle.hypo[i]).sort((a, b) => PLATEAU[a].prix - PLATEAU[b].prix);
+  for (const i of libres) {
     if (j.argent >= montant) break;
-    const rendu = PLATEAU[i].prix / 2;
-    salle.proprio[i] = null;
-    j.argent += rendu;
-    noter(salle, j.nom + ' revend ' + PLATEAU[i].nom + ' à la banque (' + rendu + ' €).');
+    salle.hypo[i] = true;
+    j.argent += PLATEAU[i].prix / 2;
+    noter(salle, j.nom + ' hypothèque ' + PLATEAU[i].nom + ' (+' + PLATEAU[i].prix / 2 + ' €).');
   }
 }
 
@@ -293,7 +327,16 @@ function faillite(salle, idx, creancier) {
   const j = salle.joueurs[idx];
   j.faillite = true;
   j.enPrison = false;
-  salle.proprio = salle.proprio.map((p) => (p === idx ? null : p));
+  salle.proprio.forEach((p, i) => {
+    if (p !== idx) return;
+    salle.proprio[i] = null;
+    salle.maisons[i] = 0;
+    salle.hypo[i] = false;
+  });
+  if (salle.enchere) {
+    if (salle.enchere.meneur === idx) { salle.enchere.meneur = null; salle.enchere.prix = 0; }
+    if (!salle.enchere.passe.includes(idx)) salle.enchere.passe.push(idx);
+  }
   for (const paquet of j.cartesSortie) salle.paquets[paquet].push(CARTES[paquet].findIndex((c) => c.sortie));
   j.cartesSortie = [];
   noter(salle, j.nom + ' fait faillite' + (creancier === null ? '.' : ' face à ' + salle.joueurs[creancier].nom + '.'));
@@ -315,13 +358,22 @@ function payer(salle, de, montant, a) {
   faillite(salle, de, a);
 }
 
+function ruesDuQuartier(g) {
+  return PLATEAU.map((c, i) => (c.t === 'rue' && c.g === g ? i : -1)).filter((i) => i >= 0);
+}
+
+function quartierEntier(salle, g, proprio) {
+  return proprio !== null && ruesDuQuartier(g).every((i) => salle.proprio[i] === proprio);
+}
+
 function loyerDe(salle, pos) {
   const c = PLATEAU[pos];
   const proprio = salle.proprio[pos];
   const possedes = (filtre) => PLATEAU.filter((x, i) => filtre(x) && salle.proprio[i] === proprio).length;
+  if (salle.hypo[pos]) return 0;
   if (c.t === 'rue') {
-    const groupeEntier = PLATEAU.every((x, i) => x.t !== 'rue' || x.g !== c.g || salle.proprio[i] === proprio);
-    return groupeEntier ? c.loyer * 2 : c.loyer;
+    if (salle.maisons[pos]) return c.loyer * MULT_MAISONS[salle.maisons[pos]];
+    return quartierEntier(salle, c.g, proprio) ? c.loyer * 2 : c.loyer;
   }
   if (c.t === 'gare') return 25 * Math.pow(2, possedes((x) => x.t === 'gare') - 1);
   const total = salle.des ? salle.des[0] + salle.des[1] : 7;
@@ -379,7 +431,12 @@ function arriver(salle, idx) {
     const proprio = salle.proprio[pos];
     if (proprio === null) {
       if (j.argent >= c.prix) salle.etape = 'achat';
-      else noter(salle, j.nom + ' arrive sur ' + c.nom + ' mais n\'a pas de quoi l\'acheter.');
+      else {
+        noter(salle, j.nom + ' n\'a pas de quoi acheter ' + c.nom + '.');
+        ouvrirEnchere(salle, pos);
+      }
+    } else if (proprio !== idx && salle.hypo[pos]) {
+      noter(salle, j.nom + ' arrive sur ' + c.nom + ', hypothéqué : pas de loyer.');
     } else if (proprio !== idx) {
       const loyer = loyerDe(salle, pos);
       noter(salle, j.nom + ' paie ' + loyer + ' € de loyer à ' + salle.joueurs[proprio].nom + ' (' + c.nom + ').');
@@ -423,6 +480,7 @@ function apresCoup(salle) {
   if (salle.phase !== 'jeu') return;
   const j = salle.joueurs[salle.tour];
   if (!j.faillite && salle.etape === 'achat') return;
+  if (salle.etape === 'enchere') return;
   if (!j.faillite && salle.rejouer && !j.enPrison) {
     salle.etape = 'lancer';
     noter(salle, 'Double : ' + j.nom + ' rejoue.');
@@ -499,14 +557,122 @@ function actionAchat(salle, acheter) {
     j.argent -= c.prix;
     salle.proprio[j.position] = idx;
     noter(salle, j.nom + ' achète ' + c.nom + ' pour ' + c.prix + ' €.');
+    salle.etape = 'deplacement';
   } else {
-    noter(salle, j.nom + ' laisse ' + c.nom + ' à la banque.');
+    noter(salle, j.nom + ' ne l\'achète pas : ' + c.nom + ' part aux enchères.');
+    ouvrirEnchere(salle, j.position);
   }
+  apresCoup(salle);
+}
+
+/* --------------------------------------------------------------- enchères */
+
+function ouvrirEnchere(salle, pos) {
+  salle.enchere = { case: pos, prix: 0, meneur: null, passe: [], depuis: Date.now() };
+  salle.etape = 'enchere';
+  resoudreEnchereSiFinie(salle);
+}
+
+function enLice(salle) {
+  const e = salle.enchere;
+  return actifs(salle).filter((i) => !e.passe.includes(i) && i !== e.meneur);
+}
+
+function cloreEnchere(salle) {
+  const e = salle.enchere;
+  const c = PLATEAU[e.case];
+  if (e.meneur !== null && salle.joueurs[e.meneur].argent >= e.prix && !salle.joueurs[e.meneur].faillite) {
+    salle.joueurs[e.meneur].argent -= e.prix;
+    salle.proprio[e.case] = e.meneur;
+    noter(salle, salle.joueurs[e.meneur].nom + ' remporte ' + c.nom + ' aux enchères pour ' + e.prix + ' €.');
+  } else {
+    noter(salle, 'Personne ne prend ' + c.nom + ' : le bien reste à la banque.');
+  }
+  salle.enchere = null;
+  if (salle.phase !== 'jeu') return;
   salle.etape = 'deplacement';
   apresCoup(salle);
 }
 
-function appliquerAction(salle, jeton, action) {
+/** L'enchère se termine dès qu'il ne reste plus personne pour surenchérir. */
+function resoudreEnchereSiFinie(salle) {
+  if (salle.enchere && enLice(salle).length === 0) cloreEnchere(salle);
+}
+
+function actionEnchere(salle, moi, action, valeur) {
+  const e = salle.enchere;
+  if (!e || salle.etape !== 'enchere') refuser('Aucune enchère en cours.');
+  const j = salle.joueurs[moi];
+  if (action === 'clore') {
+    if (Date.now() - e.depuis < DELAI_ENCHERE_S * 1000) refuser('Attends encore un peu les autres enchérisseurs.');
+    noter(salle, 'Enchère close, faute de nouvelle offre.');
+    cloreEnchere(salle);
+    return;
+  }
+  if (j.faillite) refuser('Tu n\'es plus dans la partie.');
+  if (e.passe.includes(moi)) refuser('Tu as déjà passé ton tour pour cette enchère.');
+  if (action === 'passerEnchere') {
+    if (e.meneur === moi) refuser('Tu mènes l\'enchère.');
+    e.passe.push(moi);
+  } else {
+    if (e.meneur === moi) refuser('Tu mènes déjà l\'enchère.');
+    const mise = parseInt(valeur, 10);
+    if (!Number.isInteger(mise) || mise <= e.prix || mise > MISE_MAX) refuser('Mise trop basse : il faut dépasser ' + e.prix + ' €.');
+    if (mise > j.argent) refuser('Tu n\'as que ' + j.argent + ' €.');
+    e.prix = mise;
+    e.meneur = moi;
+    noter(salle, j.nom + ' mise ' + mise + ' € sur ' + PLATEAU[e.case].nom + '.');
+  }
+  e.depuis = Date.now();
+  resoudreEnchereSiFinie(salle);
+}
+
+/* ---------------------------------------------- constructions, hypothèques */
+
+function actionGestion(salle, moi, action, pos) {
+  const j = salle.joueurs[moi];
+  if (j.faillite) refuser('Tu n\'es plus dans la partie.');
+  if (!Number.isInteger(pos) || pos < 0 || pos >= PLATEAU.length) refuser('Case inconnue.');
+  if (salle.proprio[pos] !== moi) refuser('Ce bien n\'est pas à toi.');
+  const c = PLATEAU[pos];
+  const rues = c.t === 'rue' ? ruesDuQuartier(c.g) : [pos];
+  const niveaux = rues.map((i) => salle.maisons[i]);
+
+  if (action === 'construire') {
+    if (c.t !== 'rue') refuser('On ne construit que sur les rues.');
+    if (!quartierEntier(salle, c.g, moi)) refuser('Il faut posséder tout le quartier pour construire.');
+    if (rues.some((i) => salle.hypo[i])) refuser('Lève d\'abord les hypothèques du quartier.');
+    if (salle.maisons[pos] >= 5) refuser('Il y a déjà un hôtel.');
+    if (salle.maisons[pos] > Math.min(...niveaux)) refuser('Construis d\'abord sur les autres rues du quartier.');
+    if (j.argent < c.maison) refuser('Pas assez d\'argent (' + c.maison + ' €).');
+    j.argent -= c.maison;
+    salle.maisons[pos] += 1;
+    noter(salle, j.nom + (salle.maisons[pos] === 5 ? ' construit un hôtel' : ' construit une maison') + ' ' + c.nom + '.');
+  } else if (action === 'demolir') {
+    if (!salle.maisons[pos]) refuser('Aucune construction ici.');
+    if (salle.maisons[pos] < Math.max(...niveaux)) refuser('Vends d\'abord sur les rues les plus bâties du quartier.');
+    salle.maisons[pos] -= 1;
+    j.argent += c.maison / 2;
+    noter(salle, j.nom + ' revend une construction ' + c.nom + ' (+' + c.maison / 2 + ' €).');
+  } else if (action === 'hypothequer') {
+    if (salle.hypo[pos]) refuser('Déjà hypothéqué.');
+    if (niveaux.some((n) => n > 0)) refuser('Vends d\'abord les constructions du quartier.');
+    salle.hypo[pos] = true;
+    j.argent += c.prix / 2;
+    noter(salle, j.nom + ' hypothèque ' + c.nom + ' (+' + c.prix / 2 + ' €).');
+  } else if (action === 'lever') {
+    if (!salle.hypo[pos]) refuser('Ce bien n\'est pas hypothéqué.');
+    if (j.argent < c.leve) refuser('Pas assez d\'argent (' + c.leve + ' €).');
+    j.argent -= c.leve;
+    salle.hypo[pos] = false;
+    noter(salle, j.nom + ' lève l\'hypothèque de ' + c.nom + ' (' + c.leve + ' €).');
+  }
+}
+
+const GESTION = ['construire', 'demolir', 'hypothequer', 'lever'];
+const ENCHERE = ['miser', 'passerEnchere', 'clore'];
+
+function appliquerAction(salle, jeton, action, valeur) {
   const moi = indexJoueur(salle, jeton);
   if (moi === -1) refuser('Tu n\'es pas dans cette salle.');
 
@@ -538,13 +704,26 @@ function appliquerAction(salle, jeton, action) {
     noter(salle, salle.joueurs[moi].nom + ' abandonne la partie.');
     const sonTour = salle.tour === moi;
     faillite(salle, moi, null);
+    if (salle.phase === 'jeu') resoudreEnchereSiFinie(salle);
     if (sonTour) apresCoup(salle);
+    salle.dernierCoup = Date.now();
+    return;
+  }
+
+  if (GESTION.includes(action)) {
+    if (salle.etape === 'enchere') refuser('Attends la fin de l\'enchère.');
+    actionGestion(salle, moi, action, parseInt(valeur, 10));
+    return;
+  }
+  if (ENCHERE.includes(action)) {
+    actionEnchere(salle, moi, action, valeur);
     salle.dernierCoup = Date.now();
     return;
   }
 
   let qui = moi;
   if (action === 'forcer') {
+    if (salle.etape === 'enchere') refuser('Une enchère est en cours.');
     if (salle.tour === moi) refuser('C\'est ton tour, joue !');
     if (Date.now() - salle.dernierCoup < DELAI_INACTIF_S * 1000) refuser('Laisse-lui encore un peu de temps.');
     qui = salle.tour;
@@ -598,6 +777,14 @@ function vuePour(salle, version, jeton) {
     des: salle.des,
     derniereCarte: salle.derniereCarte,
     proprio: salle.proprio,
+    maisons: salle.maisons,
+    hypo: salle.hypo,
+    loyers: PLATEAU.map((c, i) => (c.prix && salle.proprio[i] !== null && c.t !== 'service' ? loyerDe(salle, i) : null)),
+    enchere: salle.enchere ? {
+      case: salle.enchere.case, prix: salle.enchere.prix, meneur: salle.enchere.meneur,
+      passe: salle.enchere.passe, depuis: salle.enchere.depuis,
+    } : null,
+    delaiEnchere: DELAI_ENCHERE_S,
     journal: salle.journal,
     classement: salle.classement || null,
     dernierCoup: salle.dernierCoup,
@@ -637,7 +824,12 @@ async function lireSalle(env, code) {
   const ligne = await bdd(env).prepare('SELECT version, etat FROM paves_salles WHERE code = ?').bind(code).first();
   if (!ligne) return null;
   try {
-    return { version: ligne.version, salle: JSON.parse(ligne.etat) };
+    const salle = JSON.parse(ligne.etat);
+    // Salles créées avant les constructions : champs manquants.
+    if (!salle.maisons) salle.maisons = PLATEAU.map(() => 0);
+    if (!salle.hypo) salle.hypo = PLATEAU.map(() => false);
+    if (salle.enchere === undefined) salle.enchere = null;
+    return { version: ligne.version, salle };
   } catch (err) {
     return null;
   }
@@ -720,6 +912,16 @@ const CSS = `
   .case .nom{word-break:break-word; hyphens:auto;}
   .case .prix{color:#556; margin-top:auto;}
   .case.cote .prix{display:none;}
+  .case .bati{font-size:clamp(5px, 1.5vw, 9px); letter-spacing:-2px; font-weight:700; color:#555;}
+  .enchere{background:#fff; border:2px solid var(--or); border-radius:8px; padding:5px 8px;
+    font-size:clamp(0.65rem, 2.6vw, 0.9rem); max-width:96%;}
+  .gestion{display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;}
+  .gestion button{flex:1 1 45%; background:rgba(255,255,255,0.15); color:var(--panel); padding:8px;}
+  .gestion button.btn-or{background:var(--or); color:var(--ink);}
+  .titre-mini.hypo{opacity:0.35;}
+  table.loyers{width:100%; font-size:0.8rem; border-collapse:collapse; margin-top:6px; color:var(--muted);}
+  table.loyers td{padding:2px 0;} table.loyers td:last-child{text-align:right;}
+  table.loyers tr.actuel td{color:var(--or); font-weight:700;}
   .case.choisie{outline:2px solid #000; outline-offset:-2px; z-index:2;}
   .case .pions{position:absolute; bottom:1px; left:1px; right:1px; display:flex; flex-wrap:wrap;
     justify-content:center; gap:1px;}
@@ -854,8 +1056,8 @@ function client() {
       if (echecs >= 2 || !panneReseau(err)) dire(panneReseau(err) ? 'Connexion interrompue, reprise dès que le réseau revient…' : err.message, true);
     });
   }
-  function agir(action) {
-    return poster('/api/action', { action: action }).then(function (d) { if (d) recevoir(d); });
+  function agir(action, valeur) {
+    return poster('/api/action', { action: action, valeur: valeur }).then(function (d) { if (d) recevoir(d); });
   }
   function entrer(d) {
     CODE = d.code;
@@ -873,7 +1075,9 @@ function client() {
 
   setInterval(function () { rafraichir(false); }, 1500);
   // Le bouton « Jouer à sa place » apparaît après le délai même sans nouveau coup.
-  setInterval(function () { if (ETAT && ETAT.phase === 'jeu' && ETAT.tour !== ETAT.moi) rendre(); }, 5000);
+  setInterval(function () {
+    if (ETAT && ETAT.phase === 'jeu' && (ETAT.tour !== ETAT.moi || ETAT.etape === 'enchere')) rendre();
+  }, 5000);
   document.addEventListener('visibilitychange', function () { if (!document.hidden && CODE) rafraichir(true); });
   window.addEventListener('online', function () { if (CODE) rafraichir(true); });
 
@@ -1000,6 +1204,10 @@ function client() {
   function loyerAffiche(i) {
     var c = PLATEAU[i];
     var p = ETAT.proprio[i];
+    if (p !== null && ETAT.hypo[i]) return 'aucun (hypothéqué)';
+    if (c.t === 'rue' && ETAT.maisons[i]) {
+      return euros(ETAT.loyers[i]) + ' (' + (ETAT.maisons[i] === 5 ? 'hôtel' : ETAT.maisons[i] + ' maison' + (ETAT.maisons[i] > 1 ? 's' : '')) + ')';
+    }
     if (c.t === 'rue') {
       var entier = p !== null && PLATEAU.every(function (x, k) { return x.t !== 'rue' || x.g !== c.g || ETAT.proprio[k] === p; });
       return euros(entier ? c.loyer * 2 : c.loyer) + (entier ? ' (quartier complet)' : '');
@@ -1030,7 +1238,13 @@ function client() {
       var p = ETAT.proprio[i];
       if (p !== null) {
         d.style.boxShadow = 'inset 0 0 0 2px ' + ETAT.joueurs[p].couleur;
-        d.style.background = 'color-mix(in srgb, ' + ETAT.joueurs[p].couleur + ' 22%, #E8F1E4)';
+        var teinte = 'color-mix(in srgb, ' + ETAT.joueurs[p].couleur + ' 22%, #E8F1E4)';
+        d.style.background = ETAT.hypo[i]
+          ? 'repeating-linear-gradient(45deg, #E8F1E4 0 4px, #C9CFC6 4px 8px)'
+          : teinte;
+        if (ETAT.hypo[i]) d.appendChild(el('div', 'bati', 'hypo'));
+        else if (ETAT.maisons[i] === 5) d.appendChild(el('div', 'bati', '🏨'));
+        else if (ETAT.maisons[i]) d.appendChild(el('div', 'bati', '🏠'.repeat(ETAT.maisons[i])));
       } else if (c.prix) {
         d.appendChild(el('div', 'prix', c.prix + '€'));
       }
@@ -1072,7 +1286,34 @@ function client() {
     var courant = ETAT.joueurs[ETAT.tour];
     var moi = ETAT.moi !== null ? ETAT.joueurs[ETAT.moi] : null;
     var boutons = el('div', 'boutons');
-    if (ETAT.tour === ETAT.moi) {
+    if (ETAT.etape === 'enchere' && ETAT.enchere) {
+      var e = ETAT.enchere;
+      var bloc = el('div', 'enchere');
+      bloc.appendChild(el('b', '', '🔨 Enchères : ' + PLATEAU[e.case].nom));
+      bloc.appendChild(el('div', '', e.meneur === null
+        ? 'Aucune offre pour l\u2019instant (prix d\u2019achat ' + euros(PLATEAU[e.case].prix) + ').'
+        : 'Meilleure offre : ' + euros(e.prix) + ' par ' + ETAT.joueurs[e.meneur].nom + '.'));
+      var restants = ETAT.joueurs.filter(function (j, k) { return !j.faillite && e.passe.indexOf(k) === -1 && k !== e.meneur; })
+        .map(function (j) { return j.nom; });
+      if (restants.length) bloc.appendChild(el('div', '', 'En attente : ' + restants.join(', ')));
+      c.appendChild(bloc);
+      var peutMiser = moi && !moi.faillite && e.passe.indexOf(ETAT.moi) === -1;
+      if (peutMiser && e.meneur === ETAT.moi) {
+        c.appendChild(el('div', 'info', 'Tu mènes l\u2019enchère.'));
+      } else if (peutMiser) {
+        [10, 50, 100].forEach(function (pas) {
+          var mise = e.prix + pas;
+          var b = bouton(euros(mise), 'btn-or', function () { agir('miser', mise); });
+          b.disabled = mise > moi.argent;
+          boutons.appendChild(b);
+        });
+        boutons.appendChild(bouton('Je passe', 'btn-gris', function () { agir('passerEnchere'); }));
+      }
+      var attente = (Date.now() - ECART - e.depuis) / 1000;
+      if (attente > ETAT.delaiEnchere) {
+        boutons.appendChild(bouton('Clore l\u2019enchère', 'btn-gris', function () { agir('clore'); }));
+      }
+    } else if (ETAT.tour === ETAT.moi) {
       if (ETAT.etape === 'lancer') {
         c.appendChild(el('div', 'info', 'À toi de jouer !'));
         boutons.appendChild(bouton('🎲 Lancer les dés', 'btn-or', function () { agir('lancer'); }));
@@ -1115,7 +1356,24 @@ function client() {
       ligne('Loyer', loyerAffiche(CHOISIE));
       var p = ETAT.proprio[CHOISIE];
       ligne('Propriétaire', p === null ? 'la banque (libre)' : ETAT.joueurs[p].nom);
-      if (c.t === 'rue') b.appendChild(el('div', 'sous', 'Loyer doublé si le même joueur possède tout le quartier (même couleur).'));
+      if (ETAT.hypo[CHOISIE]) ligne('Hypothèque', 'levée pour ' + euros(c.leve));
+      if (c.t === 'rue') {
+        var t = el('table', 'loyers');
+        var lignes = [['Terrain nu', c.loyer], ['Quartier complet', c.loyer * 2]];
+        for (var n = 1; n <= 5; n++) lignes.push([n === 5 ? 'Hôtel' : n + ' maison' + (n > 1 ? 's' : ''), c.loyer * MULT_MAISONS[n]]);
+        lignes.forEach(function (l, k) {
+          var tr = el('tr');
+          var niveau = ETAT.maisons[CHOISIE] ? ETAT.maisons[CHOISIE] + 1 : -1;
+          if (k === niveau) tr.className = 'actuel';
+          tr.appendChild(el('td', '', l[0]));
+          tr.appendChild(el('td', '', euros(l[1])));
+          t.appendChild(tr);
+        });
+        b.appendChild(t);
+        b.appendChild(el('div', 'sous', 'Maison ou hôtel : ' + euros(c.maison) + ' (revente moitié prix). '
+          + 'On construit quand on a tout le quartier, de façon équilibrée.'));
+      }
+      if (p !== null && p === ETAT.moi && ETAT.phase === 'jeu' && !ETAT.joueurs[p].faillite) b.appendChild(rendreGestion(CHOISIE));
     } else if (c.t === 'taxe') {
       ligne('À payer', euros(c.montant));
     } else {
@@ -1128,6 +1386,40 @@ function client() {
       }[c.t] || ''));
     }
     return b;
+  }
+
+  function rendreGestion(i) {
+    var c = PLATEAU[i];
+    var g = el('div', 'gestion');
+    var moi = ETAT.joueurs[ETAT.moi];
+    var rues = PLATEAU.map(function (x, k) { return x.t === 'rue' && x.g === c.g ? k : -1; }).filter(function (k) { return k >= 0; });
+    var niveaux = rues.map(function (k) { return ETAT.maisons[k]; });
+    var bati = niveaux.some(function (n) { return n > 0; });
+    if (c.t === 'rue' && !ETAT.hypo[i]) {
+      var complet = rues.every(function (k) { return ETAT.proprio[k] === ETAT.moi && !ETAT.hypo[k]; });
+      if (complet && ETAT.maisons[i] < 5) {
+        var cb = bouton((ETAT.maisons[i] === 4 ? 'Construire un hôtel' : 'Construire une maison') + ' (' + euros(c.maison) + ')', 'btn-or',
+          function () { agir('construire', i); });
+        cb.disabled = moi.argent < c.maison || ETAT.maisons[i] > Math.min.apply(null, niveaux) || ETAT.etape === 'enchere';
+        g.appendChild(cb);
+      }
+      if (ETAT.maisons[i]) {
+        var vb = bouton('Revendre ' + (ETAT.maisons[i] === 5 ? 'l\u2019hôtel' : 'une maison') + ' (+' + euros(c.maison / 2) + ')', '',
+          function () { agir('demolir', i); });
+        vb.disabled = ETAT.maisons[i] < Math.max.apply(null, niveaux) || ETAT.etape === 'enchere';
+        g.appendChild(vb);
+      }
+    }
+    if (ETAT.hypo[i]) {
+      var lb = bouton('Lever l\u2019hypothèque (' + euros(c.leve) + ')', 'btn-or', function () { agir('lever', i); });
+      lb.disabled = moi.argent < c.leve || ETAT.etape === 'enchere';
+      g.appendChild(lb);
+    } else if (!bati) {
+      var hb = bouton('Hypothéquer (+' + euros(c.prix / 2) + ')', '', function () { agir('hypothequer', i); });
+      hb.disabled = ETAT.etape === 'enchere';
+      g.appendChild(hb);
+    }
+    return g;
   }
 
   function rendreJoueurs() {
@@ -1148,7 +1440,7 @@ function client() {
       ETAT.proprio.forEach(function (p, k) {
         if (p !== i) return;
         var c = PLATEAU[k];
-        var m = el('div', 'titre-mini');
+        var m = el('div', 'titre-mini' + (ETAT.hypo[k] ? ' hypo' : ''));
         m.style.background = c.t === 'rue' ? GROUPES[c.g] : (c.t === 'gare' ? '#222' : '#999');
         m.title = c.nom;
         m.onclick = function () { CHOISIE = k; rendre(); };
@@ -1172,7 +1464,7 @@ function client() {
       t.appendChild(tr);
     });
     b.appendChild(t);
-    b.appendChild(el('div', 'sous', 'Fortune = argent + prix d’achat des biens.'));
+    b.appendChild(el('div', 'sous', 'Fortune = argent + biens + constructions (un bien hypothéqué compte pour moitié).'));
     return b;
   }
 
@@ -1225,6 +1517,7 @@ function pageHtml(joueursConnus) {
     + 'var MIN_JOUEURS = ' + MIN_JOUEURS + ';'
     + 'var SALAIRE = ' + SALAIRE + ';'
     + 'var CAUTION = ' + CAUTION + ';'
+    + 'var MULT_MAISONS = ' + toScriptJson(MULT_MAISONS) + ';'
     + "var DES = ['⚀','⚁','⚂','⚃','⚄','⚅'];";
   return '<!doctype html><html lang="fr"><head><meta charset="utf-8">'
     + '<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -1307,7 +1600,7 @@ export default {
           const code = normaliserCode(corps.code);
           if (!code) return erreur('Code de salle invalide.');
           const apres = await modifierSalle(env, code, (salle) => {
-            appliquerAction(salle, jeton, String(corps.action || ''));
+            appliquerAction(salle, jeton, String(corps.action || ''), corps.valeur);
           });
           return json(vuePour(apres.salle, apres.version, jeton));
         }
