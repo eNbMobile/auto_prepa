@@ -1316,17 +1316,26 @@ const CSS = `
     align-items:stretch; cursor:pointer; line-height:1.05; text-align:center; }
   /* Bande de couleur côté intérieur du plateau ; le nom juste à côté d'elle, le prix à l'autre bout. */
   .case.bas{flex-direction:column;} .case.haut{flex-direction:column-reverse;}
-  .case.gauche{flex-direction:row-reverse;} .case.droite{flex-direction:row;}
   .case.haut .texte{flex-direction:column-reverse;}
-  .case.bas .bande + .texte .nom{margin-top:0.8cqw;} .case.haut .bande + .texte .nom{margin-bottom:0.8cqw;}
-  .case.gauche .bande + .texte{padding-right:0.8cqw;} .case.droite .bande + .texte{padding-left:0.8cqw;}
+  .case.bas .bande + .texte .nom, .tourne .bande + .texte .nom{margin-top:0.35cqw;}
+  .case.haut .bande + .texte .nom{margin-bottom:0.35cqw;}
+  /* Côtés gauche et droit : la case du bas, tournée d'un quart de tour (bande vers le centre). */
+  .case.gauche, .case.droite{display:block;}
+  .tourne{position:absolute; left:50%; top:50%; display:flex; flex-direction:column;
+    width:calc((100cqw - 10px) / 12.8); height:calc((100cqw - 10px) * 1.9 / 12.8);
+    transform:translate(-50%, -50%) rotate(90deg);}
+  .case.droite .tourne{transform:translate(-50%, -50%) rotate(-90deg);}
   .case .bande{flex:none; display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:1px;}
-  .case.bas .bande, .case.haut .bande{height:28%; width:100%;}
-  .case.gauche .bande, .case.droite .bande{width:28%; height:100%; flex-direction:column;}
+  .case.bas .bande, .case.haut .bande, .tourne .bande{height:20%; width:100%;}
   .case .texte{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:space-between;
     padding:0.6cqw 1px; min-width:0; min-height:0;}
   .case.coin .texte{justify-content:center;}
-  .case > .texte:first-child{padding-top:3px;}
+  .case > .texte:first-child, .tourne > .texte:first-child{padding-top:3px;}
+  .logo svg{display:block; margin:0 auto;}
+  .logo.train svg{width:clamp(12px, 3.6cqw, 46px); height:auto;}
+  .logo.prison svg{width:clamp(18px, 5.4cqw, 70px); height:auto;}
+  .logo.caisse svg{width:clamp(16px, 4.6cqw, 60px); height:auto;}
+  .ico-titre svg{display:inline-block; width:1.6em; height:auto; vertical-align:-3px;}
   .case .nom{font-size:clamp(5.5px, 1.55cqw, 20.7px); word-break:break-word; hyphens:auto;}
   .case .ico{font-size:clamp(8px, 2.4cqw, 32.2px); line-height:1;}
   .case .prix{font-size:clamp(7.5px, 2.25cqw, 27.6px); font-weight:800; color:#1B2A41; margin-top:1px;}
@@ -1739,8 +1748,8 @@ function client() {
     return [1 + (i - 30), 11];
   }
   function icone(c) {
-    return { depart: '⬅', poste: '🚓', pause: '☕', police: '👮', carte: c.p === 'mairie' ? '' : '❓',
-      gare: '🚆', service: c.court === 'Gaz' ? '🔥' : '📶', taxe: '💶' }[c.t] || '';
+    return { depart: '⬅', poste: '', pause: '☕', police: '👮', carte: c.p === 'mairie' ? '' : '❓',
+      gare: '', service: c.court === 'Gaz' ? '🔥' : '📶', taxe: '💶' }[c.t] || '';
   }
   function loyerAffiche(i) {
     var c = PLATEAU[i];
@@ -1761,16 +1770,55 @@ function client() {
     return (deux ? '10' : '4') + ' × les dés';
   }
 
-  /** Logo de la Caisse commune : un coffre bleu cerclé de doré. */
+  /** Logo de la Caisse commune : un coffre bleu rectangulaire, angles droits, ferrures dorées. */
   function logoCaisse(classe) {
-    var d = el('span', classe);
-    d.innerHTML = '<svg viewBox="0 0 24 20" width="1.3em" height="1.1em" aria-hidden="true">'
-      + '<path d="M3 8 Q3 2 12 2 Q21 2 21 8 Z" fill="#3A7BD5" stroke="#12356B" stroke-width="1.2"/>'
-      + '<rect x="2" y="8" width="20" height="10" rx="1.5" fill="#1F5FBF" stroke="#12356B" stroke-width="1.2"/>'
-      + '<rect x="2" y="7" width="20" height="2.4" fill="#F2C14E" stroke="#12356B" stroke-width="0.8"/>'
-      + '<rect x="10" y="8" width="4" height="5" rx="0.8" fill="#F2C14E" stroke="#12356B" stroke-width="0.8"/>'
-      + '<circle cx="12" cy="11.3" r="0.8" fill="#12356B"/></svg>';
+    var d = el('span', classe || 'logo caisse');
+    d.innerHTML = '<svg viewBox="0 0 32 22" aria-hidden="true">'
+      + '<rect x="1" y="1" width="30" height="7" fill="#3A7BD5" stroke="#12356B" stroke-width="1.3"/>'
+      + '<rect x="1" y="8" width="30" height="13" fill="#1F5FBF" stroke="#12356B" stroke-width="1.3"/>'
+      + '<rect x="1" y="7" width="30" height="2.2" fill="#F2C14E" stroke="#12356B" stroke-width="0.7"/>'
+      + '<rect x="6" y="1" width="2.2" height="20" fill="#F2C14E" stroke="#12356B" stroke-width="0.5"/>'
+      + '<rect x="23.8" y="1" width="2.2" height="20" fill="#F2C14E" stroke="#12356B" stroke-width="0.5"/>'
+      + '<rect x="13" y="5.5" width="6" height="7" fill="#F2C14E" stroke="#12356B" stroke-width="0.9"/>'
+      + '<rect x="15.3" y="8" width="1.4" height="2.6" fill="#12356B"/></svg>';
     return d;
+  }
+
+  /** Locomotive noire vue de face, sur ses rails. */
+  function logoTrain() {
+    var d = el('span', 'logo train');
+    d.innerHTML = '<svg viewBox="0 0 24 26" aria-hidden="true">'
+      + '<path d="M6 3 Q6 1 9 1 H15 Q18 1 18 3 V17 Q18 19 16 19 H8 Q6 19 6 17 Z" fill="#141414"/>'
+      + '<rect x="7.6" y="3.6" width="8.8" height="5.4" rx="1" fill="#CFE8F7"/>'
+      + '<rect x="11.4" y="3.6" width="1.2" height="5.4" fill="#141414"/>'
+      + '<rect x="7.6" y="10.6" width="8.8" height="1.4" fill="#3A3A3A"/>'
+      + '<circle cx="8.9" cy="15" r="1.5" fill="#FFE08A"/><circle cx="15.1" cy="15" r="1.5" fill="#FFE08A"/>'
+      + '<rect x="10.6" y="14.2" width="2.8" height="1.6" rx="0.4" fill="#555"/>'
+      + '<path d="M8 19 L5.5 23.5 M16 19 L18.5 23.5" stroke="#141414" stroke-width="1.9" stroke-linecap="round"/>'
+      + '<path d="M2.5 24.5 H21.5" stroke="#141414" stroke-width="1.6" stroke-linecap="round"/></svg>';
+    return d;
+  }
+
+  /** Un bonhomme derrière les barreaux (case Poste). */
+  function logoPrison() {
+    var d = el('span', 'logo prison');
+    d.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">'
+      + '<rect x="1.5" y="1.5" width="21" height="21" fill="#F28C28" stroke="#141414" stroke-width="1.5"/>'
+      + '<circle cx="12" cy="9" r="3.3" fill="#F6C9A0" stroke="#141414" stroke-width="0.8"/>'
+      + '<path d="M10.4 8.4 h0.01 M13.6 8.4 h0.01" stroke="#141414" stroke-width="1.1" stroke-linecap="round"/>'
+      + '<path d="M10.6 10.6 Q12 9.8 13.4 10.6" stroke="#141414" stroke-width="0.6" fill="none"/>'
+      + '<path d="M5.5 22.5 Q5.5 13.6 12 13.6 Q18.5 13.6 18.5 22.5 Z" fill="#ECECEC" stroke="#141414" stroke-width="0.8"/>'
+      + '<path d="M6.5 17 H17.5 M6 20 H18" stroke="#141414" stroke-width="1"/>'
+      + '<path d="M6 1.5 V22.5 M10 1.5 V22.5 M14 1.5 V22.5 M18 1.5 V22.5" stroke="#2B2B2B" stroke-width="1.6"/></svg>';
+    return d;
+  }
+
+  /** Logo dessiné d'une case, ou null si elle se contente d'un émoji. */
+  function logoCase(c) {
+    if (c.t === 'carte' && c.p === 'mairie') return logoCaisse();
+    if (c.t === 'gare') return logoTrain();
+    if (c.t === 'poste') return logoPrison();
+    return null;
   }
 
   function orientation(i) {
@@ -1789,27 +1837,30 @@ function client() {
       d.style.gridRow = place[0];
       d.style.gridColumn = place[1];
       var p = ETAT.proprio[i];
+      // Côtés gauche et droit : contenu tourné d'un quart de tour, comme sur un vrai plateau.
+      var cote = i % 10 !== 0 && ((i > 10 && i < 20) || i > 30);
+      var support = cote ? el('div', 'tourne') : d;
+      if (cote) d.appendChild(support);
       if (c.t === 'rue') {
         var bande = el('div', 'bande');
         bande.style.background = GROUPES[c.g];
         var n = ETAT.maisons[i];
         if (n === 5) bande.appendChild(el('span', 'hotel'));
         else for (var m = 0; m < n; m++) bande.appendChild(el('span', 'maison'));
-        d.appendChild(bande);
+        support.appendChild(bande);
       }
       var texte = el('div', 'texte');
       var lettres = c.court.length;
       var nom = el('div', 'nom' + (lettres >= 10 ? ' tres-long' : lettres >= 8 ? ' long' : ''), c.court);
-      var ico = null;
-      if (c.t === 'carte' && c.p === 'mairie') ico = logoCaisse('ico');
-      else if (c.t !== 'rue') ico = el('div', 'ico', icone(c));
+      var ico = logoCase(c);
+      if (!ico && c.t !== 'rue') ico = el('div', 'ico', icone(c));
       // Coins : icône puis nom, centrés. Autres cases : nom en haut, icône au milieu, prix en bas.
       if (i % 10 === 0) { if (ico) texte.appendChild(ico); texte.appendChild(nom); }
       else { texte.appendChild(nom); if (ico) texte.appendChild(ico); }
       if (c.prix) texte.appendChild(el('div', 'prix', c.prix + ' €'));
       else if (c.t === 'taxe') texte.appendChild(el('div', 'prix taxe', c.montant + ' €'));
       if (p !== null && ETAT.hypo[i]) texte.appendChild(el('div', 'hypo', 'HYPO'));
-      d.appendChild(texte);
+      support.appendChild(texte);
       if (p !== null) {
         d.style.boxShadow = 'inset 0 0 0 2px ' + ETAT.joueurs[p].couleur;
         d.style.background = ETAT.hypo[i]
@@ -2047,7 +2098,8 @@ function client() {
     var b = el('div', 'bloc detail');
     if (!c.prix && c.t !== 'taxe') {
       var h2 = el('h2', '', (icone(c) ? icone(c) + ' ' : '') + c.nom);
-      if (c.t === 'carte' && c.p === 'mairie') h2.insertBefore(logoCaisse('ico-titre'), h2.firstChild);
+      var logo = logoCase(c);
+      if (logo) { logo.className = 'ico-titre'; h2.insertBefore(document.createTextNode(' '), h2.firstChild); h2.insertBefore(logo, h2.firstChild); }
       b.appendChild(h2);
     }
     function ligne(g, d) {
