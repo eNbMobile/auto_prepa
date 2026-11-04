@@ -27,6 +27,12 @@ const DELAI_ENCHERE_S = 20;
 const MISE_MAX = 5000;
 const NOMS_ROBOTS = ['Bip', 'Zap', 'Kiwi', 'Pixel', 'Momo', 'Tic'];
 const REFLEXION_ROBOT_MS = 1200;
+// Offre d'un robot pour la rue qui lui manque : 2,4 × le prix, +0,6 × à chaque refus,
+// abandon de cette rue après 3 refus ; nouvelle tentative au plus tôt 3 tours plus tard.
+const OFFRE_ROBOT_BASE = 2.4;
+const OFFRE_ROBOT_HAUSSE = 0.6;
+const OFFRE_ROBOT_REFUS_MAX = 3;
+const OFFRE_ROBOT_PAUSE_TOURS = 3;
 // Loyer d'une rue selon ses constructions (0 à 4 maisons, 5 = hôtel), en multiples du loyer de base.
 const MULT_MAISONS = [1, 5, 15, 40, 55, 70];
 // Coût d'une maison (ou de l'hôtel) par quartier.
@@ -813,6 +819,7 @@ function actionEchange(salle, moi, action, valeur) {
   if (!e) refuser('Aucun échange en cours.');
   if (action === 'annulerEchange') {
     if (moi !== e.de) refuser('Seul celui qui propose peut annuler.');
+    if (salle.joueurs[moi].robot) noterRefusRobot(salle, e);
     salle.echange = null;
     noter(salle, salle.joueurs[moi].nom + ' retire sa proposition d\'échange.');
     return;
@@ -820,6 +827,7 @@ function actionEchange(salle, moi, action, valeur) {
   if (moi !== e.a) refuser('Cette proposition ne t\'est pas adressée.');
   salle.echange = null;
   if (action === 'refuserEchange') {
+    noterRefusRobot(salle, e);
     noter(salle, salle.joueurs[moi].nom + ' refuse l\'échange.');
     return;
   }
@@ -831,6 +839,14 @@ function actionEchange(salle, moi, action, valeur) {
   }
   realiserEchange(salle, e);
   verifierDettes(salle);
+}
+
+/** Mémorise qu'une offre d'un robot pour une rue a été refusée (il surenchérira ou abandonnera). */
+function noterRefusRobot(salle, e) {
+  if (!salle.joueurs[e.de].robot || e.recoit.length !== 1) return;
+  const cle = e.de + '-' + e.recoit[0];
+  salle.refusRobot = salle.refusRobot || {};
+  salle.refusRobot[cle] = (salle.refusRobot[cle] || 0) + 1;
 }
 
 const ECHANGE = ['proposerEchange', 'annulerEchange', 'accepterEchange', 'refuserEchange'];
@@ -1082,9 +1098,12 @@ function choisirCoupRobot(salle) {
       const k = manque[0];
       const autre = salle.proprio[k];
       if (autre === null || J[autre].faillite || rues.some((x) => salle.maisons[x] > 0)) continue;
-      const essai = (salle.essaisEchange || {})[salle.tour + '-' + k];
-      if (essai !== undefined && salle.tourNo - essai < 5) continue;
-      const offre = Math.ceil((PLATEAU[k].prix * 2.4) / 10) * 10;
+      const cle = salle.tour + '-' + k;
+      const refus = (salle.refusRobot || {})[cle] || 0;
+      if (refus >= OFFRE_ROBOT_REFUS_MAX) continue; // abandon : il cherche une autre cible
+      const essai = (salle.essaisEchange || {})[cle];
+      if (essai !== undefined && salle.tourNo - essai < OFFRE_ROBOT_PAUSE_TOURS) continue;
+      const offre = Math.ceil((PLATEAU[k].prix * (OFFRE_ROBOT_BASE + OFFRE_ROBOT_HAUSSE * refus)) / 10) * 10;
       if (t.argent - offre < 150) continue;
       return Object.assign(coup('proposerEchange', { a: autre, recoit: [k], argentDonne: offre }), { essai: salle.tour + '-' + k });
     }

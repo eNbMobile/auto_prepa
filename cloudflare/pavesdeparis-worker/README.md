@@ -73,7 +73,9 @@ URL une fois déployé : `https://pavesdeparis.coopu.workers.dev`
   un quartier, lèvent leurs hypothèques et règlent leurs dettes eux-mêmes.
 - Ils répondent aux propositions d'échange (acceptées si elles leur sont
   nettement favorables) et proposent eux-mêmes d'acheter la rue qui leur
-  manque pour compléter un quartier.
+  manque pour compléter un quartier : 2,4 × son prix, puis +0,6 × à chaque
+  refus (au plus tôt 3 tours après), et ils abandonnent cette rue après
+  3 refus pour viser un autre quartier.
 - Ils jouent côté serveur, au rythme des animations, tant qu'au moins un
   téléphone a la partie ouverte.
 
