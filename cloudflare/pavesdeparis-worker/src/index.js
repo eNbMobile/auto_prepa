@@ -1513,7 +1513,7 @@ const CSS = `
   .logo.prison svg{width:clamp(18px, 5.4cqw, 70px); height:auto;}
   .logo.caisse svg{width:clamp(16px, 4.6cqw, 60px); height:auto;}
   .ico-titre svg{display:inline-block; width:1.6em; height:auto; vertical-align:-3px;}
-  .case .nom{font-size:clamp(6.5px, 1.85cqw, 25px); line-height:1.1; overflow-wrap:break-word; hyphens:auto;}
+  .case .nom{font-size:clamp(6.5px, 1.85cqw, 25px); line-height:1.1; hyphens:auto; text-transform:uppercase; max-width:100%;}
   .case .ico{font-size:clamp(8px, 2.4cqw, 32.2px); line-height:1;}
   .case .prix{font-size:clamp(7.5px, 2.25cqw, 27.6px); font-weight:800; color:#1B2A41; margin-top:1px;}
   .case.coin .texte{font-weight:700;} .case.coin .nom{font-size:clamp(6.5px, 1.8cqw, 25.3px);}
@@ -2042,7 +2042,8 @@ function client() {
       }
       var texte = el('div', 'texte');
       var lettres = c.court.length;
-      var nom = el('div', 'nom' + (lettres >= 10 ? ' tres-long' : lettres >= 8 ? ' long' : ''), c.court);
+      // En majuscules, les noms sont plus larges : on réduit un peu les plus longs.
+      var nom = el('div', 'nom' + (lettres >= 9 ? ' tres-long' : lettres >= 7 ? ' long' : ''), c.court);
       var ico = logoCase(c);
       if (!ico && c.t !== 'rue') ico = el('div', 'ico', icone(c));
       // Coins : icône puis nom, centrés. Autres cases : nom en haut, icône au milieu, prix en bas.
@@ -2600,7 +2601,21 @@ function client() {
     if (wrap) wrap.classList.toggle('large', !!ETAT && ETAT.phase !== 'attente');
     if (!ETAT) rendreAccueil();
     else if (ETAT.phase === 'attente') rendreAttente();
-    else rendreJeu();
+    else { rendreJeu(); ajusterNoms(); }
+  }
+
+  /** Réduit la police d'un nom de case tant qu'un de ses mots déborde (plutôt que de couper le mot). */
+  function ajusterNoms() {
+    var noms = app.querySelectorAll('.case .nom');
+    for (var k = 0; k < noms.length; k++) {
+      var n = noms[k];
+      var taille = parseFloat(getComputedStyle(n).fontSize);
+      var garde = 0;
+      while (n.scrollWidth > n.clientWidth + 0.5 && taille > 4 && garde++ < 20) {
+        taille -= 0.4;
+        n.style.fontSize = taille + 'px';
+      }
+    }
   }
 
   var codeUrl = new URLSearchParams(location.search).get('code');
