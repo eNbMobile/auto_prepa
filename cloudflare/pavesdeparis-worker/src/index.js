@@ -1036,15 +1036,19 @@ const CSS = `
   .case.bas .pions{left:0; right:0; bottom:1px;} .case.haut .pions{left:0; right:0; top:1px;}
   .case.gauche .pions{top:0; bottom:0; left:1px; flex-direction:column;}
   .case.droite .pions{top:0; bottom:0; right:1px; flex-direction:column;}
+  .case.bas .pion + .pion, .case.haut .pion + .pion{margin-left:-7px;}
+  .case.gauche .pion + .pion, .case.droite .pion + .pion{margin-top:-7px;}
+  .case .pions{flex-wrap:nowrap; overflow:visible; z-index:4;}
+  .case{overflow:visible;} .case .texte, .case .bande{overflow:hidden;}
   .case .nom.long{font-size:clamp(5px, 1.3vw, 8px);} .case .nom.tres-long{font-size:clamp(4.5px, 1.15vw, 7px);}
-  .pion{width:clamp(12px, 3.8vw, 20px); height:clamp(12px, 3.8vw, 20px); border-radius:50%;
-    border:2px solid #fff; box-shadow:0 1px 3px rgba(0,0,0,0.7); color:#fff; font-weight:800;
-    font-size:clamp(7px, 2.2vw, 12px); display:flex; align-items:center; justify-content:center;
+  .pion{width:clamp(18px, 6vw, 30px); height:clamp(18px, 6vw, 30px); border-radius:50%; flex:none;
+    border:2px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,0.8); color:#fff; font-weight:900;
+    font-size:clamp(10px, 3.3vw, 17px); display:flex; align-items:center; justify-content:center;
     text-shadow:0 0 2px #000;}
   .pion.actif{animation:pulse 1s infinite; z-index:3;}
   .pion.retenu{border-color:#1B2A41; border-radius:3px; position:relative;
     background-image:repeating-linear-gradient(90deg, transparent 0 3px, rgba(0,0,0,0.75) 3px 5px) !important;}
-  .pion.retenu::after{content:'🔒'; position:absolute; top:-6px; right:-7px; font-size:9px; text-shadow:none;}
+  .pion.retenu::after{content:'🔒'; position:absolute; top:-7px; right:-8px; font-size:12px; text-shadow:none;}
   @keyframes pulse{50%{transform:scale(1.2);}}
   .centre{ grid-row:2 / 11; grid-column:2 / 11; background:#F6FAF3; display:flex; flex-direction:column;
     align-items:center; justify-content:center; padding:5px; text-align:center; gap:4px; color:var(--ink);
