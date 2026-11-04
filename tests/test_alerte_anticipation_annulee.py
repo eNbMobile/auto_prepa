@@ -97,7 +97,7 @@ class TestComparaisonAnticipations(unittest.TestCase):
         contenu = f"{LESSIVE}\n{JOUET}\n"
         phrases = ap._phrases_comparaison_anticipation(contenu, contenu)
         self.assertEqual(len(phrases), 1)
-        self.assertIn("mêmes produits anticipés : rien ne change", phrases[0])
+        self.assertEqual("La nouvelle commande reprend exactement les mêmes produits anticipés.", phrases[0])
 
     def test_produit_absent_de_la_nouvelle_commande(self):
         phrases = ap._phrases_comparaison_anticipation(f"{LESSIVE}\n{JOUET}\n", JOUET)
