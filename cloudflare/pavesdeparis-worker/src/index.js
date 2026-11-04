@@ -174,7 +174,9 @@ const CARTES = {
 
 /* Cartes d'origine ; celles de la base D1 (page de réglages) les remplacent. */
 const CARTES_ORIGINE = JSON.parse(JSON.stringify(CARTES));
-const EFFETS = ['gain', 'paie', 'aller', 'recule', 'prison', 'sortie', 'chacun', 'anniversaire'];
+const EFFETS = ['gain', 'paie', 'aller', 'recule', 'prison', 'sortie', 'chacun', 'anniversaire', 'gareProche', 'serviceProche'];
+// Effets sans valeur à régler.
+const EFFETS_SIMPLES = ['prison', 'sortie', 'gareProche', 'serviceProche'];
 const CARTES_MAX = 30;
 const TEXTE_CARTE_MAX = 400;
 
@@ -198,7 +200,7 @@ function cartesValides(brut) {
       if (!texte) continue;
       const n = parseInt(v.valeur, 10);
       const carte = { texte };
-      if (v.effet === 'prison' || v.effet === 'sortie') carte[v.effet] = true;
+      if (EFFETS_SIMPLES.includes(v.effet)) carte[v.effet] = true;
       else if (v.effet === 'aller') {
         carte.aller = Number.isInteger(n) && n >= 0 && n < PLATEAU.length ? n : 0;
         if (v.sansDepart) carte.sansDepart = true;
@@ -594,6 +596,15 @@ function appliquerCarte(salle) {
   if (carte.gain) j.argent += carte.gain;
   else if (carte.paie) payer(salle, idx, carte.paie, null);
   else if (carte.prison) envoyerAuPoste(salle, idx);
+  else if (carte.gareProche || carte.serviceProche) {
+    // Case suivante du bon type, en avançant (le passage par le Départ rapporte le salaire).
+    const type = carte.gareProche ? 'gare' : 'service';
+    let dest = j.position;
+    do { dest = (dest + 1) % PLATEAU.length; } while (PLATEAU[dest].t !== type);
+    salle.loyerSpecial = carte.serviceProche ? 'service10' : null;
+    deplacer(salle, idx, dest, true);
+    salle.loyerSpecial = null;
+  }
   else if (carte.recule) {
     deplacer(salle, idx, (j.position - carte.recule + PLATEAU.length) % PLATEAU.length, false);
   } else if (carte.aller !== undefined) deplacer(salle, idx, carte.aller, !carte.sansDepart);
@@ -620,6 +631,14 @@ function arriver(salle, idx) {
       }
     } else if (proprio !== idx && salle.hypo[pos]) {
       noter(salle, j.nom + ' arrive sur ' + c.nom + ', hypothéqué : pas de loyer.');
+    } else if (proprio !== idx && c.t === 'service' && salle.loyerSpecial === 'service10') {
+      // Carte « service public le plus proche » : on relance les dés, loyer = 10 × le total.
+      const des = lancerDes(salle);
+      animer(salle, { t: 'des', des });
+      const loyer = 10 * (des[0] + des[1]);
+      noter(salle, j.nom + ' relance les dés (' + texteDes(des) + ') et paie 10 × ' + (des[0] + des[1]) + ' = '
+        + loyer + ' € à ' + salle.joueurs[proprio].nom + ' (' + c.nom + ').');
+      payer(salle, idx, loyer, proprio);
     } else if (proprio !== idx) {
       const loyer = loyerDe(salle, pos);
       noter(salle, j.nom + ' paie ' + loyer + ' € de loyer à ' + salle.joueurs[proprio].nom + ' (' + c.nom + ').');
@@ -2725,7 +2744,8 @@ function clientNoms() {
   var EFFETS_LIBELLES = [
     ['gain', 'Gagne (€)'], ['paie', 'Paie à la banque (€)'], ['aller', 'Va à la case'], ['recule', 'Recule de (cases)'],
     ['prison', 'Va au poste'], ['sortie', 'Libéré sur parole'], ['chacun', 'Paie à chaque joueur (€)'],
-    ['anniversaire', 'Reçoit de chaque joueur (€)']
+    ['anniversaire', 'Reçoit de chaque joueur (€)'], ['gareProche', 'Va à la gare la plus proche'],
+    ['serviceProche', 'Va au service public le plus proche (si à un autre joueur : relance les dés et paie 10 ×)']
   ];
   var CARTES_COURANTES = { surprise: CARTES_REGLAGE.surprise.slice(), mairie: CARTES_REGLAGE.mairie.slice() };
   var zonesCartes = {};
@@ -2774,7 +2794,7 @@ function clientNoms() {
         lab.appendChild(coche);
         lab.appendChild(document.createTextNode(' sans toucher le Départ'));
         ligne.appendChild(lab);
-      } else if (carte.effet !== 'prison' && carte.effet !== 'sortie') {
+      } else if (['prison', 'sortie', 'gareProche', 'serviceProche'].indexOf(carte.effet) === -1) {
         var val = el('input');
         val.type = 'number';
         val.inputMode = 'numeric';
