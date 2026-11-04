@@ -86,9 +86,9 @@ const PLATEAU = [
   { t: 'rue', g: 7, nom: 'Place Vendôme', court: 'Vendôme', prix: 400 },
 ];
 
-/** Levée d'hypothèque : moitié du prix + 10 %, au 5 € supérieur. */
+/** Levée d'hypothèque : valeur hypothécaire (moitié du prix) + 10 %, arrondie à l'euro supérieur. */
 function leveDe(prix) {
-  return Math.ceil((prix * 11) / 100) * 5;
+  return Math.ceil((prix * 11) / 20); // calcul entier : pas d'erreur d'arrondi en virgule flottante
 }
 
 // Loyers par case (modifiables sur la page de réglages) :
