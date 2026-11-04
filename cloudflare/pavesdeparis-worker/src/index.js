@@ -74,7 +74,7 @@ const PLATEAU = [
   { t: 'rue', g: 5, nom: 'Place de la Concorde', court: 'Concorde', prix: 270 },
   { t: 'service', nom: 'Réseau fibre', court: 'Fibre', prix: 150 },
   { t: 'rue', g: 5, nom: 'Avenue George-V', court: 'George-V', prix: 280 },
-  { t: 'police', nom: 'Direction le poste !', court: 'Au poste !' },
+  { t: 'police', nom: 'Aller en prison', court: 'Aller en prison' },
   { t: 'rue', g: 6, nom: 'Rue de Varenne', court: 'Varenne', prix: 300 },
   { t: 'rue', g: 6, nom: "Avenue d'Iéna", court: 'Iéna', prix: 310 },
   { t: 'carte', p: 'mairie', nom: 'Caisse commune', court: 'Caisse commune' },
@@ -1513,7 +1513,7 @@ const CSS = `
   .logo.prison svg{width:clamp(18px, 5.4cqw, 70px); height:auto;}
   .logo.caisse svg{width:clamp(16px, 4.6cqw, 60px); height:auto;}
   .ico-titre svg{display:inline-block; width:1.6em; height:auto; vertical-align:-3px;}
-  .case .nom{font-size:clamp(6.5px, 1.85cqw, 25px); line-height:1.1; overflow-wrap:break-word; hyphens:auto;
+  .case .nom{font-size:clamp(5.5px, 1.55cqw, 21px); line-height:1.1; overflow-wrap:break-word; hyphens:auto;
     text-transform:uppercase;}
   .case .ico{font-size:clamp(8px, 2.4cqw, 32.2px); line-height:1;}
   .case .prix{font-size:clamp(7.5px, 2.25cqw, 27.6px); font-weight:800; color:#1B2A41; margin-top:1px;}
@@ -1550,7 +1550,7 @@ const CSS = `
   .case .pion + .pion{margin-left:-7px;}
   .case .pions{flex-wrap:nowrap; overflow:visible; z-index:4;}
   .case{overflow:visible;} .case .texte, .case .bande{overflow:hidden;}
-  .case .nom.long{font-size:clamp(6px, 1.6cqw, 22px);} .case .nom.tres-long{font-size:clamp(5.5px, 1.45cqw, 20px);}
+  .case .nom.long{font-size:clamp(5px, 1.35cqw, 18px);} .case .nom.tres-long{font-size:clamp(4.5px, 1.2cqw, 16px);}
   .pion{width:clamp(18px, 6cqw, 69px); height:clamp(18px, 6cqw, 69px); border-radius:50%; flex:none;
     border:2px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,0.8); color:#fff; font-weight:900;
     font-size:clamp(10px, 3.3cqw, 39.1px); display:flex; align-items:center; justify-content:center;
@@ -2333,7 +2333,7 @@ function client() {
         depart: 'Chaque passage rapporte ' + SALAIRE + ' €.',
         poste: 'Simple visite, sauf si on t’y conduit : il faut alors un double, ' + CAUTION + ' € ou une carte pour sortir (3 essais max).',
         pause: 'Rien ne se passe, profite du soleil.',
-        police: 'Direction le poste de police, sans passer par le Départ.',
+        police: 'Direction la prison, sans passer par le Départ.',
         carte: 'Tire une carte ' + c.nom + '.'
       }[c.t] || ''));
     }
