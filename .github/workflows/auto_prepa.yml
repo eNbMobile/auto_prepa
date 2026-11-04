@@ -289,7 +289,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/poppler-debs
-          key: poppler-${{ runner.os }}-${{ runner.arch }}-${{ steps.osver.outputs.codename }}-v2
+          key: poppler-${{ runner.os }}-${{ runner.arch }}-${{ steps.osver.outputs.codename }}-v3
 
       - name: Installer pdftotext (poppler-utils)
         if: steps.check_pdfs.outputs.has_new == 'true'
@@ -297,18 +297,24 @@ jobs:
           # Chemin rapide sans « set -e » : une erreur ici doit mener à
           # l'installation apt classique, jamais faire planter le run.
           set +e
+          D="$HOME/poppler-debs"
           if [ "${{ steps.poppler.outputs.cache-hit }}" != "true" ]; then
-            rm -rf ~/poppler-debs && mkdir -p ~/poppler-debs && cd ~/poppler-debs
+            # apt choisit lui-même toutes les dépendances absentes de l'image
+            # (aucun nom de paquet écrit en dur) et les dépose dans le cache.
+            sudo rm -rf "$D" && mkdir -p "$D/partial"
             sudo apt-get update -qq
-            LIBS=$(apt-cache depends poppler-utils | awk '/Depends: libpoppler[0-9]/ {print $2}')
-            apt-get download poppler-utils poppler-data $LIBS
+            sudo apt-get install -y -qq --download-only -o Dir::Cache::archives="$D" poppler-utils
+            sudo rm -rf "$D/partial" "$D/lock"
+            sudo chown -R "$(id -u):$(id -g)" "$D"
+            ls "$D"
           fi
-          for deb in ~/poppler-debs/*.deb; do [ -e "$deb" ] && sudo dpkg -x "$deb" /; done
+          for deb in "$D"/*.deb; do [ -e "$deb" ] && sudo dpkg -x "$deb" /; done
           sudo ldconfig
           if ! pdftotext -v >/dev/null 2>&1; then
+            pdftotext -v 2>&1 | head -3
             echo "pdftotext du cache inutilisable : installation apt classique."
             # Dossier supprimé : rien de cassé ne sera mis en cache.
-            rm -rf ~/poppler-debs
+            sudo rm -rf "$D"
             set -e
             sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils
           fi
