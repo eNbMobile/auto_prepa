@@ -13,8 +13,11 @@ URL une fois déployé : `https://pavesdeparis.coopu.workers.dev`
    et choisit la durée : 15, 25 ou 40 tours, ou sans limite.
 2. Les autres rejoignent avec le code (2 à 6 joueurs) ; l'hôte lance la partie,
    l'ordre de jeu est tiré au sort. Chacun part avec 1 500 €.
-3. À son tour : lancer les dés et avancer. Passer par le Départ rapporte 200 €.
-   - Rue, gare ou service libre : l'acheter, ou le refuser : il part alors aux
+3. À son tour : lancer les dés et avancer. Chaque téléphone rejoue le coup
+   comme sur un vrai plateau : les dés roulent, le pion avance case par case
+   et les événements s'affichent un par un. Passer par le Départ rapporte 200 €.
+   - Rue, gare ou service libre : son titre de propriété (prix, loyers nu, en
+     quartier, avec maisons et hôtel, hypothèque) s'affiche au centre ; l'acheter, ou le refuser : il part alors aux
      enchères (aussi quand le joueur n'a pas de quoi l'acheter).
    - Bien d'un autre joueur : le loyer est payé automatiquement. Loyer d'une
      rue doublé si le propriétaire a tout le quartier (même couleur), puis
@@ -23,7 +26,8 @@ URL une fois déployé : `https://pavesdeparis.coopu.workers.dev`
      Un bien hypothéqué ne rapporte rien.
    - Taxe foncière (200 €), amende de stationnement (100 €).
    - Cartes Surprise et Mairie (gains, frais, déplacements, poste de police,
-     carte « Libéré sur parole »).
+     carte « Libéré sur parole ») : la carte reste affichée au centre et son
+     effet ne s'applique que quand le joueur touche « OK ».
    - Un double fait rejouer ; trois doubles de suite envoient au poste.
 4. Au poste de police : tenter un double (3 essais, puis 50 € de caution
    obligatoire), payer 50 € tout de suite, ou utiliser une carte « Libéré sur
@@ -38,9 +42,11 @@ URL une fois déployé : `https://pavesdeparis.coopu.workers.dev`
 6. **Enchères** : chacun mise +10/+50/+100 € ou passe ; dès qu'il ne reste
    qu'un enchérisseur, il emporte le bien. Après 20 s sans nouvelle offre,
    n'importe qui peut clore l'enchère. Sans offre, le bien reste à la banque.
-7. Un joueur qui ne peut pas payer revend automatiquement ses constructions
-   puis hypothèque ses biens ; s'il reste à court, il fait faillite et ses
-   biens redeviennent libres.
+7. Un joueur qui ne peut pas payer passe dans le rouge : la partie attend qu'il
+   choisisse lui-même les maisons à revendre et les biens à hypothéquer, ou
+   qu'il déclare faillite (ses biens redeviennent libres ; un créancier ne
+   garde que ce qui a réellement pu être payé). S'il ne répond plus, un autre
+   joueur peut « Régler à sa place » après 60 s (revente automatique).
 8. La partie s'arrête quand il ne reste qu'un joueur, ou à la fin du nombre de
    tours choisi : la plus grosse fortune (argent + biens + constructions, un bien hypothéqué comptant pour moitié) gagne.
 
