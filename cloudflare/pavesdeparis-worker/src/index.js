@@ -176,7 +176,7 @@ const CARTES = {
 const CARTES_ORIGINE = JSON.parse(JSON.stringify(CARTES));
 const EFFETS = ['gain', 'paie', 'aller', 'recule', 'prison', 'sortie', 'chacun', 'anniversaire'];
 const CARTES_MAX = 30;
-const TEXTE_CARTE_MAX = 160;
+const TEXTE_CARTE_MAX = 400;
 
 /** Carte au format de la page de réglages : { texte, effet, valeur, sansDepart }. */
 function versReglage(c) {
@@ -2736,7 +2736,7 @@ function clientNoms() {
       var b = el('div', 'reglage carte-reglage');
       var texte = el('textarea');
       texte.maxLength = TEXTE_CARTE_MAX;
-      texte.rows = 2;
+      texte.rows = 3;
       texte.value = carte.texte;
       texte.oninput = function () { carte.texte = texte.value; };
       b.appendChild(texte);
