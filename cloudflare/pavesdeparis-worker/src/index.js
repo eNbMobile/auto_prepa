@@ -42,7 +42,7 @@ const PLATEAU = [
   { t: 'rue', g: 0, nom: 'Rue Mouffetard', court: 'Mouffetard', prix: 60 },
   { t: 'carte', p: 'mairie', nom: 'Caisse commune', court: 'Caisse commune' },
   { t: 'rue', g: 0, nom: 'Rue de Ménilmontant', court: 'Ménilmontant', prix: 70 },
-  { t: 'taxe', nom: 'Taxe foncière', court: 'Taxe 200 €', montant: 200 },
+  { t: 'taxe', nom: 'Taxe foncière', court: 'Taxe foncière', montant: 200 },
   { t: 'gare', nom: "Gare de l'Est", court: "G. de l'Est", prix: 200 },
   { t: 'rue', g: 1, nom: 'Rue Oberkampf', court: 'Oberkampf', prix: 100 },
   { t: 'carte', p: 'surprise', nom: 'Surprise', court: 'Surprise' },
@@ -76,7 +76,7 @@ const PLATEAU = [
   { t: 'gare', nom: 'Gare des Invalides', court: 'G. Invalides', prix: 200 },
   { t: 'carte', p: 'surprise', nom: 'Surprise', court: 'Surprise' },
   { t: 'rue', g: 7, nom: 'Avenue Montaigne', court: 'Montaigne', prix: 360 },
-  { t: 'taxe', nom: 'Amende de stationnement', court: 'Amende 100 €', montant: 100 },
+  { t: 'taxe', nom: 'Amende de stationnement', court: 'Amende', montant: 100 },
   { t: 'rue', g: 7, nom: 'Place Vendôme', court: 'Vendôme', prix: 400 },
 ];
 
@@ -1297,6 +1297,7 @@ const CSS = `
   .case .ico{font-size:clamp(8px, 2.4vw, 14px); line-height:1;}
   .case .prix{font-size:clamp(7.5px, 2.25vw, 12px); font-weight:800; color:#1B2A41; margin-top:1px;}
   .case.coin .texte{font-weight:700;} .case.coin .nom{font-size:clamp(6.5px, 1.8vw, 11px);}
+  .case .prix.taxe{color:#B00020;}
   .case .hypo{font-size:clamp(4.5px, 1.25vw, 8px); font-weight:800; color:#B00020; max-width:100%; overflow:hidden;}
   .maison{width:clamp(4px, 1.3vw, 7px); height:clamp(4px, 1.3vw, 7px); background:#1FA84A;
     border:1px solid #0B5E25; border-radius:1px;}
@@ -1770,6 +1771,7 @@ function client() {
       var lettres = c.court.length;
       texte.appendChild(el('div', 'nom' + (lettres >= 10 ? ' tres-long' : lettres >= 8 ? ' long' : ''), c.court));
       if (c.prix) texte.appendChild(el('div', 'prix', c.prix + ' €'));
+      else if (c.t === 'taxe') texte.appendChild(el('div', 'prix taxe', c.montant + ' €'));
       if (p !== null && ETAT.hypo[i]) texte.appendChild(el('div', 'hypo', 'HYPO'));
       d.appendChild(texte);
       if (p !== null) {
@@ -2007,7 +2009,7 @@ function client() {
   function rendreDetail() {
     var c = PLATEAU[CHOISIE];
     var b = el('div', 'bloc detail');
-    if (!c.prix) {
+    if (!c.prix && c.t !== 'taxe') {
       var h2 = el('h2', '', (icone(c) ? icone(c) + ' ' : '') + c.nom);
       if (c.t === 'carte' && c.p === 'mairie') h2.insertBefore(logoCaisse('ico-titre'), h2.firstChild);
       b.appendChild(h2);
@@ -2028,7 +2030,24 @@ function client() {
       if (p !== null) ligne('Loyer actuel', loyerAffiche(CHOISIE));
       if (p !== null && p === ETAT.moi && ETAT.phase === 'jeu' && !ETAT.joueurs[p].faillite) b.appendChild(rendreGestion(CHOISIE));
     } else if (c.t === 'taxe') {
-      ligne('À payer', euros(c.montant));
+      var t = el('div', 'titre-prop');
+      t.style.width = '100%';
+      var h = el('div', 'entete');
+      h.style.background = '#B00020';
+      h.appendChild(el('small', '', c.court === 'Amende' ? 'Amende' : 'Impôt'));
+      h.appendChild(document.createTextNode(c.nom));
+      t.appendChild(h);
+      var corps = el('div', 'corps');
+      var l = el('div', 'l fort');
+      l.appendChild(el('span', '', 'À payer à la banque'));
+      l.appendChild(el('span', '', euros(c.montant)));
+      corps.appendChild(l);
+      corps.appendChild(el('div', 'sep'));
+      var n = el('div', 'l');
+      n.appendChild(el('span', '', 'Quand on s\u2019arrête sur la case'));
+      corps.appendChild(n);
+      t.appendChild(corps);
+      b.appendChild(t);
     } else {
       b.appendChild(el('div', 'sous', {
         depart: 'Chaque passage rapporte ' + SALAIRE + ' €.',
