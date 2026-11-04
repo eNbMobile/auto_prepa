@@ -50,6 +50,17 @@ URL une fois déployé : `https://pavesdeparis.coopu.workers.dev`
 8. La partie s'arrête quand il ne reste qu'un joueur, ou à la fin du nombre de
    tours choisi : la plus grosse fortune (argent + biens + constructions, un bien hypothéqué comptant pour moitié) gagne.
 
+## Échanges
+
+- À tout moment (sauf pendant une enchère), « 🤝 Proposer un échange » :
+  choisir le joueur, cocher les biens qu'on donne et ceux qu'on veut, ajouter
+  de l'argent d'un côté. Le joueur visé accepte ou refuse ; celui qui propose
+  peut retirer sa proposition. Une seule proposition à la fois dans la salle.
+- Les biens d'un quartier bâti ne s'échangent pas (revendre d'abord ses
+  maisons) ; un bien hypothéqué change de main en restant hypothéqué.
+- Tout est revérifié à l'acceptation (biens, argent) ; un échange peut aider
+  un joueur à régler une dette.
+
 ## Robots
 
 - Dans la salle d'attente, l'hôte peut **ajouter des robots** (Bip, Zap, Kiwi…)
@@ -60,6 +71,9 @@ URL une fois déployé : `https://pavesdeparis.coopu.workers.dev`
 - Les robots achètent s'il leur reste de la marge, enchérissent jusqu'au prix
   (davantage pour un bien qui touche un quartier), construisent dès qu'ils ont
   un quartier, lèvent leurs hypothèques et règlent leurs dettes eux-mêmes.
+- Ils répondent aux propositions d'échange (acceptées si elles leur sont
+  nettement favorables) et proposent eux-mêmes d'acheter la rue qui leur
+  manque pour compléter un quartier.
 - Ils jouent côté serveur, au rythme des animations, tant qu'au moins un
   téléphone a la partie ouverte.
 
@@ -67,7 +81,6 @@ Si un joueur ne joue plus depuis 60 s, les autres voient « Jouer à sa place »
 (lancer de dés, ou refus d'achat). « Abandonner la partie » le met en faillite.
 On reprend sa place en rouvrant le lien sur le même téléphone.
 
-Pas encore inclus (version suivante) : échanges entre joueurs.
 
 ## Technique
 
