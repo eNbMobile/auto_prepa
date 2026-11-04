@@ -626,7 +626,7 @@ function appliquerCarte(salle) {
     const type = carte.gareProche ? 'gare' : 'service';
     let dest = j.position;
     do { dest = (dest + 1) % PLATEAU.length; } while (PLATEAU[dest].t !== type);
-    salle.loyerSpecial = carte.serviceProche ? 'service10' : null;
+    salle.loyerSpecial = carte.serviceProche ? 'service10' : 'gare2';
     deplacer(salle, idx, dest, true);
     salle.loyerSpecial = null;
   }
@@ -663,6 +663,11 @@ function arriver(salle, idx) {
       const loyer = 10 * (des[0] + des[1]);
       noter(salle, j.nom + ' relance les dés (' + texteDes(des) + ') et paie 10 × ' + (des[0] + des[1]) + ' = '
         + loyer + ' € à ' + salle.joueurs[proprio].nom + ' (' + c.nom + ').');
+      payer(salle, idx, loyer, proprio);
+    } else if (proprio !== idx && c.t === 'gare' && salle.loyerSpecial === 'gare2') {
+      // Carte « gare la plus proche » : le propriétaire touche le double du loyer normal.
+      const loyer = 2 * loyerDe(salle, pos);
+      noter(salle, j.nom + ' paie le double du loyer, ' + loyer + ' €, à ' + salle.joueurs[proprio].nom + ' (' + c.nom + ').');
       payer(salle, idx, loyer, proprio);
     } else if (proprio !== idx) {
       const loyer = loyerDe(salle, pos);
@@ -2769,7 +2774,7 @@ function clientNoms() {
   var EFFETS_LIBELLES = [
     ['gain', 'Gagne (€)'], ['paie', 'Paie à la banque (€)'], ['aller', 'Va à la case'], ['recule', 'Recule de (cases)'],
     ['prison', 'Va au poste'], ['sortie', 'Libéré sur parole'], ['chacun', 'Paie à chaque joueur (€)'],
-    ['anniversaire', 'Reçoit de chaque joueur (€)'], ['gareProche', 'Va à la gare la plus proche'],
+    ['anniversaire', 'Reçoit de chaque joueur (€)'], ['gareProche', 'Va à la gare la plus proche (si à un autre joueur : paie le double du loyer)'],
     ['serviceProche', 'Va au service public le plus proche (si à un autre joueur : relance les dés et paie 10 ×)'],
     ['reparations', 'Réparations : paie par maison / par hôtel (€)']
   ];
