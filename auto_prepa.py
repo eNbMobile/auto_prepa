@@ -1518,7 +1518,7 @@ def _phrases_comparaison_anticipation(contenu_ancien, contenu_nouveau):
         contenu_ancien, contenu_nouveau)
     if not (retires or reduits or ajoutes or augmentes):
         return ["La nouvelle commande reprend exactement les mêmes produits "
-                "anticipés : rien ne change pour les rayons."]
+                "anticipés."]
     phrases = []
     if retires:
         phrases.append(
@@ -1661,8 +1661,7 @@ def _envoyer_email_anticipation_annulee(gmail_svc, civilite, nom, prenom, num_an
     paragraphes = [
         "Bonjour,",
         (f"La commande de {client}, n°{num_ancien} {motif} et faisait partie de "
-         f"l'anticipation déjà envoyée. Son retrait du bon d'anticipation a été "
-         f"déclenché automatiquement."),
+         f"l'anticipation déjà envoyée."),
         *[escape(p) for p in (phrases_comparaison or [])],
         "Merci d'être vigilant sur les produits de cette commande.",
         "Cordialement,<br>Erwan",
@@ -1671,6 +1670,8 @@ def _envoyer_email_anticipation_annulee(gmail_svc, civilite, nom, prenom, num_an
     try:
         msg = MIMEText(corps, "html", "utf-8")
         msg["to"] = destinataire
+        if EMAIL_ANTICIPATION_2:
+            msg["cc"] = EMAIL_ANTICIPATION_2
         msg["subject"] = "Attention commande anticipée et annulée"
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
