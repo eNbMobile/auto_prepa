@@ -174,7 +174,7 @@ const CARTES = {
 
 /* Cartes d'origine ; celles de la base D1 (page de réglages) les remplacent. */
 const CARTES_ORIGINE = JSON.parse(JSON.stringify(CARTES));
-const EFFETS = ['gain', 'paie', 'aller', 'recule', 'prison', 'sortie', 'chacun', 'anniversaire', 'gareProche', 'serviceProche'];
+const EFFETS = ['gain', 'paie', 'aller', 'recule', 'prison', 'sortie', 'chacun', 'anniversaire', 'gareProche', 'serviceProche', 'reparations'];
 // Effets sans valeur à régler.
 const EFFETS_SIMPLES = ['prison', 'sortie', 'gareProche', 'serviceProche'];
 const CARTES_MAX = 30;
@@ -183,6 +183,9 @@ const TEXTE_CARTE_MAX = 400;
 /** Carte au format de la page de réglages : { texte, effet, valeur, sansDepart }. */
 function versReglage(c) {
   const effet = EFFETS.find((e) => c[e] !== undefined && c[e] !== false) || 'gain';
+  if (effet === 'reparations') {
+    return { texte: c.texte, effet, valeur: c.reparations.maison, valeur2: c.reparations.hotel, sansDepart: false };
+  }
   const valeur = typeof c[effet] === 'number' ? c[effet] : 0;
   return { texte: c.texte, effet, valeur, sansDepart: !!c.sansDepart };
 }
@@ -205,7 +208,13 @@ function cartesValides(brut) {
         carte.aller = Number.isInteger(n) && n >= 0 && n < PLATEAU.length ? n : 0;
         if (v.sansDepart) carte.sansDepart = true;
       } else if (v.effet === 'recule') carte.recule = Number.isInteger(n) && n >= 1 && n <= 12 ? n : 3;
-      else carte[v.effet] = Number.isInteger(n) && n >= 1 && n <= 5000 ? n : 10;
+      else if (v.effet === 'reparations') {
+        const n2 = parseInt(v.valeur2, 10);
+        carte.reparations = {
+          maison: Number.isInteger(n) && n >= 0 && n <= 2000 ? n : 25,
+          hotel: Number.isInteger(n2) && n2 >= 0 && n2 <= 5000 ? n2 : 100,
+        };
+      } else carte[v.effet] = Number.isInteger(n) && n >= 1 && n <= 5000 ? n : 10;
       liste.push(carte);
     }
     if (liste.length) propres[paquet] = liste;
@@ -596,6 +605,22 @@ function appliquerCarte(salle) {
   if (carte.gain) j.argent += carte.gain;
   else if (carte.paie) payer(salle, idx, carte.paie, null);
   else if (carte.prison) envoyerAuPoste(salle, idx);
+  else if (carte.reparations) {
+    // Réparations : un montant par maison (1 à 4 sur une rue) et un par hôtel.
+    let maisons = 0, hotels = 0;
+    proprietesDe(salle, idx).forEach((i) => {
+      if (salle.maisons[i] === 5) hotels++;
+      else maisons += salle.maisons[i] || 0;
+    });
+    const total = maisons * carte.reparations.maison + hotels * carte.reparations.hotel;
+    if (total) {
+      noter(salle, j.nom + ' paie ' + total + ' € de réparations (' + maisons + ' maison' + (maisons > 1 ? 's' : '')
+        + ', ' + hotels + ' hôtel' + (hotels > 1 ? 's' : '') + ').');
+      payer(salle, idx, total, null);
+    } else {
+      noter(salle, j.nom + ' n\'a aucune construction : rien à payer.');
+    }
+  }
   else if (carte.gareProche || carte.serviceProche) {
     // Case suivante du bon type, en avançant (le passage par le Départ rapporte le salaire).
     const type = carte.gareProche ? 'gare' : 'service';
@@ -2745,7 +2770,8 @@ function clientNoms() {
     ['gain', 'Gagne (€)'], ['paie', 'Paie à la banque (€)'], ['aller', 'Va à la case'], ['recule', 'Recule de (cases)'],
     ['prison', 'Va au poste'], ['sortie', 'Libéré sur parole'], ['chacun', 'Paie à chaque joueur (€)'],
     ['anniversaire', 'Reçoit de chaque joueur (€)'], ['gareProche', 'Va à la gare la plus proche'],
-    ['serviceProche', 'Va au service public le plus proche (si à un autre joueur : relance les dés et paie 10 ×)']
+    ['serviceProche', 'Va au service public le plus proche (si à un autre joueur : relance les dés et paie 10 ×)'],
+    ['reparations', 'Réparations : paie par maison / par hôtel (€)']
   ];
   var CARTES_COURANTES = { surprise: CARTES_REGLAGE.surprise.slice(), mairie: CARTES_REGLAGE.mairie.slice() };
   var zonesCartes = {};
@@ -2794,6 +2820,20 @@ function clientNoms() {
         lab.appendChild(coche);
         lab.appendChild(document.createTextNode(' sans toucher le Départ'));
         ligne.appendChild(lab);
+      } else if (carte.effet === 'reparations') {
+        [['valeur', 'par maison', 25], ['valeur2', 'par hôtel', 100]].forEach(function (x) {
+          var lab = el('label', 'rep');
+          var input = el('input');
+          input.type = 'number';
+          input.inputMode = 'numeric';
+          input.min = '0';
+          input.value = carte[x[0]] !== undefined ? carte[x[0]] : x[2];
+          carte[x[0]] = input.value;
+          input.oninput = function () { carte[x[0]] = input.value; };
+          lab.appendChild(input);
+          lab.appendChild(document.createTextNode(' € ' + x[1]));
+          ligne.appendChild(lab);
+        });
       } else if (['prison', 'sortie', 'gareProche', 'serviceProche'].indexOf(carte.effet) === -1) {
         var val = el('input');
         val.type = 'number';
@@ -2873,6 +2913,8 @@ function pageNomsHtml() {
   .effet input[type=number]{width:90px; flex:none; padding:7px;}
   .sans-depart{display:flex; align-items:center; gap:4px; margin:0; font-size:0.8rem;}
   .sans-depart input{width:18px; height:18px; margin:0;}
+  .rep{display:flex; align-items:center; gap:4px; margin:0; font-size:0.8rem;}
+  .rep input{width:80px; padding:7px;}
   .reglage{padding:8px 0 10px; border-bottom:1px solid rgba(255,255,255,0.08);}
   .ligne-nom{display:grid; grid-template-columns:14px 1fr 34%; gap:6px; align-items:center; margin:4px 0;}
   .ligne-nom input{text-align:left; padding:8px; font-size:0.9rem;}
