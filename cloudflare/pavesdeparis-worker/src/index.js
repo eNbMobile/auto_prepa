@@ -4,7 +4,7 @@
  *
  * Chacun ouvre la page sur son téléphone, crée ou rejoint une salle avec un
  * code court et joue son tour : dés, déplacement, achat de rues, loyers,
- * cartes Surprise et Mairie, poste de police, faillite et fin de partie sont
+ * cartes Surprise et Caisse commune, poste de police, faillite et fin de partie sont
  * gérés par le worker.
  *
  * L'état des salles vit dans D1 (base « skyjoenligne », table paves_salles,
@@ -38,7 +38,7 @@ const GROUPES = ['#8B5E3C', '#7EC8E3', '#D16BA5', '#F28C28', '#E03B3B', '#F2C14E
 const PLATEAU = [
   { t: 'depart', nom: 'Départ', court: 'Départ' },
   { t: 'rue', g: 0, nom: 'Rue Mouffetard', court: 'Mouffetard', prix: 60 },
-  { t: 'carte', p: 'mairie', nom: 'Mairie', court: 'Mairie' },
+  { t: 'carte', p: 'mairie', nom: 'Caisse commune', court: 'Caisse commune' },
   { t: 'rue', g: 0, nom: 'Rue de Ménilmontant', court: 'Ménilmontant', prix: 70 },
   { t: 'taxe', nom: 'Taxe foncière', court: 'Taxe 200 €', montant: 200 },
   { t: 'gare', nom: "Gare de l'Est", court: "G. de l'Est", prix: 200 },
@@ -53,7 +53,7 @@ const PLATEAU = [
   { t: 'rue', g: 2, nom: 'Rue du Bac', court: 'Bac', prix: 160 },
   { t: 'gare', nom: "Gare d'Austerlitz", court: 'G. Austerlitz', prix: 200 },
   { t: 'rue', g: 3, nom: 'Rue des Rosiers', court: 'Rosiers', prix: 180 },
-  { t: 'carte', p: 'mairie', nom: 'Mairie', court: 'Mairie' },
+  { t: 'carte', p: 'mairie', nom: 'Caisse commune', court: 'Caisse commune' },
   { t: 'rue', g: 3, nom: 'Rue de Rivoli', court: 'Rivoli', prix: 190 },
   { t: 'rue', g: 3, nom: 'Boulevard Haussmann', court: 'Haussmann', prix: 200 },
   { t: 'pause', nom: 'Pause terrasse', court: 'Terrasse' },
@@ -69,7 +69,7 @@ const PLATEAU = [
   { t: 'police', nom: 'Direction le poste !', court: 'Au poste !' },
   { t: 'rue', g: 6, nom: 'Rue de Varenne', court: 'Varenne', prix: 300 },
   { t: 'rue', g: 6, nom: "Avenue d'Iéna", court: 'Iéna', prix: 310 },
-  { t: 'carte', p: 'mairie', nom: 'Mairie', court: 'Mairie' },
+  { t: 'carte', p: 'mairie', nom: 'Caisse commune', court: 'Caisse commune' },
   { t: 'rue', g: 6, nom: 'Place Dauphine', court: 'Dauphine', prix: 320 },
   { t: 'gare', nom: 'Gare des Invalides', court: 'G. Invalides', prix: 200 },
   { t: 'carte', p: 'surprise', nom: 'Surprise', court: 'Surprise' },
@@ -454,7 +454,7 @@ function tirerCarte(salle, idx, paquet) {
   salle.derniereCarte = { paquet, texte: carte.texte, joueur: idx };
   salle.carteEnAttente = { paquet, numero };
   salle.etape = 'carte';
-  noter(salle, j.nom + ' tire une carte ' + (paquet === 'mairie' ? 'Mairie' : 'Surprise') + '.');
+  noter(salle, j.nom + ' tire une carte ' + (paquet === 'mairie' ? 'Caisse commune' : 'Surprise') + '.');
 }
 
 /** Applique la carte tirée, une fois que le joueur l'a lue (« OK »). */
@@ -1062,7 +1062,8 @@ const CSS = `
   .carte-tiree{background:#fff; border-radius:10px; padding:10px; font-size:clamp(0.75rem, 3.2vw, 1rem);
     border:3px solid; max-width:92%; box-shadow:0 3px 10px rgba(0,0,0,0.2);}
   .carte-tiree b{display:block; margin-bottom:4px;}
-  .carte-tiree.surprise{border-color:#F28C28;} .carte-tiree.mairie{border-color:#2B4C9B;}
+  .carte-tiree.surprise{border-color:#F28C28;} .carte-tiree.mairie{border-color:#1F5FBF;}
+  .case .ico{display:block;} .ico-titre svg{vertical-align:-3px;}
   .titre-prop{background:#fff; border:2px solid #1B2A41; border-radius:6px; width:min(92%, 260px);
     font-size:clamp(0.6rem, 2.5vw, 0.85rem); box-shadow:0 3px 10px rgba(0,0,0,0.2); overflow:hidden;}
   .titre-prop .entete{padding:4px; color:#fff; font-weight:800; text-shadow:0 0 3px rgba(0,0,0,0.6);}
@@ -1405,7 +1406,7 @@ function client() {
     return [1 + (i - 30), 11];
   }
   function icone(c) {
-    return { depart: '➜', poste: '🚓', pause: '☕', police: '👮', carte: c.p === 'mairie' ? '🏛️' : '❓',
+    return { depart: '➜', poste: '🚓', pause: '☕', police: '👮', carte: c.p === 'mairie' ? '' : '❓',
       gare: '🚆', service: c.court === 'Gaz' ? '🔥' : '📶', taxe: '💶' }[c.t] || '';
   }
   function loyerAffiche(i) {
@@ -1425,6 +1426,18 @@ function client() {
     }
     var deux = p !== null && PLATEAU.filter(function (x, k) { return x.t === 'service' && ETAT.proprio[k] === p; }).length === 2;
     return (deux ? '10' : '4') + ' × les dés';
+  }
+
+  /** Logo de la Caisse commune : un coffre bleu cerclé de doré. */
+  function logoCaisse(classe) {
+    var d = el('span', classe);
+    d.innerHTML = '<svg viewBox="0 0 24 20" width="1.3em" height="1.1em" aria-hidden="true">'
+      + '<path d="M3 8 Q3 2 12 2 Q21 2 21 8 Z" fill="#3A7BD5" stroke="#12356B" stroke-width="1.2"/>'
+      + '<rect x="2" y="8" width="20" height="10" rx="1.5" fill="#1F5FBF" stroke="#12356B" stroke-width="1.2"/>'
+      + '<rect x="2" y="7" width="20" height="2.4" fill="#F2C14E" stroke="#12356B" stroke-width="0.8"/>'
+      + '<rect x="10" y="8" width="4" height="5" rx="0.8" fill="#F2C14E" stroke="#12356B" stroke-width="0.8"/>'
+      + '<circle cx="12" cy="11.3" r="0.8" fill="#12356B"/></svg>';
+    return d;
   }
 
   function orientation(i) {
@@ -1452,7 +1465,8 @@ function client() {
         d.appendChild(bande);
       }
       var texte = el('div', 'texte');
-      if (c.t !== 'rue') texte.appendChild(el('div', 'ico', icone(c)));
+      if (c.t === 'carte' && c.p === 'mairie') texte.appendChild(logoCaisse('ico'));
+      else if (c.t !== 'rue') texte.appendChild(el('div', 'ico', icone(c)));
       var lettres = c.court.length;
       texte.appendChild(el('div', 'nom' + (lettres >= 10 ? ' tres-long' : lettres >= 8 ? ' long' : ''), c.court));
       if (c.prix) texte.appendChild(el('div', 'prix', c.prix + ' €'));
@@ -1571,8 +1585,15 @@ function client() {
 
     if (ETAT.etape === 'carte' && ETAT.derniereCarte) {
       var carte = el('div', 'carte-tiree ' + ETAT.derniereCarte.paquet);
-      carte.appendChild(el('b', '', (ETAT.derniereCarte.paquet === 'mairie' ? '🏛️ Mairie' : '❓ Surprise')
-        + (monTour ? '' : ' — ' + courant.nom)));
+      var entete = el('b');
+      if (ETAT.derniereCarte.paquet === 'mairie') {
+        entete.appendChild(logoCaisse('ico-titre'));
+        entete.appendChild(document.createTextNode(' Caisse commune'));
+      } else {
+        entete.appendChild(document.createTextNode('❓ Surprise'));
+      }
+      if (!monTour) entete.appendChild(document.createTextNode(' — ' + courant.nom));
+      carte.appendChild(entete);
       carte.appendChild(document.createTextNode(ETAT.derniereCarte.texte));
       c.appendChild(carte);
       if (monTour) boutons.appendChild(bouton('OK', 'btn-or', function () { agir('okCarte'); }));
@@ -1684,7 +1705,11 @@ function client() {
   function rendreDetail() {
     var c = PLATEAU[CHOISIE];
     var b = el('div', 'bloc detail');
-    if (!c.prix) b.appendChild(el('h2', '', icone(c) + ' ' + c.nom));
+    if (!c.prix) {
+      var h2 = el('h2', '', (icone(c) ? icone(c) + ' ' : '') + c.nom);
+      if (c.t === 'carte' && c.p === 'mairie') h2.insertBefore(logoCaisse('ico-titre'), h2.firstChild);
+      b.appendChild(h2);
+    }
     function ligne(g, d) {
       var l = el('div', 'ligne');
       l.appendChild(el('span', '', g));
