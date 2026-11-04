@@ -1308,8 +1308,8 @@ const CSS = `
   .case.bas{flex-direction:column;} .case.haut{flex-direction:column-reverse;}
   .case.gauche{flex-direction:row-reverse;} .case.droite{flex-direction:row;}
   .case .bande{flex:none; display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:1px;}
-  .case.bas .bande, .case.haut .bande{height:24%; width:100%;}
-  .case.gauche .bande, .case.droite .bande{width:24%; height:100%; flex-direction:column;}
+  .case.bas .bande, .case.haut .bande{height:30%; width:100%;}
+  .case.gauche .bande, .case.droite .bande{width:30%; height:100%; flex-direction:column;}
   .case .texte{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
     padding:1px; min-width:0; min-height:0;}
   .case .nom{font-size:clamp(5.5px, 1.55vw, 9px); word-break:break-word; hyphens:auto;}
@@ -1318,10 +1318,10 @@ const CSS = `
   .case.coin .texte{font-weight:700;} .case.coin .nom{font-size:clamp(6.5px, 1.8vw, 11px);}
   .case .prix.taxe{color:#B00020;}
   .case .hypo{font-size:clamp(4.5px, 1.25vw, 8px); font-weight:800; color:#B00020; max-width:100%; overflow:hidden;}
-  .maison{width:clamp(4px, 1.3vw, 7px); height:clamp(4px, 1.3vw, 7px); background:#1FA84A;
-    border:1px solid #0B5E25; border-radius:1px;}
-  .hotel{width:clamp(9px, 2.8vw, 15px); height:clamp(5px, 1.5vw, 8px); background:#D62828;
-    border:1px solid #7A0A0A; border-radius:1px;}
+  .maison{width:clamp(6px, 1.85vw, 11px); height:clamp(6px, 1.85vw, 11px); background:#1FA84A;
+    border:1px solid #0B5E25; border-radius:2px; box-shadow:0 1px 1px rgba(0,0,0,0.35);}
+  .hotel{width:clamp(12px, 3.8vw, 22px); height:clamp(8px, 2.4vw, 13px); background:#D62828;
+    border:1px solid #7A0A0A; border-radius:2px; box-shadow:0 1px 1px rgba(0,0,0,0.35);}
   .enchere{background:#fff; border:2px solid var(--or); border-radius:8px; padding:5px 8px;
     font-size:clamp(0.65rem, 2.6vw, 0.9rem); max-width:96%;}
   .gestion{display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;}
