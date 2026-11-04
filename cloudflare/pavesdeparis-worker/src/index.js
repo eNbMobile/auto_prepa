@@ -25,6 +25,8 @@ const TOURS_DEFAUT = 25;
 const CASE_POSTE = 10;
 const DELAI_ENCHERE_S = 20;
 const MISE_MAX = 5000;
+const NOMS_ROBOTS = ['Bip', 'Zap', 'Kiwi', 'Pixel', 'Momo', 'Tic'];
+const REFLEXION_ROBOT_MS = 1200;
 // Loyer d'une rue selon ses constructions (0 à 4 maisons, 5 = hôtel), en multiples du loyer de base.
 const MULT_MAISONS = [1, 5, 15, 40, 55, 70];
 // Coût d'une maison (ou de l'hôtel) par quartier.
@@ -241,7 +243,7 @@ function couleurLibre(salle) {
 
 function demarrer(salle) {
   melanger(salle.joueurs);
-  for (const j of salle.joueurs) Object.assign(j, nouveauJoueur(j.jeton, j.nom, j.couleur));
+  for (const j of salle.joueurs) Object.assign(j, nouveauJoueur(j.jeton, j.nom, j.couleur), { robot: !!j.robot });
   salle.proprio = PLATEAU.map(() => null);
   salle.maisons = PLATEAU.map(() => 0);
   salle.hypo = PLATEAU.map(() => false);
@@ -753,6 +755,35 @@ function appliquerAction(salle, jeton, action, valeur) {
     salle.dernierCoup = Date.now();
     return;
   }
+  if (action === 'ajouterRobot') {
+    if (salle.phase !== 'attente') refuser('La partie a déjà commencé.');
+    if (salle.hote !== jeton) refuser('Seul l\'hôte ajoute des robots.');
+    if (salle.joueurs.length >= MAX_JOUEURS) refuser('La salle est complète (' + MAX_JOUEURS + ' joueurs).');
+    const pris = salle.joueurs.map((j) => j.nom.toLowerCase());
+    const nom = NOMS_ROBOTS.find((n) => !pris.includes(n.toLowerCase())) || ('Robot ' + (salle.joueurs.length + 1));
+    const jetonRobot = 'robot-' + Array.from(crypto.getRandomValues(new Uint8Array(8)), (o) => o.toString(16).padStart(2, '0')).join('');
+    salle.joueurs.push(Object.assign(nouveauJoueur(jetonRobot, nom, couleurLibre(salle)), { robot: true }));
+    noter(salle, 'Le robot ' + nom + ' rejoint la salle.');
+    return;
+  }
+  if (action === 'retirerRobot') {
+    if (salle.phase !== 'attente') refuser('La partie a déjà commencé.');
+    if (salle.hote !== jeton) refuser('Seul l\'hôte retire des robots.');
+    const k = parseInt(valeur, 10);
+    const r = salle.joueurs[k];
+    if (!r || !r.jeton.startsWith('robot-')) refuser('Ce joueur n\'est pas un robot.');
+    salle.joueurs.splice(k, 1);
+    return;
+  }
+  if (action === 'robot') {
+    if (salle.phase !== 'jeu') refuser('Pas de partie en cours.');
+    const k = parseInt(valeur, 10);
+    const r = salle.joueurs[k];
+    if (!r || r.faillite) refuser('Joueur introuvable.');
+    r.robot = !r.robot;
+    noter(salle, r.robot ? 'Un robot joue maintenant pour ' + r.nom + '.' : r.nom + ' reprend la main.');
+    return;
+  }
   if (action === 'nouvelle') {
     if (salle.phase !== 'fin') refuser('La partie n\'est pas finie.');
     if (salle.hote !== jeton) refuser('Seul l\'hôte relance une partie.');
@@ -786,6 +817,15 @@ function appliquerAction(salle, jeton, action, valeur) {
     if (salle.etape === 'dette' && salle.joueurs[moi].argent >= 0) refuser('Attends que les dettes soient réglées.');
     actionGestion(salle, moi, action, parseInt(valeur, 10));
     verifierDettes(salle);
+    return;
+  }
+  if (action === 'robotDette') {
+    const r = salle.joueurs[moi];
+    if (!r.robot || salle.etape !== 'dette' || r.argent >= 0) refuser('Rien à régler.');
+    liquider(salle, moi, 0);
+    if (r.argent < 0) faillite(salle, moi);
+    verifierDettes(salle);
+    salle.dernierCoup = Date.now();
     return;
   }
   if (action === 'faillite') {
@@ -858,6 +898,95 @@ function appliquerAction(salle, jeton, action, valeur) {
   salle.dernierCoup = Date.now();
 }
 
+/* ----------------------------------------------------------------- robots */
+
+/** Durée de l'animation du dernier coup sur les téléphones (même rythme que le client). */
+function dureeAnimation(anim) {
+  if (!anim) return 0;
+  let ms = 300;
+  for (const e of anim.etapes) {
+    if (e.t === 'des') ms += 1030;
+    else if (e.t === 'pas') ms += 260 * (((e.recule ? e.de - e.a : e.a - e.de) + PLATEAU.length) % PLATEAU.length + 1) + 300;
+    else if (e.t === 'saut') ms += 800;
+    else ms += 1400;
+  }
+  return ms;
+}
+
+function robotEstDu(salle) {
+  if (salle.phase !== 'jeu' || !salle.joueurs.some((j) => j.robot && !j.faillite)) return false;
+  return Date.now() - (salle.horodatage || 0) >= dureeAnimation(salle.anim) + REFLEXION_ROBOT_MS;
+}
+
+/** Coup qu'un robot doit jouer maintenant, ou null si c'est à un humain. */
+function choisirCoupRobot(salle) {
+  const J = salle.joueurs;
+  if (salle.etape === 'enchere' && salle.enchere) {
+    const e = salle.enchere;
+    const r = enLice(salle).find((i) => J[i].robot);
+    if (r === undefined) return null;
+    const c = PLATEAU[e.case];
+    const mise = e.prix + (e.prix < c.prix / 2 ? 50 : 10);
+    // Plus offensif si le bien complète (ou bloque) un quartier.
+    const utile = c.t === 'rue' && ruesDuQuartier(c.g).some((k) => k !== e.case && salle.proprio[k] !== null);
+    const veut = mise <= c.prix * (utile ? 1.5 : 1) && J[r].argent - mise >= 100;
+    return { jeton: J[r].jeton, action: veut ? 'miser' : 'passerEnchere', valeur: mise };
+  }
+  if (salle.etape === 'dette') {
+    const r = debiteurs(salle).find((i) => J[i].robot);
+    return r === undefined ? null : { jeton: J[r].jeton, action: 'robotDette' };
+  }
+  const t = J[salle.tour];
+  if (!t || !t.robot || t.faillite) return null;
+  const coup = (action, valeur) => ({ jeton: t.jeton, action, valeur });
+  if (salle.etape === 'achat') return coup(t.argent - PLATEAU[t.position].prix >= 50 ? 'acheter' : 'passer');
+  if (salle.etape === 'carte') return coup('okCarte');
+  if (salle.etape === 'prison') return coup(t.cartesSortie.length ? 'carte' : (t.argent >= 400 ? 'caution' : 'lancer'));
+  if (salle.etape !== 'lancer') return null;
+  // Avant de lancer : construire s'il a un quartier et de la marge, ou lever une hypothèque.
+  const mien = proprietesDe(salle, salle.tour);
+  for (const i of mien) {
+    const c = PLATEAU[i];
+    if (c.t !== 'rue' || salle.maisons[i] >= 5 || !quartierEntier(salle, c.g, salle.tour)) continue;
+    const rues = ruesDuQuartier(c.g);
+    if (rues.some((k) => salle.hypo[k])) continue;
+    if (salle.maisons[i] > Math.min(...rues.map((k) => salle.maisons[k]))) continue;
+    if (t.argent - c.maison >= 200) return coup('construire', i);
+  }
+  const hypo = mien.find((i) => salle.hypo[i] && t.argent - PLATEAU[i].leve >= 500);
+  if (hypo !== undefined) return coup('lever', hypo);
+  return coup('lancer');
+}
+
+/**
+ * Fait jouer un robot si c'est son tour et que l'animation précédente est
+ * finie. Appelé à chaque interrogation d'état : ce sont les téléphones
+ * connectés qui « réveillent » les robots.
+ */
+async function faireJouerRobot(env, code, courant) {
+  if (!robotEstDu(courant.salle)) return courant;
+  const coup = choisirCoupRobot(courant.salle);
+  if (!coup) return courant;
+  let salle = JSON.parse(JSON.stringify(courant.salle));
+  try {
+    appliquerAction(salle, coup.jeton, coup.action, coup.valeur);
+  } catch (err) {
+    if (!(err instanceof ErreurJeu)) throw err;
+    // Coup refusé (cas imprévu) : le robot se contente de jouer le coup le plus simple.
+    salle = JSON.parse(JSON.stringify(courant.salle));
+    const repli = { achat: 'passer', carte: 'okCarte', enchere: 'passerEnchere' }[salle.etape] || 'lancer';
+    try { appliquerAction(salle, coup.jeton, repli); } catch (err2) { return courant; }
+  }
+  salle.horodatage = Date.now();
+  const version = courant.version + 1;
+  const res = await bdd(env)
+    .prepare('UPDATE paves_salles SET etat = ?, version = ?, maj = ? WHERE code = ? AND version = ?')
+    .bind(JSON.stringify(salle), version, new Date().toISOString(), code, courant.version)
+    .run();
+  if (res.meta.changes === 1) return { version, salle };
+  return (await lireSalle(env, code)) || courant;
+}
+
 function vuePour(salle, version, jeton) {
   const moi = indexJoueur(salle, jeton);
   return {
@@ -897,6 +1026,7 @@ function vuePour(salle, version, jeton) {
       essais: j.essais,
       cartesSortie: j.cartesSortie.length,
       faillite: j.faillite,
+      robot: !!j.robot,
       fortune: fortune(salle, i),
     })),
   };
@@ -1027,6 +1157,9 @@ const CSS = `
   .gestion button{flex:1 1 45%; background:rgba(255,255,255,0.15); color:var(--panel); padding:8px;}
   .gestion button.btn-or{background:var(--or); color:var(--ink);}
   .titre-mini.hypo{opacity:0.35;}
+  .case-robot{display:flex; align-items:center; gap:4px; margin:6px 0 0; font-size:0.8rem; color:var(--muted); cursor:pointer;}
+  .case-robot input{width:18px; height:18px; margin:0; flex:none;}
+  button.mini{margin-left:auto; padding:3px 8px; font-size:0.75rem; background:rgba(255,255,255,0.15); color:var(--panel);}
   table.loyers{width:100%; font-size:0.8rem; border-collapse:collapse; margin-top:6px; color:var(--muted);}
   table.loyers td{padding:2px 0;} table.loyers td:last-child{text-align:right;}
   table.loyers tr.actuel td{color:var(--or); font-weight:700;}
@@ -1064,7 +1197,7 @@ const CSS = `
   .carte-tiree b{display:block; margin-bottom:4px;}
   .carte-tiree.surprise{border-color:#F28C28;} .carte-tiree.mairie{border-color:#1F5FBF;}
   .case .ico{display:block;} .ico-titre svg{vertical-align:-3px;}
-  .titre-prop{background:#fff; border:2px solid #1B2A41; border-radius:6px; width:min(92%, 260px);
+  .titre-prop{background:#fff; color:var(--ink); border:2px solid #1B2A41; border-radius:6px; width:min(92%, 260px);
     font-size:clamp(0.6rem, 2.5vw, 0.85rem); box-shadow:0 3px 10px rgba(0,0,0,0.2); overflow:hidden;}
   .titre-prop .entete{padding:4px; color:#fff; font-weight:800; text-shadow:0 0 3px rgba(0,0,0,0.6);}
   .titre-prop .entete small{display:block; font-weight:600; font-size:0.8em;}
@@ -1373,10 +1506,17 @@ function client() {
       var p = el('span', 'pastille');
       p.style.background = j.couleur;
       li.appendChild(p);
-      li.appendChild(el('span', '', j.nom + (i === ETAT.hote ? ' (hôte)' : '') + (i === ETAT.moi ? ' — toi' : '')));
+      li.appendChild(el('span', '', (j.robot ? '🤖 ' : '') + j.nom + (i === ETAT.hote ? ' (hôte)' : '') + (i === ETAT.moi ? ' — toi' : '')));
+      if (j.robot && ETAT.moi === ETAT.hote) {
+        var retirer = bouton('retirer', 'mini', function () { agir('retirerRobot', i); });
+        li.appendChild(retirer);
+      }
       ul.appendChild(li);
     });
     b.appendChild(ul);
+    if (ETAT.moi === ETAT.hote && ETAT.joueurs.length < MAX_JOUEURS) {
+      b.appendChild(bouton('🤖 Ajouter un robot', 'second', function () { agir('ajouterRobot'); }));
+    }
     if (ETAT.moi === ETAT.hote) {
       var go = bouton('Lancer la partie', 'principal', function () { agir('demarrer'); });
       go.disabled = ETAT.joueurs.length < MIN_JOUEURS;
@@ -1564,10 +1704,12 @@ function client() {
 
     var courant = ETAT.joueurs[ETAT.tour];
     var moi = ETAT.moi !== null ? ETAT.joueurs[ETAT.moi] : null;
-    var monTour = ETAT.tour === ETAT.moi;
+    var remplace = moi && moi.robot;
+    var monTour = ETAT.tour === ETAT.moi && !remplace;
     var boutons = el('div', 'boutons');
     var inactif = (Date.now() - ECART - ETAT.dernierCoup) / 1000;
-    var peutForcer = moi && !moi.faillite && inactif > ETAT.delaiInactif;
+    var peutForcer = moi && !moi.faillite && !remplace && !courant.robot && inactif > ETAT.delaiInactif;
+    if (remplace) c.appendChild(el('div', 'info', '🤖 Un robot joue pour toi (décoche « Robot » pour reprendre).'));
 
     if (ETAT.etape === 'achat') {
       c.appendChild(titrePropriete(courant.position, false));
@@ -1614,7 +1756,7 @@ function client() {
       var restants = ETAT.joueurs.filter(function (j, k) { return !j.faillite && e.passe.indexOf(k) === -1 && k !== e.meneur; })
         .map(function (j) { return j.nom; });
       if (restants.length) c.appendChild(el('div', 'info', 'En attente : ' + restants.join(', ')));
-      var peutMiser = moi && !moi.faillite && e.passe.indexOf(ETAT.moi) === -1;
+      var peutMiser = moi && !moi.faillite && !remplace && e.passe.indexOf(ETAT.moi) === -1;
       if (peutMiser && e.meneur === ETAT.moi) {
         c.appendChild(el('div', 'info', 'Tu mènes l\u2019enchère.'));
       } else if (peutMiser) {
@@ -1639,7 +1781,7 @@ function client() {
       dette.forEach(function (j) {
         c.appendChild(el('div', 'info', j.nom + ' doit trouver ' + euros(-j.argent) + '.'));
       });
-      if (moi && moi.argent < 0) {
+      if (moi && moi.argent < 0 && !remplace) {
         var possible = moi.argent + ETAT.ressources[ETAT.moi] >= 0;
         c.appendChild(el('div', 'message', possible
           ? 'Choisis ci-dessous les maisons à revendre ou les biens à hypothéquer.'
@@ -1672,7 +1814,7 @@ function client() {
         if (moi.cartesSortie) boutons.appendChild(bouton('Libéré sur parole', 'btn-gris', function () { agir('carte'); }));
       }
     } else {
-      c.appendChild(el('div', 'info', 'Au tour de ' + courant.nom));
+      c.appendChild(el('div', 'info', 'Au tour de ' + (courant.robot ? '🤖 ' : '') + courant.nom + (courant.robot ? ' (robot)' : '')));
       if (peutForcer) boutons.appendChild(bouton('Jouer à sa place', 'btn-gris', function () { agir('forcer'); }));
     }
     c.appendChild(boutons);
@@ -1779,13 +1921,23 @@ function client() {
       var f = el('div', 'fiche' + (i === ETAT.tour && ETAT.phase === 'jeu' ? ' son-tour' : '') + (j.faillite ? ' ko' : ''));
       f.style.borderLeftColor = j.couleur;
       var h = el('div', 'haut');
-      h.appendChild(el('span', '', j.nom + (i === ETAT.moi ? ' (toi)' : '')));
+      h.appendChild(el('span', '', (j.robot ? '🤖 ' : '') + j.nom + (i === ETAT.moi ? ' (toi)' : '')));
       h.appendChild(el('span', '', j.faillite ? 'faillite' : euros(j.argent)));
       f.appendChild(h);
       if (!j.faillite) {
         var info = (j.enPrison ? 'Retenu au poste 🔒' : PLATEAU[j.position].court)
           + (j.cartesSortie ? ' · 🎟️ ' + j.cartesSortie : '') + ' · fortune ' + euros(j.fortune);
         f.appendChild(el('div', 'bas', info));
+      }
+      if (ETAT.phase === 'jeu' && !j.faillite) {
+        var lab = el('label', 'case-robot');
+        var coche = el('input');
+        coche.type = 'checkbox';
+        coche.checked = !!j.robot;
+        coche.onchange = function () { agir('robot', i); };
+        lab.appendChild(coche);
+        lab.appendChild(document.createTextNode(' 🤖 Robot' + (j.robot ? ' (joue à sa place)' : '')));
+        f.appendChild(lab);
       }
       var t = el('div', 'titres');
       ETAT.proprio.forEach(function (p, k) {
@@ -1822,7 +1974,8 @@ function client() {
   function rendreJeu() {
     app.appendChild(rendrePlateau());
     app.appendChild(zoneStatut());
-    if (!ANIM && ETAT.phase === 'jeu' && ETAT.etape === 'dette' && ETAT.moi !== null && ETAT.joueurs[ETAT.moi].argent < 0) {
+    if (!ANIM && ETAT.phase === 'jeu' && ETAT.etape === 'dette' && ETAT.moi !== null && ETAT.joueurs[ETAT.moi].argent < 0
+      && !ETAT.joueurs[ETAT.moi].robot) {
       app.appendChild(rendreDette());
     }
     if (ETAT.phase === 'fin') app.appendChild(rendreClassement());
@@ -1869,6 +2022,7 @@ function pageHtml(joueursConnus) {
     + 'var TOURS = ' + toScriptJson(TOURS_CHOIX) + ';'
     + 'var TOURS_DEFAUT = ' + TOURS_DEFAUT + ';'
     + 'var MIN_JOUEURS = ' + MIN_JOUEURS + ';'
+    + 'var MAX_JOUEURS = ' + MAX_JOUEURS + ';'
     + 'var SALAIRE = ' + SALAIRE + ';'
     + 'var CAUTION = ' + CAUTION + ';'
     + 'var MULT_MAISONS = ' + toScriptJson(MULT_MAISONS) + ';'
@@ -1903,8 +2057,9 @@ export default {
         const code = normaliserCode(url.searchParams.get('code'));
         const jeton = jetonValide(url.searchParams.get('jeton'));
         if (!code || !jeton) return erreur('Requête incomplète.');
-        const courant = await lireSalle(env, code);
+        let courant = await lireSalle(env, code);
         if (!courant) return erreur('Salle introuvable ou expirée.', 404);
+        courant = await faireJouerRobot(env, code, courant);
         const connue = parseInt(url.searchParams.get('v') || '0', 10);
         if (connue === courant.version) return json({ inchange: true, version: courant.version });
         return json(vuePour(courant.salle, courant.version, jeton));
@@ -1955,6 +2110,7 @@ export default {
           if (!code) return erreur('Code de salle invalide.');
           const apres = await modifierSalle(env, code, (salle) => {
             appliquerAction(salle, jeton, String(corps.action || ''), corps.valeur);
+            salle.horodatage = Date.now();
           });
           return json(vuePour(apres.salle, apres.version, jeton));
         }
