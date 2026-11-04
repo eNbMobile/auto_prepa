@@ -276,26 +276,40 @@ jobs:
       # pdftotext : paquets .deb gardés en cache et simplement décompressés
       # (≈ 1 s) au lieu de l'action cache-apt-pkgs (2 à 7 s selon les runs).
       # Sur cache vide ou version incompatible : apt-get classique.
+      # La clé suit la version d'Ubuntu du runner (ubuntu-latest change de
+      # version sans prévenir) et le nom de la lib n'est jamais écrit en dur.
+      - name: Version d'Ubuntu (clé du cache pdftotext)
+        id: osver
+        if: steps.check_pdfs.outputs.has_new == 'true'
+        run: echo "codename=$(. /etc/os-release && echo "$VERSION_CODENAME")" >> "$GITHUB_OUTPUT"
+
       - name: Restaurer pdftotext
         id: poppler
         if: steps.check_pdfs.outputs.has_new == 'true'
         uses: actions/cache@v4
         with:
           path: ~/poppler-debs
-          key: poppler-${{ runner.os }}-${{ runner.arch }}-noble-v1
+          key: poppler-${{ runner.os }}-${{ runner.arch }}-${{ steps.osver.outputs.codename }}-v2
 
       - name: Installer pdftotext (poppler-utils)
         if: steps.check_pdfs.outputs.has_new == 'true'
         run: |
+          # Chemin rapide sans « set -e » : une erreur ici doit mener à
+          # l'installation apt classique, jamais faire planter le run.
+          set +e
           if [ "${{ steps.poppler.outputs.cache-hit }}" != "true" ]; then
-            mkdir -p ~/poppler-debs && cd ~/poppler-debs
+            rm -rf ~/poppler-debs && mkdir -p ~/poppler-debs && cd ~/poppler-debs
             sudo apt-get update -qq
-            apt-get download poppler-utils libpoppler134 poppler-data
+            LIBS=$(apt-cache depends poppler-utils | awk '/Depends: libpoppler[0-9]/ {print $2}')
+            apt-get download poppler-utils poppler-data $LIBS
           fi
-          for deb in ~/poppler-debs/*.deb; do sudo dpkg -x "$deb" /; done
+          for deb in ~/poppler-debs/*.deb; do [ -e "$deb" ] && sudo dpkg -x "$deb" /; done
           sudo ldconfig
           if ! pdftotext -v >/dev/null 2>&1; then
             echo "pdftotext du cache inutilisable : installation apt classique."
+            # Dossier supprimé : rien de cassé ne sera mis en cache.
+            rm -rf ~/poppler-debs
+            set -e
             sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils
           fi
           pdftotext -v 2>&1 | head -1
