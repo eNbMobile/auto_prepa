@@ -50,6 +50,19 @@ URL une fois déployé : `https://pavesdeparis.coopu.workers.dev`
 8. La partie s'arrête quand il ne reste qu'un joueur, ou à la fin du nombre de
    tours choisi : la plus grosse fortune (argent + biens + constructions, un bien hypothéqué comptant pour moitié) gagne.
 
+## Robots
+
+- Dans la salle d'attente, l'hôte peut **ajouter des robots** (Bip, Zap, Kiwi…)
+  pour compléter la table, et les retirer avant de lancer.
+- Pendant la partie, chaque fiche de joueur a une case **« 🤖 Robot »** : cochée,
+  un robot joue à la place de ce joueur (pratique si quelqu'un s'absente) ;
+  le joueur la décoche à son retour pour reprendre la main.
+- Les robots achètent s'il leur reste de la marge, enchérissent jusqu'au prix
+  (davantage pour un bien qui touche un quartier), construisent dès qu'ils ont
+  un quartier, lèvent leurs hypothèques et règlent leurs dettes eux-mêmes.
+- Ils jouent côté serveur, au rythme des animations, tant qu'au moins un
+  téléphone a la partie ouverte.
+
 Si un joueur ne joue plus depuis 60 s, les autres voient « Jouer à sa place »
 (lancer de dés, ou refus d'achat). « Abandonner la partie » le met en faillite.
 On reprend sa place en rouvrant le lien sur le même téléphone.
