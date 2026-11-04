@@ -1281,6 +1281,15 @@ const CSS = `
     font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding:12px 12px 28px; }
   @media (max-width:520px){ body{padding:6px 4px 28px;} .bloc, .joueurs{margin-left:4px; margin-right:4px;} }
   .wrap{max-width:640px; margin:0 auto;}
+  .centre .titre-prop{font-size:clamp(0.6rem, 2.5cqw, 1.9rem); width:min(92%, 62cqw);}
+  /* Écran large (PC) : plateau à gauche, aussi grand que la hauteur le permet ; infos à droite. */
+  @media (min-width:1000px){
+    .wrap.large{max-width:1800px;}
+    .cadre-jeu{display:grid; grid-template-columns:min(calc(100vh - 28px), 66vw) minmax(320px, 1fr);
+      gap:18px; align-items:start;}
+    .col-infos{max-height:calc(100vh - 28px); overflow-y:auto; padding-right:4px;}
+    .col-infos > .second:first-child, .col-infos > .bloc:first-child{margin-top:0;}
+  }
   h1{text-align:center; font-size:1.6rem; margin:4px 0 2px; letter-spacing:0.5px;}
   .sous{text-align:center; color:var(--muted); font-size:0.85rem; margin-bottom:14px;}
   .bloc{background:rgba(255,255,255,0.07); border-radius:14px; padding:12px; margin-bottom:10px;}
@@ -1300,7 +1309,7 @@ const CSS = `
   .liste-j li{display:flex; align-items:center; gap:8px; padding:6px 0;}
   .pastille{width:14px; height:14px; border-radius:50%; display:inline-block; flex:none; border:2px solid #fff;}
 
-  .plateau{ display:grid; grid-template-columns:minmax(0, 1.9fr) repeat(9, minmax(0, 1fr)) minmax(0, 1.9fr);
+  .plateau{ container-type:inline-size; display:grid; grid-template-columns:minmax(0, 1.9fr) repeat(9, minmax(0, 1fr)) minmax(0, 1.9fr);
     grid-template-rows:minmax(0, 1.9fr) repeat(9, minmax(0, 1fr)) minmax(0, 1.9fr); gap:1px; background:#3D5A40;
     border:2px solid #3D5A40; border-radius:6px; aspect-ratio:1/1; width:100%; color:var(--ink); }
   .case{ background:var(--plateau); position:relative; overflow:hidden; display:flex; min-width:0; min-height:0;
@@ -1312,18 +1321,18 @@ const CSS = `
   .case.gauche .bande, .case.droite .bande{width:30%; height:100%; flex-direction:column;}
   .case .texte{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
     padding:1px; min-width:0; min-height:0;}
-  .case .nom{font-size:clamp(5.5px, 1.55vw, 9px); word-break:break-word; hyphens:auto;}
-  .case .ico{font-size:clamp(8px, 2.4vw, 14px); line-height:1;}
-  .case .prix{font-size:clamp(7.5px, 2.25vw, 12px); font-weight:800; color:#1B2A41; margin-top:1px;}
-  .case.coin .texte{font-weight:700;} .case.coin .nom{font-size:clamp(6.5px, 1.8vw, 11px);}
+  .case .nom{font-size:clamp(5.5px, 1.55cqw, 20.7px); word-break:break-word; hyphens:auto;}
+  .case .ico{font-size:clamp(8px, 2.4cqw, 32.2px); line-height:1;}
+  .case .prix{font-size:clamp(7.5px, 2.25cqw, 27.6px); font-weight:800; color:#1B2A41; margin-top:1px;}
+  .case.coin .texte{font-weight:700;} .case.coin .nom{font-size:clamp(6.5px, 1.8cqw, 25.3px);}
   .case .prix.taxe{color:#B00020;}
-  .case .hypo{font-size:clamp(4.5px, 1.25vw, 8px); font-weight:800; color:#B00020; max-width:100%; overflow:hidden;}
-  .maison{width:clamp(6px, 1.85vw, 11px); height:clamp(6px, 1.85vw, 11px); background:#1FA84A;
+  .case .hypo{font-size:clamp(4.5px, 1.25cqw, 18.4px); font-weight:800; color:#B00020; max-width:100%; overflow:hidden;}
+  .maison{width:clamp(6px, 1.85cqw, 25.3px); height:clamp(6px, 1.85cqw, 25.3px); background:#1FA84A;
     border:1px solid #0B5E25; border-radius:2px; box-shadow:0 1px 1px rgba(0,0,0,0.35);}
-  .hotel{width:clamp(12px, 3.8vw, 22px); height:clamp(8px, 2.4vw, 13px); background:#D62828;
+  .hotel{width:clamp(12px, 3.8cqw, 50.6px); height:clamp(8px, 2.4cqw, 29.9px); background:#D62828;
     border:1px solid #7A0A0A; border-radius:2px; box-shadow:0 1px 1px rgba(0,0,0,0.35);}
   .enchere{background:#fff; border:2px solid var(--or); border-radius:8px; padding:5px 8px;
-    font-size:clamp(0.65rem, 2.6vw, 0.9rem); max-width:96%;}
+    font-size:clamp(0.65rem, 2.6cqw, 2.07rem); max-width:96%;}
   .gestion{display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;}
   .gestion button{flex:1 1 45%; background:rgba(255,255,255,0.15); color:var(--panel); padding:8px;}
   .gestion button.btn-or{background:var(--or); color:var(--ink);}
@@ -1350,10 +1359,10 @@ const CSS = `
   .case.gauche .pion + .pion, .case.droite .pion + .pion{margin-top:-7px;}
   .case .pions{flex-wrap:nowrap; overflow:visible; z-index:4;}
   .case{overflow:visible;} .case .texte, .case .bande{overflow:hidden;}
-  .case .nom.long{font-size:clamp(5px, 1.3vw, 8px);} .case .nom.tres-long{font-size:clamp(4.5px, 1.15vw, 7px);}
-  .pion{width:clamp(18px, 6vw, 30px); height:clamp(18px, 6vw, 30px); border-radius:50%; flex:none;
+  .case .nom.long{font-size:clamp(5px, 1.3cqw, 18.4px);} .case .nom.tres-long{font-size:clamp(4.5px, 1.15cqw, 16.1px);}
+  .pion{width:clamp(18px, 6cqw, 69px); height:clamp(18px, 6cqw, 69px); border-radius:50%; flex:none;
     border:2px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,0.8); color:#fff; font-weight:900;
-    font-size:clamp(10px, 3.3vw, 17px); display:flex; align-items:center; justify-content:center;
+    font-size:clamp(10px, 3.3cqw, 39.1px); display:flex; align-items:center; justify-content:center;
     text-shadow:0 0 2px #000;}
   .pion.actif{animation:pulse 1s infinite; z-index:3;}
   .pion.retenu{border-color:#1B2A41; border-radius:3px; position:relative;
@@ -1363,13 +1372,13 @@ const CSS = `
   .centre{ grid-row:2 / 11; grid-column:2 / 11; background:#F6FAF3; display:flex; flex-direction:column;
     align-items:center; justify-content:center; padding:5px; text-align:center; gap:4px; color:var(--ink);
     overflow:hidden; }
-  .centre .titre{font-weight:800; font-size:clamp(0.8rem, 3.4vw, 1.3rem); color:#3D5A40;}
-  .centre .info{font-size:clamp(0.7rem, 2.8vw, 0.95rem);}
-  .centre .message{font-size:clamp(0.75rem, 3vw, 1rem); font-weight:600; min-height:1.2em; padding:0 4px;}
-  .des{font-size:clamp(1.8rem, 9vw, 3rem); line-height:1;}
+  .centre .titre{font-weight:800; font-size:clamp(0.8rem, 3.4cqw, 2.99rem); color:#3D5A40;}
+  .centre .info{font-size:clamp(0.7rem, 2.8cqw, 2.18rem);}
+  .centre .message{font-size:clamp(0.75rem, 3cqw, 2.3rem); font-weight:600; min-height:1.2em; padding:0 4px;}
+  .des{font-size:clamp(1.8rem, 9cqw, 6.9rem); line-height:1;}
   .des.roule{animation:roule 0.15s infinite;}
   @keyframes roule{50%{transform:rotate(12deg) scale(1.05);}}
-  .carte-tiree{background:#fff; border-radius:10px; padding:10px; font-size:clamp(0.75rem, 3.2vw, 1rem);
+  .carte-tiree{background:#fff; border-radius:10px; padding:10px; font-size:clamp(0.75rem, 3.2cqw, 2.3rem);
     border:3px solid; max-width:92%; box-shadow:0 3px 10px rgba(0,0,0,0.2);}
   .carte-tiree b{display:block; margin-bottom:4px;}
   .carte-tiree.surprise{border-color:#F28C28;} .carte-tiree.mairie{border-color:#1F5FBF;}
@@ -1383,7 +1392,7 @@ const CSS = `
   .titre-prop .l.fort{font-weight:800; font-size:1.1em;}
   .titre-prop .l.actuel{color:#B5179E; font-weight:800;}
   .titre-prop .sep{border-top:1px solid #ccd; margin:2px 0;}
-  .centre button{padding:7px 10px; font-size:clamp(0.75rem, 3vw, 0.95rem); margin:2px;}
+  .centre button{padding:7px 10px; font-size:clamp(0.75rem, 3cqw, 2.18rem); margin:2px;}
   .centre .boutons{display:flex; flex-wrap:wrap; justify-content:center;}
   .btn-or{background:var(--or); color:var(--ink);} .btn-gris{background:#D9E2D5; color:var(--ink);}
   .btn-rouge{background:#E63946; color:#fff;}
@@ -2287,42 +2296,48 @@ function client() {
   }
 
   function rendreJeu() {
-    app.appendChild(rendrePlateau());
-    app.appendChild(zoneStatut());
+    var cadre = el('div', 'cadre-jeu');
+    var gauche = el('div', 'col-plateau');
+    var droite = el('div', 'col-infos');
+    cadre.appendChild(gauche);
+    cadre.appendChild(droite);
+    app.appendChild(cadre);
+    gauche.appendChild(rendrePlateau());
+    gauche.appendChild(zoneStatut());
     if (!ANIM && ETAT.phase === 'jeu' && ETAT.etape === 'dette' && ETAT.moi !== null && ETAT.joueurs[ETAT.moi].argent < 0
       && !ETAT.joueurs[ETAT.moi].robot) {
-      app.appendChild(rendreDette());
+      droite.appendChild(rendreDette());
     }
-    if (ETAT.phase === 'fin') app.appendChild(rendreClassement());
+    if (ETAT.phase === 'fin') droite.appendChild(rendreClassement());
     if (ETAT.phase === 'jeu') {
       var moiJ = ETAT.moi !== null ? ETAT.joueurs[ETAT.moi] : null;
       var peutEchanger = moiJ && !moiJ.faillite && !moiJ.robot && ETAT.etape !== 'enchere'
         && ETAT.joueurs.some(function (j, k) { return k !== ETAT.moi && !j.faillite; });
-      if (ETAT.echange) { BROUILLON = null; app.appendChild(rendreEchangeEnCours()); }
-      else if (BROUILLON && peutEchanger) app.appendChild(rendreEditeur());
+      if (ETAT.echange) { BROUILLON = null; droite.appendChild(rendreEchangeEnCours()); }
+      else if (BROUILLON && peutEchanger) droite.appendChild(rendreEditeur());
       else if (peutEchanger) {
-        app.appendChild(bouton('🤝 Proposer un échange', 'second', function () {
+        droite.appendChild(bouton('🤝 Proposer un échange', 'second', function () {
           BROUILLON = { a: null, donne: [], recoit: [], argentDonne: '', argentRecu: '' };
           rendre();
         }));
       }
     }
-    if (CHOISIE !== null) app.appendChild(rendreDetail());
-    app.appendChild(rendreJoueurs());
+    if (CHOISIE !== null) droite.appendChild(rendreDetail());
+    droite.appendChild(rendreJoueurs());
     var jb = el('div', 'bloc');
     jb.style.marginTop = '10px';
     jb.appendChild(el('h2', '', 'Derniers coups'));
     var ul = el('ul', 'journal');
     ETAT.journal.forEach(function (m) { ul.appendChild(el('li', '', m)); });
     jb.appendChild(ul);
-    app.appendChild(jb);
+    droite.appendChild(jb);
     var moi = ETAT.joueurs[ETAT.moi];
     if (ETAT.phase === 'jeu' && !moi.faillite) {
-      app.appendChild(bouton('Abandonner la partie', 'discret', function () {
+      droite.appendChild(bouton('Abandonner la partie', 'discret', function () {
         if (confirm('Abandonner ? Tes biens retournent à la banque et tu ne pourras plus jouer cette partie.')) agir('quitter');
       }));
     }
-    app.appendChild(bouton('Retour à l’accueil', 'discret', quitterLocal));
+    droite.appendChild(bouton('Retour à l’accueil', 'discret', quitterLocal));
   }
 
   function rendre() {
@@ -2330,6 +2345,8 @@ function client() {
     if (EDITION) { RENDU_DIFFERE = true; return; }
     RENDU_DIFFERE = false;
     app.innerHTML = '';
+    var wrap = document.querySelector('.wrap');
+    if (wrap) wrap.classList.toggle('large', !!ETAT && ETAT.phase !== 'attente');
     if (!ETAT) rendreAccueil();
     else if (ETAT.phase === 'attente') rendreAttente();
     else rendreJeu();
