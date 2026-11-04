@@ -86,32 +86,53 @@ const PLATEAU = [
   { t: 'rue', g: 7, nom: 'Place Vendôme', court: 'Vendôme', prix: 400 },
 ];
 
-// Loyer de base d'une rue : un huitième du prix, arrondi au pair supérieur.
-for (const c of PLATEAU) {
-  if (c.t === 'rue') {
-    c.loyer = Math.ceil(c.prix / 16) * 2;
-    c.maison = COUT_MAISON[c.g];
-  }
-  if (c.prix) c.leve = Math.ceil((c.prix * 11) / 100) * 5; // levée d'hypothèque : moitié du prix + 10 %, au 5 € supérieur
+/** Levée d'hypothèque : moitié du prix + 10 %, au 5 € supérieur. */
+function leveDe(prix) {
+  return Math.ceil((prix * 11) / 100) * 5;
 }
 
-/* Noms d'origine ; ceux de la base D1 (page « Noms des rues ») les remplacent. */
-const NOMS_ORIGINE = PLATEAU.map((c) => ({ nom: c.nom, court: c.court }));
+// Loyers par case (modifiables sur la page de réglages) :
+// rue = [terrain nu, 1 à 4 maisons, hôtel] (quartier complet = 2 × terrain nu),
+// gare = [1, 2, 3, 4 gares possédées], service = multiplicateur des dés [1, 2 services].
+for (const c of PLATEAU) {
+  if (c.t === 'rue') {
+    const base = Math.ceil(c.prix / 16) * 2; // un huitième du prix, au pair supérieur
+    c.loyers = MULT_MAISONS.map((m) => base * m);
+    c.loyer = c.loyers[0];
+    c.maison = COUT_MAISON[c.g];
+  }
+  if (c.t === 'gare') c.loyers = [25, 50, 100, 200];
+  if (c.t === 'service') c.loyers = [4, 10];
+  if (c.prix) c.leve = leveDe(c.prix);
+}
+
+/* Noms, prix et loyers d'origine ; ceux de la base D1 (page de réglages) les remplacent. */
+const NOMS_ORIGINE = PLATEAU.map((c) => ({
+  nom: c.nom, court: c.court, prix: c.prix || null, loyers: c.loyers ? c.loyers.slice() : null,
+}));
+const PRIX_MAX = 5000;
+const LOYER_MAX = 20000;
 const NOM_MAX = 40;
 const COURT_MAX = 16;
 
-/** Cases dont on peut changer le nom : rues, gares et services. */
+/** Cases réglables (nom, prix, loyers) : rues, gares et services. */
 function nomModifiable(i) {
   return !!(PLATEAU[i] && PLATEAU[i].prix);
 }
 
-/** Applique au plateau les noms enregistrés (ou ceux d'origine). */
-function appliquerNoms(noms) {
+/** Applique au plateau les noms, prix et loyers enregistrés (ou ceux d'origine). */
+function appliquerNoms(noms, valeurs) {
   PLATEAU.forEach((c, i) => {
     const o = NOMS_ORIGINE[i];
     const n = nomModifiable(i) && noms && noms[i] ? noms[i] : null;
     c.nom = (n && n.nom) || o.nom;
     c.court = (n && n.court) || (n && n.nom ? n.nom : o.court);
+    if (!nomModifiable(i)) return;
+    const v = valeurs && valeurs[i] ? valeurs[i] : null;
+    c.prix = (v && v.prix) || o.prix;
+    c.loyers = v && Array.isArray(v.loyers) && v.loyers.length === o.loyers.length ? v.loyers.slice() : o.loyers.slice();
+    if (c.t === 'rue') c.loyer = c.loyers[0];
+    c.leve = leveDe(c.prix);
   });
 }
 
@@ -444,12 +465,12 @@ function loyerDe(salle, pos) {
   const possedes = (filtre) => PLATEAU.filter((x, i) => filtre(x) && salle.proprio[i] === proprio).length;
   if (salle.hypo[pos]) return 0;
   if (c.t === 'rue') {
-    if (salle.maisons[pos]) return c.loyer * MULT_MAISONS[salle.maisons[pos]];
-    return quartierEntier(salle, c.g, proprio) ? c.loyer * 2 : c.loyer;
+    if (salle.maisons[pos]) return c.loyers[salle.maisons[pos]];
+    return quartierEntier(salle, c.g, proprio) ? c.loyers[0] * 2 : c.loyers[0];
   }
-  if (c.t === 'gare') return 25 * Math.pow(2, possedes((x) => x.t === 'gare') - 1);
+  if (c.t === 'gare') return c.loyers[Math.min(4, Math.max(1, possedes((x) => x.t === 'gare'))) - 1];
   const total = salle.des ? salle.des[0] + salle.des[1] : 7;
-  return total * (possedes((x) => x.t === 'service') === 2 ? 10 : 4);
+  return total * c.loyers[Math.min(2, Math.max(1, possedes((x) => x.t === 'service'))) - 1];
 }
 
 function envoyerAuPoste(salle, idx) {
@@ -1201,7 +1222,7 @@ function vuePour(salle, version, jeton) {
     } : null,
     delaiEnchere: DELAI_ENCHERE_S,
     anim: salle.anim || null,
-    noms: PLATEAU.map((c) => [c.nom, c.court]),
+    noms: PLATEAU.map((c) => [c.nom, c.court, c.prix || null, c.loyers || null, c.leve || null]),
     ressources: salle.joueurs.map((j, i) => (salle.phase === 'jeu' && !j.faillite ? ressources(salle, i) : 0)),
     journal: salle.journal,
     classement: salle.classement || null,
@@ -1240,8 +1261,8 @@ async function preparerTables(env) {
   tablesPretes = true;
 }
 
-async function lireNoms(env) {
-  const ligne = await bdd(env).prepare("SELECT valeur FROM paves_config WHERE cle = 'noms'").first();
+async function lireNoms(env, cle = 'noms') {
+  const ligne = await bdd(env).prepare('SELECT valeur FROM paves_config WHERE cle = ?').bind(cle).first();
   if (!ligne) return {};
   try {
     const noms = JSON.parse(ligne.valeur);
@@ -1267,10 +1288,30 @@ function nomsValides(brut) {
   return propres;
 }
 
-async function ecrireNoms(env, noms) {
+/** Prix (arrondis à 10 €, pour des hypothèques et reventes rondes) et loyers entiers. */
+function valeursValides(brut) {
+  const propres = {};
+  if (!brut || typeof brut !== 'object') return propres;
+  for (const [cle, v] of Object.entries(brut)) {
+    const i = parseInt(cle, 10);
+    if (!nomModifiable(i) || !v || typeof v !== 'object') continue;
+    const o = NOMS_ORIGINE[i];
+    let prix = Math.round((parseInt(v.prix, 10) || 0) / 10) * 10;
+    if (prix < 10 || prix > PRIX_MAX) prix = o.prix;
+    const loyers = o.loyers.map((defaut, k) => {
+      const n = parseInt(Array.isArray(v.loyers) ? v.loyers[k] : NaN, 10);
+      return Number.isInteger(n) && n >= 0 && n <= LOYER_MAX ? n : defaut;
+    });
+    if (prix === o.prix && loyers.every((n, k) => n === o.loyers[k])) continue;
+    propres[i] = { prix, loyers };
+  }
+  return propres;
+}
+
+async function ecrireNoms(env, noms, cle = 'noms') {
   await bdd(env)
-    .prepare("INSERT INTO paves_config (cle, valeur, maj) VALUES ('noms', ?, ?) ON CONFLICT(cle) DO UPDATE SET valeur = excluded.valeur, maj = excluded.maj")
-    .bind(JSON.stringify(noms), new Date().toISOString())
+    .prepare('INSERT INTO paves_config (cle, valeur, maj) VALUES (?, ?, ?) ON CONFLICT(cle) DO UPDATE SET valeur = excluded.valeur, maj = excluded.maj')
+    .bind(cle, JSON.stringify(noms), new Date().toISOString())
     .run();
 }
 
@@ -1582,7 +1623,13 @@ function client() {
   function recevoir(d) {
     if (ANIM) { EN_ATTENTE = d; return; }
     var ancien = ETAT;
-    if (d.noms) d.noms.forEach(function (n, i) { if (PLATEAU[i]) { PLATEAU[i].nom = n[0]; PLATEAU[i].court = n[1]; } });
+    if (d.noms) d.noms.forEach(function (n, i) {
+      var c = PLATEAU[i];
+      if (!c) return;
+      c.nom = n[0];
+      c.court = n[1];
+      if (c.prix && n[2]) { c.prix = n[2]; c.loyers = n[3]; c.leve = n[4]; if (c.t === 'rue') c.loyer = n[3][0]; }
+    });
     ETAT = d;
     ECART = Date.now() - d.maintenant;
     if (ETAT.moi === null) { quitterLocal(); return; }
@@ -1749,7 +1796,7 @@ function client() {
       poster('/api/salle', { nom: nom, toursMax: tours.value }).then(function (d) { if (d) entrer(d); });
     }));
     app.appendChild(cre);
-    var lien = el('a', 'discret', '✏️ Changer les noms des rues');
+    var lien = el('a', 'discret', '✏️ Noms, prix et loyers des rues');
     lien.href = '/noms';
     lien.style.display = 'block';
     lien.style.textAlign = 'center';
@@ -1823,14 +1870,14 @@ function client() {
     }
     if (c.t === 'rue') {
       var entier = p !== null && PLATEAU.every(function (x, k) { return x.t !== 'rue' || x.g !== c.g || ETAT.proprio[k] === p; });
-      return euros(entier ? c.loyer * 2 : c.loyer) + (entier ? ' (quartier complet)' : '');
+      return euros(entier ? c.loyers[0] * 2 : c.loyers[0]) + (entier ? ' (quartier complet)' : '');
     }
     if (c.t === 'gare') {
       var n = p === null ? 1 : PLATEAU.filter(function (x, k) { return x.t === 'gare' && ETAT.proprio[k] === p; }).length;
-      return euros(25 * Math.pow(2, n - 1)) + ' (' + n + ' gare' + (n > 1 ? 's' : '') + ')';
+      return euros(c.loyers[Math.min(4, n) - 1]) + ' (' + n + ' gare' + (n > 1 ? 's' : '') + ')';
     }
     var deux = p !== null && PLATEAU.filter(function (x, k) { return x.t === 'service' && ETAT.proprio[k] === p; }).length === 2;
-    return (deux ? '10' : '4') + ' × les dés';
+    return c.loyers[deux ? 1 : 0] + ' × les dés';
   }
 
   /** Logo de la Caisse commune : un coffre bleu rectangulaire, angles droits, ferrures dorées. */
@@ -1969,17 +2016,17 @@ function client() {
     var lignes = [];
     var actuel = -1;
     if (c.t === 'rue') {
-      lignes = [['Loyer terrain nu', euros(c.loyer)], ['Quartier complet', euros(c.loyer * 2)]];
-      for (var n = 1; n <= 5; n++) lignes.push([n === 5 ? 'Avec hôtel' : 'Avec ' + n + ' maison' + (n > 1 ? 's' : ''), euros(c.loyer * MULT_MAISONS[n])]);
+      lignes = [['Loyer terrain nu', euros(c.loyers[0])], ['Quartier complet', euros(c.loyers[0] * 2)]];
+      for (var n = 1; n <= 5; n++) lignes.push([n === 5 ? 'Avec hôtel' : 'Avec ' + n + ' maison' + (n > 1 ? 's' : ''), euros(c.loyers[n])]);
       if (p !== null) {
         var entier = PLATEAU.every(function (x, k) { return x.t !== 'rue' || x.g !== c.g || ETAT.proprio[k] === p; });
         actuel = ETAT.maisons[i] ? ETAT.maisons[i] + 1 : (entier ? 1 : 0);
       }
     } else if (c.t === 'gare') {
-      lignes = [['1 gare', euros(25)], ['2 gares', euros(50)], ['3 gares', euros(100)], ['4 gares', euros(200)]];
+      lignes = c.loyers.map(function (v, k) { return [(k + 1) + ' gare' + (k ? 's' : ''), euros(v)]; });
       if (p !== null) actuel = PLATEAU.filter(function (x, k) { return x.t === 'gare' && ETAT.proprio[k] === p; }).length - 1;
     } else {
-      lignes = [['1 service', '4 × les dés'], ['2 services', '10 × les dés']];
+      lignes = [['1 service', c.loyers[0] + ' × les dés'], ['2 services', c.loyers[1] + ' × les dés']];
       if (p !== null) actuel = PLATEAU.filter(function (x, k) { return x.t === 'service' && ETAT.proprio[k] === p; }).length - 1;
     }
     if (compact) lignes = lignes.slice(0, 1);
@@ -2484,7 +2531,7 @@ function client() {
   }
 }
 
-/* Page « Noms des rues » (sérialisée par toString, comme le client du jeu). */
+/* Page « Réglages du plateau » : noms, prix et loyers (sérialisée par toString). */
 function clientNoms() {
   var app = document.getElementById('app');
   function el(balise, classe, texte) {
@@ -2495,29 +2542,47 @@ function clientNoms() {
   }
   var statut = el('div', 'statut');
   var champs = {};
+  var ETIQUETTES = {
+    rue: ['Nu', '1 maison', '2 maisons', '3 maisons', '4 maisons', 'Hôtel'],
+    gare: ['1 gare', '2 gares', '3 gares', '4 gares'],
+    service: ['1 service ×dés', '2 services ×dés']
+  };
 
-  function envoyer(corps) {
+  function nombre(valeur, origine) {
+    var input = el('input');
+    input.type = 'number';
+    input.inputMode = 'numeric';
+    input.min = '0';
+    input.value = valeur;
+    input.placeholder = origine;
+    return input;
+  }
+  function remplir(plateau) {
+    plateau.forEach(function (c, i) {
+      var f = champs[i];
+      if (!f) return;
+      f.nom.value = c.nom;
+      f.court.value = c.court === c.nom || c.court === ORIGINE[i].court ? '' : c.court;
+      f.prix.value = c.prix;
+      f.loyers.forEach(function (input, k) { input.value = c.loyers[k]; });
+    });
+  }
+  function envoyer(corps, message) {
     statut.textContent = 'Enregistrement…';
     statut.className = 'statut';
     return fetch('/api/noms', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(corps) })
       .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.erreur || 'Erreur'); return d; }); })
-      .then(function (d) {
-        d.noms.forEach(function (n, i) {
-          if (!champs[i]) return;
-          champs[i].nom.value = n.nom;
-          champs[i].court.value = n.court === n.nom || n.court === ORIGINE[i].court ? '' : n.court;
-        });
-        statut.textContent = '✔ Noms enregistrés : ils s\u2019affichent dans toutes les parties.';
-      })
+      .then(function (d) { remplir(d.plateau); statut.textContent = message; })
       .catch(function (err) { statut.textContent = err.message; statut.className = 'statut erreur'; });
   }
 
-  app.appendChild(el('h1', '', 'Noms des rues'));
-  app.appendChild(el('div', 'sous', 'Nom complet (titres de propriété, journal) et nom court affiché sur le plateau. '
-    + 'Laisse le nom court vide pour reprendre le nom complet.'));
+  app.appendChild(el('h1', '', 'Réglages du plateau'));
+  app.appendChild(el('div', 'sous', 'Nom complet (titres, journal), nom court (plateau, vide = nom complet), prix et loyers. '
+    + 'Quartier complet = 2 × le loyer nu. Les prix sont arrondis à 10 €.'));
   var bloc = el('div', 'bloc');
   PLATEAU.forEach(function (c, i) {
     if (!c.prix) return;
+    var carte = el('div', 'reglage');
     var ligne = el('div', 'ligne-nom');
     var pastille = el('span', 'pastille-nom');
     pastille.style.background = c.t === 'rue' ? GROUPES[c.g] : (c.t === 'gare' ? '#141414' : '#999');
@@ -2533,23 +2598,45 @@ function clientNoms() {
     court.placeholder = 'court : ' + ORIGINE[i].court;
     ligne.appendChild(nom);
     ligne.appendChild(court);
-    champs[i] = { nom: nom, court: court };
-    bloc.appendChild(ligne);
+    carte.appendChild(ligne);
+    var valeurs = el('div', 'valeurs');
+    function case_(etiquette, input) {
+      var lab = el('label', 'valeur');
+      lab.appendChild(el('span', '', etiquette));
+      lab.appendChild(input);
+      valeurs.appendChild(lab);
+    }
+    var prix = nombre(c.prix, ORIGINE[i].prix);
+    prix.step = '10';
+    case_('Prix €', prix);
+    var loyers = c.loyers.map(function (v, k) {
+      var input = nombre(v, ORIGINE[i].loyers[k]);
+      case_(ETIQUETTES[c.t][k], input);
+      return input;
+    });
+    carte.appendChild(valeurs);
+    champs[i] = { nom: nom, court: court, prix: prix, loyers: loyers };
+    bloc.appendChild(carte);
   });
   app.appendChild(bloc);
-  var enregistrer = el('button', 'principal', 'Enregistrer les noms');
+  var enregistrer = el('button', 'principal', 'Enregistrer');
   enregistrer.onclick = function () {
-    var noms = {};
-    Object.keys(champs).forEach(function (i) { noms[i] = { nom: champs[i].nom.value, court: champs[i].court.value }; });
-    envoyer({ noms: noms });
+    var noms = {}, valeurs = {};
+    Object.keys(champs).forEach(function (i) {
+      var f = champs[i];
+      noms[i] = { nom: f.nom.value, court: f.court.value };
+      valeurs[i] = { prix: f.prix.value, loyers: f.loyers.map(function (x) { return x.value; }) };
+    });
+    envoyer({ noms: noms, valeurs: valeurs }, '✔ Enregistré : s\u2019applique aussitôt à toutes les parties.');
   };
   app.appendChild(enregistrer);
   app.appendChild(statut);
-  var retablir = el('button', 'discret', 'Rétablir les noms d\u2019origine');
-  retablir.onclick = function () {
-    if (confirm('Remettre tous les noms d\u2019origine ?')) envoyer({ retablir: true });
-  };
-  app.appendChild(retablir);
+  var r1 = el('button', 'discret', 'Rétablir les noms d\u2019origine');
+  r1.onclick = function () { if (confirm('Remettre tous les noms d\u2019origine ?')) envoyer({ retablir: 'noms' }, '✔ Noms d\u2019origine rétablis.'); };
+  app.appendChild(r1);
+  var r2 = el('button', 'discret', 'Rétablir les prix et loyers d\u2019origine');
+  r2.onclick = function () { if (confirm('Remettre tous les prix et loyers d\u2019origine ?')) envoyer({ retablir: 'valeurs' }, '✔ Prix et loyers d\u2019origine rétablis.'); };
+  app.appendChild(r2);
   var retour = el('a', 'discret', '← Retour au jeu');
   retour.href = '/';
   retour.style.display = 'block';
@@ -2565,13 +2652,19 @@ function pageNomsHtml() {
     + 'var GROUPES = ' + toScriptJson(GROUPES) + ';'
     + 'var NOM_MAX = ' + NOM_MAX + ', COURT_MAX = ' + COURT_MAX + ';';
   const css = CSS + `
-  .ligne-nom{display:grid; grid-template-columns:14px 1fr 34%; gap:6px; align-items:center; margin:6px 0;}
+  .reglage{padding:8px 0 10px; border-bottom:1px solid rgba(255,255,255,0.08);}
+  .ligne-nom{display:grid; grid-template-columns:14px 1fr 34%; gap:6px; align-items:center; margin:4px 0;}
   .ligne-nom input{text-align:left; padding:8px; font-size:0.9rem;}
-  .pastille-nom{width:14px; height:28px; border-radius:3px;}`;
+  .pastille-nom{width:14px; height:28px; border-radius:3px;}
+  .valeurs{display:grid; grid-template-columns:repeat(auto-fill, minmax(78px, 1fr)); gap:6px; margin-left:20px;}
+  .valeur{margin:0; font-size:0.7rem;}
+  .valeur span{display:block; margin-bottom:2px;}
+  .valeur input{padding:6px 4px; font-size:0.9rem;}
+  .wrap{max-width:760px;}`;
   return '<!doctype html><html lang="fr"><head><meta charset="utf-8">'
     + '<meta name="viewport" content="width=device-width, initial-scale=1">'
     + '<link rel="icon" href="/favicon.svg" type="image/svg+xml">'
-    + '<title>Noms des rues</title><style>' + css + '</style></head>'
+    + '<title>Réglages du plateau</title><style>' + css + '</style></head>'
     + '<body><div class="wrap"><div id="app"></div></div>'
     + '<script>' + donnees + '(' + clientNoms.toString() + ')();</script>'
     + '</body></html>';
@@ -2616,17 +2709,19 @@ export default {
     const api = chemin.startsWith('/api/');
     try {
       await preparerTables(env);
-      const nomsEnregistres = await lireNoms(env);
-      appliquerNoms(nomsEnregistres);
+      const [nomsEnregistres, valeursEnregistrees] = await Promise.all([lireNoms(env), lireNoms(env, 'valeurs')]);
+      appliquerNoms(nomsEnregistres, valeursEnregistrees);
 
       if (chemin === '/api/noms' && request.method === 'POST') {
         const corps = await corpsJson(request);
-        const noms = corps.retablir ? {} : nomsValides(corps.noms);
-        await ecrireNoms(env, noms);
-        appliquerNoms(noms);
-        return json({ ok: true, noms: PLATEAU.map((c) => ({ nom: c.nom, court: c.court })) });
+        const noms = corps.retablir === true || corps.retablir === 'noms' ? {} : (corps.noms ? nomsValides(corps.noms) : nomsEnregistres);
+        const valeurs = corps.retablir === true || corps.retablir === 'valeurs' ? {}
+          : (corps.valeurs ? valeursValides(corps.valeurs) : valeursEnregistrees);
+        await Promise.all([ecrireNoms(env, noms), ecrireNoms(env, valeurs, 'valeurs')]);
+        appliquerNoms(noms, valeurs);
+        return json({ ok: true, plateau: PLATEAU.map((c) => ({ nom: c.nom, court: c.court, prix: c.prix, loyers: c.loyers })) });
       }
-      if (chemin === '/noms') {
+      if (chemin === '/noms' || chemin === '/reglages') {
         return new Response(pageNomsHtml(), {
           headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
         });
