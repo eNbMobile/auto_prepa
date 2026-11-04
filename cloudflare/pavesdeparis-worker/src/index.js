@@ -46,7 +46,7 @@ const PLATEAU = [
   { t: 'carte', p: 'surprise', nom: 'Surprise', court: 'Surprise' },
   { t: 'rue', g: 1, nom: 'Rue des Martyrs', court: 'Martyrs', prix: 110 },
   { t: 'rue', g: 1, nom: 'Rue de la Roquette', court: 'Roquette', prix: 120 },
-  { t: 'poste', nom: 'Poste de police (simple visite)', court: 'Poste' },
+  { t: 'poste', nom: 'Poste de police (simple visite)', court: 'Poste · visite' },
   { t: 'rue', g: 2, nom: 'Rue Montorgueil', court: 'Montorgueil', prix: 140 },
   { t: 'service', nom: 'Compagnie du gaz', court: 'Gaz', prix: 150 },
   { t: 'rue', g: 2, nom: 'Rue Cler', court: 'Cler', prix: 150 },
@@ -506,6 +506,8 @@ function arriver(salle, idx) {
     payer(salle, idx, c.montant, null);
   } else if (c.t === 'carte') {
     tirerCarte(salle, idx, c.p);
+  } else if (c.t === 'poste') {
+    noter(salle, j.nom + ' s\'arrête au poste en simple visite.');
   } else if (c.t === 'police') {
     envoyerAuPoste(salle, idx);
   }
@@ -1040,6 +1042,9 @@ const CSS = `
     font-size:clamp(7px, 2.2vw, 12px); display:flex; align-items:center; justify-content:center;
     text-shadow:0 0 2px #000;}
   .pion.actif{animation:pulse 1s infinite; z-index:3;}
+  .pion.retenu{border-color:#1B2A41; border-radius:3px; position:relative;
+    background-image:repeating-linear-gradient(90deg, transparent 0 3px, rgba(0,0,0,0.75) 3px 5px) !important;}
+  .pion.retenu::after{content:'🔒'; position:absolute; top:-6px; right:-7px; font-size:9px; text-shadow:none;}
   @keyframes pulse{50%{transform:scale(1.2);}}
   .centre{ grid-row:2 / 11; grid-column:2 / 11; background:#F6FAF3; display:flex; flex-direction:column;
     align-items:center; justify-content:center; padding:5px; text-align:center; gap:4px; color:var(--ink);
@@ -1458,9 +1463,11 @@ function client() {
       var pions = el('div', 'pions');
       ETAT.joueurs.forEach(function (j, k) {
         if (j.faillite || positionDe(k) !== i) return;
-        var pion = el('div', 'pion' + (k === ETAT.tour && ETAT.phase === 'jeu' ? ' actif' : ''), j.nom.charAt(0).toUpperCase());
-        pion.style.background = j.couleur;
-        pion.title = j.nom;
+        var retenu = j.enPrison && !AFF;
+        var pion = el('div', 'pion' + (k === ETAT.tour && ETAT.phase === 'jeu' ? ' actif' : '') + (retenu ? ' retenu' : ''),
+          j.nom.charAt(0).toUpperCase());
+        pion.style.backgroundColor = j.couleur;
+        pion.title = j.nom + (retenu ? ' (retenu au poste)' : '');
         pions.appendChild(pion);
       });
       d.appendChild(pions);
@@ -1747,7 +1754,7 @@ function client() {
       h.appendChild(el('span', '', j.faillite ? 'faillite' : euros(j.argent)));
       f.appendChild(h);
       if (!j.faillite) {
-        var info = PLATEAU[j.position].court + (j.enPrison ? ' — au poste 🚓' : '')
+        var info = (j.enPrison ? 'Retenu au poste 🔒' : PLATEAU[j.position].court)
           + (j.cartesSortie ? ' · 🎟️ ' + j.cartesSortie : '') + ' · fortune ' + euros(j.fortune);
         f.appendChild(el('div', 'bas', info));
       }
