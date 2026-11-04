@@ -1314,13 +1314,17 @@ const CSS = `
     border:2px solid #3D5A40; border-radius:6px; aspect-ratio:1/1; width:100%; color:var(--ink); }
   .case{ background:var(--plateau); position:relative; overflow:hidden; display:flex; min-width:0; min-height:0;
     align-items:stretch; cursor:pointer; line-height:1.05; text-align:center; }
-  /* Comme une carte de propriété : bande de couleur en haut, nom juste dessous, prix en bas. */
-  .case.bas, .case.haut, .case.gauche, .case.droite{flex-direction:column;}
+  /* Bande de couleur côté intérieur du plateau ; le nom juste à côté d'elle, le prix à l'autre bout. */
+  .case.bas{flex-direction:column;} .case.haut{flex-direction:column-reverse;}
+  .case.gauche{flex-direction:row-reverse;} .case.droite{flex-direction:row;}
+  .case.haut .texte{flex-direction:column-reverse;}
+  .case.bas .bande + .texte .nom{margin-top:0.8cqw;} .case.haut .bande + .texte .nom{margin-bottom:0.8cqw;}
+  .case.gauche .bande + .texte{padding-right:0.8cqw;} .case.droite .bande + .texte{padding-left:0.8cqw;}
   .case .bande{flex:none; display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:1px;}
   .case.bas .bande, .case.haut .bande{height:28%; width:100%;}
-  .case.gauche .bande, .case.droite .bande{height:30%; width:100%;}
+  .case.gauche .bande, .case.droite .bande{width:28%; height:100%; flex-direction:column;}
   .case .texte{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:space-between;
-    padding:1px 1px 2px; min-width:0; min-height:0;}
+    padding:0.6cqw 1px; min-width:0; min-height:0;}
   .case.coin .texte{justify-content:center;}
   .case > .texte:first-child{padding-top:3px;}
   .case .nom{font-size:clamp(5.5px, 1.55cqw, 20.7px); word-break:break-word; hyphens:auto;}
@@ -1354,11 +1358,9 @@ const CSS = `
   .case.choisie{outline:2px solid #000; outline-offset:-2px; z-index:2;}
   .case .pions{position:absolute; display:flex; flex-wrap:wrap; align-items:center; align-content:center;
     justify-content:center; gap:1px; pointer-events:none;}
-  .case.bas .pions, .case.haut .pions{left:0; right:0; bottom:1px;}
-  .case.gauche .pions{top:0; bottom:0; left:1px; flex-direction:column;}
-  .case.droite .pions{top:0; bottom:0; right:1px; flex-direction:column;}
-  .case.bas .pion + .pion, .case.haut .pion + .pion{margin-left:-7px;}
-  .case.gauche .pion + .pion, .case.droite .pion + .pion{margin-top:-7px;}
+  /* Pions au milieu de la case ; plusieurs pions se chevauchent légèrement. */
+  .case .pions{inset:0;}
+  .case .pion + .pion{margin-left:-7px;}
   .case .pions{flex-wrap:nowrap; overflow:visible; z-index:4;}
   .case{overflow:visible;} .case .texte, .case .bande{overflow:hidden;}
   .case .nom.long{font-size:clamp(5px, 1.3cqw, 18.4px);} .case .nom.tres-long{font-size:clamp(4.5px, 1.15cqw, 16.1px);}
