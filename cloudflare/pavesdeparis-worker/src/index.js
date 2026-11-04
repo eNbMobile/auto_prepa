@@ -152,8 +152,8 @@ const CARTES = {
     { texte: 'Tu as oublié tes clés : recule de 3 cases.', recule: 3 },
     { texte: 'Trottinette sur le trottoir : 20 € d\'amende.', paie: 20 },
     { texte: 'Excès de vitesse sur le périph : 60 €.', paie: 60 },
-    { texte: 'Contrôle d\'identité qui tourne mal : direction le poste !', prison: true },
-    { texte: 'Libéré sur parole : garde cette carte pour sortir du poste.', sortie: true },
+    { texte: 'Contrôle d\'identité qui tourne mal : direction la prison !', prison: true },
+    { texte: 'Libéré sur parole : garde cette carte pour sortir de prison.', sortie: true },
     { texte: 'Tu offres le café : 20 € à chaque joueur.', chacun: 20 },
   ],
   mairie: [
@@ -166,8 +166,8 @@ const CARTES = {
     { texte: 'Cotisation au syndic : 50 €.', paie: 50 },
     { texte: 'C\'est ton anniversaire : chaque joueur te donne 15 €.', anniversaire: 15 },
     { texte: 'Avance jusqu\'à la case Départ.', aller: 0 },
-    { texte: 'Tapage nocturne : direction le poste !', prison: true },
-    { texte: 'Libéré sur parole : garde cette carte pour sortir du poste.', sortie: true },
+    { texte: 'Tapage nocturne : direction la prison !', prison: true },
+    { texte: 'Libéré sur parole : garde cette carte pour sortir de prison.', sortie: true },
     { texte: 'Retourne Rue Mouffetard (sans passer par le Départ).', aller: 1, sansDepart: true },
   ],
 };
@@ -563,7 +563,7 @@ function envoyerAuPoste(salle, idx) {
   j.essais = 0;
   salle.rejouer = false;
   animer(salle, { t: 'saut', j: idx, a: CASE_POSTE });
-  noter(salle, j.nom + ' file au poste de police.');
+  noter(salle, j.nom + ' va en prison.');
 }
 
 function deplacer(salle, idx, destination, avecDepart) {
@@ -632,6 +632,9 @@ function appliquerCarte(salle) {
   }
   else if (carte.recule) {
     deplacer(salle, idx, (j.position - carte.recule + PLATEAU.length) % PLATEAU.length, false);
+  } else if (carte.aller === CASE_POSTE) {
+    // « Va à la case prison » : derrière les barreaux, sans passer par le Départ (pas de simple visite).
+    envoyerAuPoste(salle, idx);
   } else if (carte.aller !== undefined) deplacer(salle, idx, carte.aller, !carte.sansDepart);
   else if (carte.chacun) {
     for (const k of actifs(salle)) if (k !== idx) payer(salle, idx, carte.chacun, k);
@@ -753,7 +756,7 @@ function actionLancer(salle) {
     if (double) {
       j.enPrison = false;
       salle.rejouer = false;
-      noter(salle, j.nom + ' fait un double (' + texteDes(des) + ') et sort du poste.');
+      noter(salle, j.nom + ' fait un double (' + texteDes(des) + ') et sort de prison.');
       salle.etape = 'deplacement';
       avancer(salle, idx, des[0] + des[1]);
     } else {
@@ -765,7 +768,7 @@ function actionLancer(salle) {
         salle.etape = 'deplacement';
         avancer(salle, idx, des[0] + des[1]);
       } else {
-        noter(salle, j.nom + ' tente un double (' + texteDes(des) + ') : raté, encore au poste.');
+        noter(salle, j.nom + ' tente un double (' + texteDes(des) + ') : raté, toujours en prison.');
       }
     }
     apresCoup(salle);
@@ -1158,14 +1161,14 @@ function appliquerAction(salle, jeton, action, valeur) {
     if (salle.etape !== 'achat') refuser('Rien à acheter pour l\'instant.');
     actionAchat(salle, action === 'acheter');
   } else if (action === 'caution') {
-    if (salle.etape !== 'prison') refuser('Tu n\'es pas au poste.');
+    if (salle.etape !== 'prison') refuser('Tu n\'es pas en prison.');
     if (j.argent < CAUTION) refuser('Pas assez d\'argent pour la caution.');
     j.argent -= CAUTION;
     j.enPrison = false;
     salle.etape = 'lancer';
-    noter(salle, j.nom + ' paie ' + CAUTION + ' € de caution et sort du poste.');
+    noter(salle, j.nom + ' paie ' + CAUTION + ' € de caution et sort de prison.');
   } else if (action === 'carte') {
-    if (salle.etape !== 'prison') refuser('Tu n\'es pas au poste.');
+    if (salle.etape !== 'prison') refuser('Tu n\'es pas en prison.');
     if (!j.cartesSortie.length) refuser('Tu n\'as pas de carte « Libéré sur parole ».');
     const paquet = j.cartesSortie.shift();
     salle.paquets[paquet].push(CARTES[paquet].findIndex((c) => c.sortie));
@@ -2142,7 +2145,7 @@ function client() {
         var pion = el('div', 'pion' + (k === ETAT.tour && ETAT.phase === 'jeu' ? ' actif' : '') + (retenu ? ' retenu' : ''),
           j.nom.charAt(0).toUpperCase());
         pion.style.backgroundColor = j.couleur;
-        pion.title = j.nom + (retenu ? ' (retenu au poste)' : '');
+        pion.title = j.nom + (retenu ? ' (en prison)' : '');
         pions.appendChild(pion);
       });
       d.appendChild(pions);
@@ -2323,7 +2326,7 @@ function client() {
         c.appendChild(el('div', 'info', 'À toi de jouer !'));
         boutons.appendChild(bouton('🎲 Lancer les dés', 'btn-or', function () { agir('lancer'); }));
       } else if (ETAT.etape === 'prison') {
-        c.appendChild(el('div', 'info', 'Tu es au poste (essai ' + (moi.essais + 1) + '/3).'));
+        c.appendChild(el('div', 'info', 'Tu es en prison (essai ' + (moi.essais + 1) + '/3).'));
         boutons.appendChild(bouton('🎲 Tenter un double', 'btn-or', function () { agir('lancer'); }));
         var caution = bouton('Payer ' + CAUTION + ' €', 'btn-gris', function () { agir('caution'); });
         caution.disabled = moi.argent < CAUTION;
@@ -2577,7 +2580,7 @@ function client() {
       h.appendChild(el('span', '', j.faillite ? 'faillite' : euros(j.argent)));
       f.appendChild(h);
       if (!j.faillite) {
-        var info = (j.enPrison ? 'Retenu au poste 🔒' : PLATEAU[j.position].court)
+        var info = (j.enPrison ? 'En prison 🔒' : PLATEAU[j.position].court)
           + (j.cartesSortie ? ' · 🎟️ ' + j.cartesSortie : '') + ' · fortune ' + euros(j.fortune);
         f.appendChild(el('div', 'bas', info));
       }
@@ -2799,7 +2802,7 @@ function clientNoms() {
   /* -------- cartes Surprise et Caisse commune -------- */
   var EFFETS_LIBELLES = [
     ['gain', 'Gagne (€)'], ['paie', 'Paie à la banque (€)'], ['aller', 'Va à la case'], ['recule', 'Recule de (cases)'],
-    ['prison', 'Va au poste'], ['sortie', 'Libéré sur parole'], ['chacun', 'Paie à chaque joueur (€)'],
+    ['prison', 'Va en prison (derrière les barreaux, sans le Départ)'], ['sortie', 'Libéré sur parole'], ['chacun', 'Paie à chaque joueur (€)'],
     ['anniversaire', 'Reçoit de chaque joueur (€)'], ['gareProche', 'Va à la gare la plus proche (si à un autre joueur : paie le double du loyer)'],
     ['serviceProche', 'Va au service public le plus proche (si à un autre joueur : relance les dés et paie 10 ×)'],
     ['reparations', 'Réparations : paie par maison / par hôtel (€)']
