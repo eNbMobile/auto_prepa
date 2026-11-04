@@ -54,7 +54,7 @@ const PLATEAU = [
   { t: 'carte', p: 'surprise', nom: 'Surprise', court: 'Surprise' },
   { t: 'rue', g: 1, nom: 'Rue des Martyrs', court: 'Martyrs', prix: 110 },
   { t: 'rue', g: 1, nom: 'Rue de la Roquette', court: 'Roquette', prix: 120 },
-  { t: 'poste', nom: 'Poste de police (simple visite)', court: 'Poste · visite' },
+  { t: 'poste', nom: 'En prison (simple visite)', court: 'En prison' },
   { t: 'rue', g: 2, nom: 'Rue Montorgueil', court: 'Montorgueil', prix: 140 },
   { t: 'service', nom: 'Compagnie du gaz', court: 'Gaz', prix: 150 },
   { t: 'rue', g: 2, nom: 'Rue Cler', court: 'Cler', prix: 150 },
@@ -631,7 +631,7 @@ function arriver(salle, idx) {
   } else if (c.t === 'carte') {
     tirerCarte(salle, idx, c.p);
   } else if (c.t === 'poste') {
-    noter(salle, j.nom + ' s\'arrête au poste en simple visite.');
+    noter(salle, j.nom + ' est en simple visite à la prison.');
   } else if (c.t === 'police') {
     envoyerAuPoste(salle, idx);
   }
