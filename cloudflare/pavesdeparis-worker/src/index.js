@@ -109,6 +109,7 @@ for (const c of PLATEAU) {
 /* Noms, prix et loyers d'origine ; ceux de la base D1 (page de réglages) les remplacent. */
 const NOMS_ORIGINE = PLATEAU.map((c) => ({
   nom: c.nom, court: c.court, prix: c.prix || null, loyers: c.loyers ? c.loyers.slice() : null,
+  montant: c.montant || null,
 }));
 const PRIX_MAX = 5000;
 const LOYER_MAX = 20000;
@@ -117,7 +118,7 @@ const COURT_MAX = 16;
 
 /** Cases réglables (nom, prix, loyers) : rues, gares et services. */
 function nomModifiable(i) {
-  return !!(PLATEAU[i] && PLATEAU[i].prix);
+  return !!(PLATEAU[i] && (PLATEAU[i].prix || PLATEAU[i].t === 'taxe'));
 }
 
 /** Applique au plateau les noms, prix et loyers enregistrés (ou ceux d'origine). */
@@ -129,6 +130,10 @@ function appliquerNoms(noms, valeurs) {
     c.court = (n && n.court) || (n && n.nom ? n.nom : o.court);
     if (!nomModifiable(i)) return;
     const v = valeurs && valeurs[i] ? valeurs[i] : null;
+    if (c.t === 'taxe') {
+      c.montant = v && Number.isInteger(v.montant) ? v.montant : o.montant;
+      return;
+    }
     c.prix = (v && v.prix) || o.prix;
     c.loyers = v && Array.isArray(v.loyers) && v.loyers.length === o.loyers.length ? v.loyers.slice() : o.loyers.slice();
     if (c.t === 'rue') c.loyer = c.loyers[0];
@@ -1291,7 +1296,7 @@ function vuePour(salle, version, jeton) {
     } : null,
     delaiEnchere: DELAI_ENCHERE_S,
     anim: salle.anim || null,
-    noms: PLATEAU.map((c) => [c.nom, c.court, c.prix || null, c.loyers || null, c.leve || null]),
+    noms: PLATEAU.map((c) => [c.nom, c.court, c.prix || null, c.loyers || null, c.leve || null, c.montant || null]),
     ressources: salle.joueurs.map((j, i) => (salle.phase === 'jeu' && !j.faillite ? ressources(salle, i) : 0)),
     journal: salle.journal,
     classement: salle.classement || null,
@@ -1365,6 +1370,12 @@ function valeursValides(brut) {
     const i = parseInt(cle, 10);
     if (!nomModifiable(i) || !v || typeof v !== 'object') continue;
     const o = NOMS_ORIGINE[i];
+    if (PLATEAU[i].t === 'taxe') {
+      const m = parseInt(v.montant, 10);
+      const montant = Number.isInteger(m) && m >= 0 && m <= PRIX_MAX ? m : o.montant;
+      if (montant !== o.montant) propres[i] = { montant };
+      continue;
+    }
     let prix = Math.round((parseInt(v.prix, 10) || 0) / 10) * 10;
     if (prix < 10 || prix > PRIX_MAX) prix = o.prix;
     const loyers = o.loyers.map((defaut, k) => {
@@ -1502,7 +1513,7 @@ const CSS = `
   .logo.prison svg{width:clamp(18px, 5.4cqw, 70px); height:auto;}
   .logo.caisse svg{width:clamp(16px, 4.6cqw, 60px); height:auto;}
   .ico-titre svg{display:inline-block; width:1.6em; height:auto; vertical-align:-3px;}
-  .case .nom{font-size:clamp(5.5px, 1.55cqw, 20.7px); word-break:break-word; hyphens:auto;}
+  .case .nom{font-size:clamp(6.5px, 1.85cqw, 25px); line-height:1.1; overflow-wrap:break-word; hyphens:auto;}
   .case .ico{font-size:clamp(8px, 2.4cqw, 32.2px); line-height:1;}
   .case .prix{font-size:clamp(7.5px, 2.25cqw, 27.6px); font-weight:800; color:#1B2A41; margin-top:1px;}
   .case.coin .texte{font-weight:700;} .case.coin .nom{font-size:clamp(6.5px, 1.8cqw, 25.3px);}
@@ -1538,7 +1549,7 @@ const CSS = `
   .case .pion + .pion{margin-left:-7px;}
   .case .pions{flex-wrap:nowrap; overflow:visible; z-index:4;}
   .case{overflow:visible;} .case .texte, .case .bande{overflow:hidden;}
-  .case .nom.long{font-size:clamp(5px, 1.3cqw, 18.4px);} .case .nom.tres-long{font-size:clamp(4.5px, 1.15cqw, 16.1px);}
+  .case .nom.long{font-size:clamp(6px, 1.6cqw, 22px);} .case .nom.tres-long{font-size:clamp(5.5px, 1.45cqw, 20px);}
   .pion{width:clamp(18px, 6cqw, 69px); height:clamp(18px, 6cqw, 69px); border-radius:50%; flex:none;
     border:2px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,0.8); color:#fff; font-weight:900;
     font-size:clamp(10px, 3.3cqw, 39.1px); display:flex; align-items:center; justify-content:center;
@@ -1698,6 +1709,7 @@ function client() {
       c.nom = n[0];
       c.court = n[1];
       if (c.prix && n[2]) { c.prix = n[2]; c.loyers = n[3]; c.leve = n[4]; if (c.t === 'rue') c.loyer = n[3][0]; }
+      if (c.t === 'taxe' && n[5] !== null && n[5] !== undefined) c.montant = n[5];
     });
     ETAT = d;
     ECART = Date.now() - d.maintenant;
@@ -2632,6 +2644,7 @@ function clientNoms() {
       if (!f) return;
       f.nom.value = c.nom;
       f.court.value = c.court === c.nom || c.court === ORIGINE[i].court ? '' : c.court;
+      if (f.montant) { f.montant.value = c.montant; return; }
       f.prix.value = c.prix;
       f.loyers.forEach(function (input, k) { input.value = c.loyers[k]; });
     });
@@ -2654,16 +2667,16 @@ function clientNoms() {
   }
 
   app.appendChild(el('h1', '', 'Réglages du plateau'));
-  app.appendChild(el('h2', 'titre-section', '🏠 Rues, gares et services'));
+  app.appendChild(el('h2', 'titre-section', '🏠 Rues, gares, services et taxes'));
   app.appendChild(el('div', 'sous', 'Nom complet (titres, journal), nom court (plateau, vide = nom complet), prix et loyers. '
     + 'Quartier complet = 2 × le loyer nu. Les prix sont arrondis à 10 €.'));
   var bloc = el('div', 'bloc');
   PLATEAU.forEach(function (c, i) {
-    if (!c.prix) return;
+    if (!c.prix && c.t !== 'taxe') return;
     var carte = el('div', 'reglage');
     var ligne = el('div', 'ligne-nom');
     var pastille = el('span', 'pastille-nom');
-    pastille.style.background = c.t === 'rue' ? GROUPES[c.g] : (c.t === 'gare' ? '#141414' : '#999');
+    pastille.style.background = c.t === 'rue' ? GROUPES[c.g] : (c.t === 'gare' ? '#141414' : (c.t === 'taxe' ? '#B00020' : '#999'));
     ligne.appendChild(pastille);
     var nom = el('input');
     nom.maxLength = NOM_MAX;
@@ -2683,6 +2696,14 @@ function clientNoms() {
       lab.appendChild(el('span', '', etiquette));
       lab.appendChild(input);
       valeurs.appendChild(lab);
+    }
+    if (c.t === 'taxe') {
+      var montant = nombre(c.montant, ORIGINE[i].montant);
+      case_('À payer €', montant);
+      carte.appendChild(valeurs);
+      champs[i] = { nom: nom, court: court, montant: montant };
+      bloc.appendChild(carte);
+      return;
     }
     var prix = nombre(c.prix, ORIGINE[i].prix);
     prix.step = '10';
@@ -2789,7 +2810,8 @@ function clientNoms() {
     Object.keys(champs).forEach(function (i) {
       var f = champs[i];
       noms[i] = { nom: f.nom.value, court: f.court.value };
-      valeurs[i] = { prix: f.prix.value, loyers: f.loyers.map(function (x) { return x.value; }) };
+      valeurs[i] = f.montant ? { montant: f.montant.value }
+        : { prix: f.prix.value, loyers: f.loyers.map(function (x) { return x.value; }) };
     });
     envoyer({ noms: noms, valeurs: valeurs, cartes: CARTES_COURANTES }, '✔ Enregistré : s\u2019applique aussitôt à toutes les parties.');
   };
@@ -2798,7 +2820,7 @@ function clientNoms() {
   var r1 = el('button', 'discret', 'Rétablir les noms d\u2019origine');
   r1.onclick = function () { if (confirm('Remettre tous les noms d\u2019origine ?')) envoyer({ retablir: 'noms' }, '✔ Noms d\u2019origine rétablis.'); };
   app.appendChild(r1);
-  var r2 = el('button', 'discret', 'Rétablir les prix et loyers d\u2019origine');
+  var r2 = el('button', 'discret', 'Rétablir les prix, loyers et taxes d\u2019origine');
   r2.onclick = function () { if (confirm('Remettre tous les prix et loyers d\u2019origine ?')) envoyer({ retablir: 'valeurs' }, '✔ Prix et loyers d\u2019origine rétablis.'); };
   app.appendChild(r2);
   var r3 = el('button', 'discret', 'Rétablir les cartes d\u2019origine');
@@ -2904,7 +2926,7 @@ export default {
         appliquerCartes(cartes);
         return json({
           ok: true,
-          plateau: PLATEAU.map((c) => ({ nom: c.nom, court: c.court, prix: c.prix, loyers: c.loyers })),
+          plateau: PLATEAU.map((c) => ({ nom: c.nom, court: c.court, prix: c.prix, loyers: c.loyers, montant: c.montant })),
           cartes: { surprise: CARTES.surprise.map(versReglage), mairie: CARTES.mairie.map(versReglage) },
         });
       }
