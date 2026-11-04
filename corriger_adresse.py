@@ -26,6 +26,9 @@ def corriger(contenu, gencod, adresse):
     s'il n'y en a aucune, une ligne est ajoutée à la fin."""
     cle = _cle(gencod)
     lignes = contenu.splitlines(keepends=True)
+    # Fin de ligne du fichier (gencod_adresses.csv doit rester en CRLF :
+    # prepa_drive_degrade tronque le dernier caractère de chaque ligne).
+    fin = "\r\n" if lignes and lignes[0].endswith("\r\n") else "\n"
     anciennes = []
     for i, ligne in enumerate(lignes):
         corps = ligne.rstrip("\r\n")
@@ -33,11 +36,11 @@ def corriger(contenu, gencod, adresse):
         if len(champs) >= 2 and _cle(champs[0]) == cle:
             anciennes.append(champs[1].strip())
             champs[1] = adresse
-            lignes[i] = ";".join(champs) + ligne[len(corps):]
+            lignes[i] = ";".join(champs) + (fin if ligne[len(corps):] else "")
     if not anciennes:
         if lignes and not lignes[-1].endswith("\n"):
-            lignes[-1] += "\n"
-        lignes.append(f"{gencod};{adresse}\n")
+            lignes[-1] += fin
+        lignes.append(f"{gencod};{adresse}{fin}")
     return "".join(lignes), anciennes
 
 
@@ -56,7 +59,7 @@ def main():
         print("ERREUR : gencod_adresses.csv introuvable sur Drive.")
         sys.exit(1)
     nouveau, anciennes = corriger(contenu, gencod, adresse)
-    if anciennes and all(a == adresse for a in anciennes):
+    if nouveau == contenu:
         print(f"{gencod} déjà à l'adresse {adresse} — rien à faire.")
         return
     if not cs.ecrire_config_drive("gencod_adresses.csv", nouveau):
