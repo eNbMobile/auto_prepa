@@ -1213,12 +1213,38 @@ function valeurLot(salle, idx, cases, proprioApres) {
   return total;
 }
 
+/** Robot à court : peu d'argent ou déjà des biens hypothéqués. */
+function robotEnDifficulte(salle, idx) {
+  return salle.joueurs[idx].argent < 300 || proprietesDe(salle, idx).some((i) => salle.hypo[i]);
+}
+
+/** L'autre joueur mène nettement : fortune au moins 1,5 fois celle du robot et la plus haute de la table. */
+function joueurMeneur(salle, idx, robot) {
+  const f = fortune(salle, idx);
+  return f >= 1.5 * fortune(salle, robot) && actifs(salle).every((k) => k === idx || fortune(salle, k) <= f);
+}
+
+/**
+ * Le robot accepte un échange s'il y gagne assez :
+ * - à l'aise : 15 % de plus que ce qu'il cède ;
+ * - en difficulté : l'argent reçu vaut 1,4 fois plus pour lui et la marge tombe à 0 %,
+ *   sauf si l'échange complète un quartier de l'autre joueur ;
+ * - si l'échange complète un quartier d'un joueur qui mène nettement : 60 % de plus exigés.
+ */
 function robotAccepteEchange(salle, e) {
   const apres = (k) => (e.donne.includes(k) ? e.a : e.recoit.includes(k) ? e.de : salle.proprio[k]);
-  const gagne = valeurLot(salle, e.a, e.donne, apres) + e.argentDonne;
+  const difficulte = robotEnDifficulte(salle, e.a);
+  const completeEnFace = e.recoit.some((i) => {
+    const c = PLATEAU[i];
+    return c.t === 'rue' && ruesDuQuartier(c.g).every((k) => apres(k) === e.de);
+  });
+  const gagne = valeurLot(salle, e.a, e.donne, apres) + e.argentDonne * (difficulte ? 1.4 : 1);
   // Ce que le robot cède vaut aussi ce que l'autre y gagne (quartier complété en face).
   const cede = valeurLot(salle, e.de, e.recoit, apres) + e.argentRecu;
-  return gagne >= cede * 1.15 && salle.joueurs[e.a].argent - e.argentRecu >= 50;
+  let marge = 1.15;
+  if (completeEnFace && joueurMeneur(salle, e.de, e.a)) marge = 1.6;
+  else if (difficulte && !completeEnFace) marge = 1;
+  return gagne >= cede * marge && salle.joueurs[e.a].argent - e.argentRecu >= 50;
 }
 
 function choisirCoupRobot(salle) {
