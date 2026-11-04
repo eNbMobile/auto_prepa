@@ -95,6 +95,26 @@ for (const c of PLATEAU) {
   if (c.prix) c.leve = Math.ceil((c.prix * 11) / 100) * 5; // levée d'hypothèque : moitié du prix + 10 %, au 5 € supérieur
 }
 
+/* Noms d'origine ; ceux de la base D1 (page « Noms des rues ») les remplacent. */
+const NOMS_ORIGINE = PLATEAU.map((c) => ({ nom: c.nom, court: c.court }));
+const NOM_MAX = 40;
+const COURT_MAX = 16;
+
+/** Cases dont on peut changer le nom : rues, gares et services. */
+function nomModifiable(i) {
+  return !!(PLATEAU[i] && PLATEAU[i].prix);
+}
+
+/** Applique au plateau les noms enregistrés (ou ceux d'origine). */
+function appliquerNoms(noms) {
+  PLATEAU.forEach((c, i) => {
+    const o = NOMS_ORIGINE[i];
+    const n = nomModifiable(i) && noms && noms[i] ? noms[i] : null;
+    c.nom = (n && n.nom) || o.nom;
+    c.court = (n && n.court) || (n && n.nom ? n.nom : o.court);
+  });
+}
+
 const CARTES = {
   surprise: [
     { texte: 'Ton appli de covoiturage te rapporte 50 €.', gain: 50 },
@@ -1181,6 +1201,7 @@ function vuePour(salle, version, jeton) {
     } : null,
     delaiEnchere: DELAI_ENCHERE_S,
     anim: salle.anim || null,
+    noms: PLATEAU.map((c) => [c.nom, c.court]),
     ressources: salle.joueurs.map((j, i) => (salle.phase === 'jeu' && !j.faillite ? ressources(salle, i) : 0)),
     journal: salle.journal,
     classement: salle.classement || null,
@@ -1214,8 +1235,43 @@ async function preparerTables(env) {
   await bdd(env).batch([
     bdd(env).prepare('CREATE TABLE IF NOT EXISTS paves_salles (code TEXT PRIMARY KEY, version INTEGER NOT NULL, etat TEXT NOT NULL, maj TEXT NOT NULL)'),
     bdd(env).prepare('CREATE TABLE IF NOT EXISTS joueurs (nom TEXT PRIMARY KEY COLLATE NOCASE)'),
+    bdd(env).prepare('CREATE TABLE IF NOT EXISTS paves_config (cle TEXT PRIMARY KEY, valeur TEXT NOT NULL, maj TEXT NOT NULL)'),
   ]);
   tablesPretes = true;
+}
+
+async function lireNoms(env) {
+  const ligne = await bdd(env).prepare("SELECT valeur FROM paves_config WHERE cle = 'noms'").first();
+  if (!ligne) return {};
+  try {
+    const noms = JSON.parse(ligne.valeur);
+    return noms && typeof noms === 'object' ? noms : {};
+  } catch (err) {
+    return {};
+  }
+}
+
+/** Nettoie les noms envoyés par la page de réglages (cases modifiables seulement). */
+function nomsValides(brut) {
+  const propres = {};
+  if (!brut || typeof brut !== 'object') return propres;
+  for (const [cle, v] of Object.entries(brut)) {
+    const i = parseInt(cle, 10);
+    if (!nomModifiable(i) || !v || typeof v !== 'object') continue;
+    const nom = String(v.nom || '').trim().replace(/\s+/g, ' ').slice(0, NOM_MAX);
+    const court = String(v.court || '').trim().replace(/\s+/g, ' ').slice(0, COURT_MAX);
+    if (!nom && !court) continue;
+    if (nom === NOMS_ORIGINE[i].nom && (!court || court === NOMS_ORIGINE[i].court)) continue;
+    propres[i] = { nom: nom || NOMS_ORIGINE[i].nom, court };
+  }
+  return propres;
+}
+
+async function ecrireNoms(env, noms) {
+  await bdd(env)
+    .prepare("INSERT INTO paves_config (cle, valeur, maj) VALUES ('noms', ?, ?) ON CONFLICT(cle) DO UPDATE SET valeur = excluded.valeur, maj = excluded.maj")
+    .bind(JSON.stringify(noms), new Date().toISOString())
+    .run();
 }
 
 async function lireSalle(env, code) {
@@ -1526,6 +1582,7 @@ function client() {
   function recevoir(d) {
     if (ANIM) { EN_ATTENTE = d; return; }
     var ancien = ETAT;
+    if (d.noms) d.noms.forEach(function (n, i) { if (PLATEAU[i]) { PLATEAU[i].nom = n[0]; PLATEAU[i].court = n[1]; } });
     ETAT = d;
     ECART = Date.now() - d.maintenant;
     if (ETAT.moi === null) { quitterLocal(); return; }
@@ -1692,6 +1749,12 @@ function client() {
       poster('/api/salle', { nom: nom, toursMax: tours.value }).then(function (d) { if (d) entrer(d); });
     }));
     app.appendChild(cre);
+    var lien = el('a', 'discret', '✏️ Changer les noms des rues');
+    lien.href = '/noms';
+    lien.style.display = 'block';
+    lien.style.textAlign = 'center';
+    lien.style.margin = '14px 0';
+    app.appendChild(lien);
     app.appendChild(zoneStatut());
   }
 
@@ -2421,6 +2484,99 @@ function client() {
   }
 }
 
+/* Page « Noms des rues » (sérialisée par toString, comme le client du jeu). */
+function clientNoms() {
+  var app = document.getElementById('app');
+  function el(balise, classe, texte) {
+    var n = document.createElement(balise);
+    if (classe) n.className = classe;
+    if (texte !== undefined && texte !== null) n.textContent = texte;
+    return n;
+  }
+  var statut = el('div', 'statut');
+  var champs = {};
+
+  function envoyer(corps) {
+    statut.textContent = 'Enregistrement…';
+    statut.className = 'statut';
+    return fetch('/api/noms', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(corps) })
+      .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.erreur || 'Erreur'); return d; }); })
+      .then(function (d) {
+        d.noms.forEach(function (n, i) {
+          if (!champs[i]) return;
+          champs[i].nom.value = n.nom;
+          champs[i].court.value = n.court === n.nom || n.court === ORIGINE[i].court ? '' : n.court;
+        });
+        statut.textContent = '✔ Noms enregistrés : ils s\u2019affichent dans toutes les parties.';
+      })
+      .catch(function (err) { statut.textContent = err.message; statut.className = 'statut erreur'; });
+  }
+
+  app.appendChild(el('h1', '', 'Noms des rues'));
+  app.appendChild(el('div', 'sous', 'Nom complet (titres de propriété, journal) et nom court affiché sur le plateau. '
+    + 'Laisse le nom court vide pour reprendre le nom complet.'));
+  var bloc = el('div', 'bloc');
+  PLATEAU.forEach(function (c, i) {
+    if (!c.prix) return;
+    var ligne = el('div', 'ligne-nom');
+    var pastille = el('span', 'pastille-nom');
+    pastille.style.background = c.t === 'rue' ? GROUPES[c.g] : (c.t === 'gare' ? '#141414' : '#999');
+    ligne.appendChild(pastille);
+    var nom = el('input');
+    nom.maxLength = NOM_MAX;
+    nom.value = c.nom;
+    nom.placeholder = ORIGINE[i].nom;
+    var court = el('input');
+    court.maxLength = COURT_MAX;
+    // Vide tant que le nom court n'a pas été personnalisé : on reprend alors le nom saisi.
+    court.value = c.court === c.nom || c.court === ORIGINE[i].court ? '' : c.court;
+    court.placeholder = 'court : ' + ORIGINE[i].court;
+    ligne.appendChild(nom);
+    ligne.appendChild(court);
+    champs[i] = { nom: nom, court: court };
+    bloc.appendChild(ligne);
+  });
+  app.appendChild(bloc);
+  var enregistrer = el('button', 'principal', 'Enregistrer les noms');
+  enregistrer.onclick = function () {
+    var noms = {};
+    Object.keys(champs).forEach(function (i) { noms[i] = { nom: champs[i].nom.value, court: champs[i].court.value }; });
+    envoyer({ noms: noms });
+  };
+  app.appendChild(enregistrer);
+  app.appendChild(statut);
+  var retablir = el('button', 'discret', 'Rétablir les noms d\u2019origine');
+  retablir.onclick = function () {
+    if (confirm('Remettre tous les noms d\u2019origine ?')) envoyer({ retablir: true });
+  };
+  app.appendChild(retablir);
+  var retour = el('a', 'discret', '← Retour au jeu');
+  retour.href = '/';
+  retour.style.display = 'block';
+  retour.style.textAlign = 'center';
+  retour.style.marginTop = '10px';
+  app.appendChild(retour);
+}
+
+function pageNomsHtml() {
+  const donnees = 'var __name = function (f) { return f; };'
+    + 'var PLATEAU = ' + toScriptJson(PLATEAU) + ';'
+    + 'var ORIGINE = ' + toScriptJson(NOMS_ORIGINE) + ';'
+    + 'var GROUPES = ' + toScriptJson(GROUPES) + ';'
+    + 'var NOM_MAX = ' + NOM_MAX + ', COURT_MAX = ' + COURT_MAX + ';';
+  const css = CSS + `
+  .ligne-nom{display:grid; grid-template-columns:14px 1fr 34%; gap:6px; align-items:center; margin:6px 0;}
+  .ligne-nom input{text-align:left; padding:8px; font-size:0.9rem;}
+  .pastille-nom{width:14px; height:28px; border-radius:3px;}`;
+  return '<!doctype html><html lang="fr"><head><meta charset="utf-8">'
+    + '<meta name="viewport" content="width=device-width, initial-scale=1">'
+    + '<link rel="icon" href="/favicon.svg" type="image/svg+xml">'
+    + '<title>Noms des rues</title><style>' + css + '</style></head>'
+    + '<body><div class="wrap"><div id="app"></div></div>'
+    + '<script>' + donnees + '(' + clientNoms.toString() + ')();</script>'
+    + '</body></html>';
+}
+
 function pageHtml(joueursConnus) {
   // Wrangler (keep_names) peut glisser des appels __name() dans le code sérialisé.
   const donnees = 'var __name = function (f) { return f; };'
@@ -2460,6 +2616,21 @@ export default {
     const api = chemin.startsWith('/api/');
     try {
       await preparerTables(env);
+      const nomsEnregistres = await lireNoms(env);
+      appliquerNoms(nomsEnregistres);
+
+      if (chemin === '/api/noms' && request.method === 'POST') {
+        const corps = await corpsJson(request);
+        const noms = corps.retablir ? {} : nomsValides(corps.noms);
+        await ecrireNoms(env, noms);
+        appliquerNoms(noms);
+        return json({ ok: true, noms: PLATEAU.map((c) => ({ nom: c.nom, court: c.court })) });
+      }
+      if (chemin === '/noms') {
+        return new Response(pageNomsHtml(), {
+          headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
+        });
+      }
 
       if (chemin === '/api/etat') {
         const code = normaliserCode(url.searchParams.get('code'));
