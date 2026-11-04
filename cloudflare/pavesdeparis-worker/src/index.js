@@ -1507,6 +1507,7 @@ const CSS = `
   .case .texte{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:space-between;
     padding:0.6cqw 1px; min-width:0; min-height:0;}
   .case.coin .texte{justify-content:center;}
+  .case.coin .nom{margin-top:clamp(3px, 1cqw, 12px);} /* espace entre l'image et le texte des coins */
   .case > .texte:first-child, .tourne > .texte:first-child{padding-top:3px;}
   .logo svg{display:block; margin:0 auto;}
   .logo.train svg{width:clamp(12px, 3.6cqw, 46px); height:auto;}
