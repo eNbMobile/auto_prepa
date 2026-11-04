@@ -25,7 +25,7 @@ URL une fois déployé : `https://pavesdeparis.coopu.workers.dev`
      25/50/100/200 € selon le nombre possédé ; services 4× ou 10× les dés.
      Un bien hypothéqué ne rapporte rien.
    - Taxe foncière (200 €), amende de stationnement (100 €).
-   - Cartes Surprise et Mairie (gains, frais, déplacements, poste de police,
+   - Cartes Surprise et Caisse commune (gains, frais, déplacements, poste de police,
      carte « Libéré sur parole ») : la carte reste affichée au centre et son
      effet ne s'applique que quand le joueur touche « OK ».
    - Un double fait rejouer ; trois doubles de suite envoient au poste.
