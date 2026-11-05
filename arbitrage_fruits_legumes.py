@@ -94,6 +94,18 @@ POISSONNERIE_MOTS = {
     "PECHEES", "ATLANTIQUE", "PACIFIQUE", "MEDITERRANEE",
 }
 
+# Viandes, charcuteries et plats en sauce : « Joue de porc ... sauce
+# échalote » contient un mot légume mais n'est pas un fruit/légume frais.
+# Un libellé contenant un de ces mots n'est pas concerné par l'arbitrage.
+VIANDE_SAUCE_MOTS = {
+    "VIANDE", "VIANDES", "PORC", "BOEUF", "VEAU", "AGNEAU", "MOUTON",
+    "POULET", "POULE", "POULETS", "DINDE", "CANARD", "LAPIN", "CAILLE",
+    "COQUELET", "PINTADE", "JAMBON", "JAMBONS", "LARDON", "LARDONS",
+    "SAUCISSE", "SAUCISSES", "SAUCISSON", "CHORIZO", "MERGUEZ", "BACON",
+    "JOUE", "JOUES", "STEAK", "STEAKS", "ESCALOPE", "ESCALOPES",
+    "SAUCE", "SAUCES",
+}
+
 PAYS = {
     "FRANCE", "ESPAGNE", "ITALIE", "MAROC", "PORTUGAL", "PAYS-BAS",
     "HOLLANDE", "BELGIQUE", "ALLEMAGNE", "GRECE", "EGYPTE", "TUNISIE",
@@ -113,7 +125,8 @@ LETTRE_LEGUME = "S"
 def _normaliser(texte):
     """Majuscules, sans accents."""
     texte = unicodedata.normalize("NFKD", texte or "")
-    return "".join(c for c in texte if not unicodedata.combining(c)).upper()
+    texte = "".join(c for c in texte if not unicodedata.combining(c)).upper()
+    return texte.replace("Œ", "OE").replace("Æ", "AE")
 
 
 def classifier_fruit_legume(libelle):
@@ -128,7 +141,7 @@ def classifier_fruit_legume(libelle):
     norm = _normaliser(libelle)
 
     if (any(re.search(p, norm) for p in _PHRASES_POISSONNERIE)
-            or set(re.findall(r"[A-Z]+", norm)) & POISSONNERIE_MOTS):
+            or set(re.findall(r"[A-Z]+", norm)) & (POISSONNERIE_MOTS | VIANDE_SAUCE_MOTS)):
         return None, None
 
     est_legume_phrase = any(re.search(p, norm) for p in _PHRASES_LEGUMES)
