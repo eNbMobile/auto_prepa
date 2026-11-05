@@ -202,6 +202,30 @@ def arbitrer(produits, nomenclatures):
     return ajouts, doutes, restants
 
 
+def zones_immediates(produits, nomenclatures, contenu_chemin_ramasse):
+    """Pendant le run d'auto_prepa : produits non adressés d'un bon
+    ([(gencod, libelle, adresse)], cf. adresses_inconnues.
+    extraire_produits_non_adresses) qui sont des fruits/légumes classés avec
+    confiance et sans nomenclature connue (`nomenclatures` : ensemble ou
+    dict de gencods normalisés sur 13 chiffres).
+
+    Retourne [(gencod, libelle, code_nomenclature)] : le code du rayon fruits
+    (R) ou légumes (S) lu dans chemin_prepa_ramasse.csv. Les cas douteux ne
+    sont pas retenus (ils restent pour l'arbitrage du soir)."""
+    code = {"fruit": code_nomenclature_rayon(contenu_chemin_ramasse, LETTRE_FRUIT),
+            "legume": code_nomenclature_rayon(contenu_chemin_ramasse, LETTRE_LEGUME)}
+    zones, vus = [], set()
+    for gencod, libelle, _ in produits:
+        cle = gencod.lstrip("0").zfill(13) if gencod.isdigit() else gencod
+        if cle in vus or cle in nomenclatures:
+            continue
+        vus.add(cle)
+        categorie, _raison = classifier_fruit_legume(libelle)
+        if categorie and code[categorie]:
+            zones.append((gencod, libelle, code[categorie]))
+    return zones
+
+
 def ajouter_nomenclatures(cs, ajouts):
     """Ajoute à gencod_nomenclatures.csv (Drive, via controle_stocks `cs`)
     une ligne par produit résolu dans `ajouts` ([(gencod, libelle,
