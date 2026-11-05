@@ -25,6 +25,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 
 import adresses_inconnues
+import arbitrage_fruits_legumes
 import confidentiel
 import livraison_drive
 import moteur_ombre
@@ -2670,6 +2671,66 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
             archiver_pdf_drive(drive_svc, cache_path, dossier_jj_mm, dossier_mm_aaaa)
 
 
+# Fichiers ecrits par le moteur de generation dans WORK_DIR (nettoyes avant
+# chaque generation, sauvegardes avant une regeneration apres zonage).
+FICHIERS_MOTEUR = [
+    "bon_prepa.txt", "bon_anticipation.txt",
+    "bon_prepa_NEW.txt", "bon_prepa_dlc.txt",
+    "bon_encaissement.pdf", "bon_encaissement.csv", "bon_encaissement_NEW.csv",
+    "base_client.txt", "tri_cde.txt", "tri_heures.txt",
+    "tmp", "tmp2", "tmp_NEW", "temp", "gentemp.txt", "temp_lib.txt",
+]
+
+# Gencods (normalises sur 13 chiffres) de la copie locale de
+# gencod_nomenclatures.csv, lus une seule fois par run (cf. _zoner_fruits_legumes).
+_NOMENCLATURES_LOCALES = None
+
+
+def _zoner_fruits_legumes(chemin_bon):
+    """Fruits/legumes nouveaux d'un bon (non adresses, sans nomenclature,
+    classes avec confiance par arbitrage_fruits_legumes) : ajoute leur code
+    de nomenclature fruits (R) ou legumes (S) a la copie LOCALE de
+    gencod_nomenclatures.csv (WORK_DIR, rien n'est ecrit sur Drive : la
+    routine du soir s'en charge), pour que la regeneration du bon les place
+    tout de suite dans leur zone. Retourne [(gencod, libelle, code)] ajoutes.
+    Ne leve jamais : un echec laisse simplement le bon tel quel."""
+    global _NOMENCLATURES_LOCALES
+    afl = arbitrage_fruits_legumes
+    try:
+        with open(chemin_bon, encoding='utf-8', errors='replace') as f:
+            produits = adresses_inconnues.extraire_produits_non_adresses(f.readlines())
+        # Filtre rapide avant de lire les 15 Mo de nomenclatures.
+        produits = [p for p in produits if afl.classifier_fruit_legume(p[1])[0]]
+        if not produits:
+            return []
+        chemin_nomencl = os.path.join(WORK_DIR, "gencod_nomenclatures.csv")
+        with open(chemin_nomencl, 'rb') as f:
+            brut = f.read()
+        if _NOMENCLATURES_LOCALES is None:
+            _NOMENCLATURES_LOCALES = set()
+            for ligne in brut.split(b"\n"):
+                g = ligne.split(b";", 1)[0].strip().lstrip(b"\xef\xbb\xbf").decode('ascii', 'ignore')
+                if g.isdigit():
+                    _NOMENCLATURES_LOCALES.add(g.lstrip('0').zfill(13))
+        with open(os.path.join(WORK_DIR, "chemin_prepa_ramasse.csv"),
+                  encoding='utf-8-sig', errors='replace') as f:
+            contenu_chemin = f.read()
+        zones = afl.zones_immediates(produits, _NOMENCLATURES_LOCALES, contenu_chemin)
+        if not zones:
+            return []
+        fin = b"\r\n" if b"\r\n" in brut[-200:] else b"\n"
+        ajout = b"" if (not brut or brut.endswith(b"\n")) else fin
+        ajout += fin.join(f"{g};{c}".encode('ascii') for g, _, c in zones) + fin
+        with open(chemin_nomencl, 'ab') as f:
+            f.write(ajout)
+        for g, _, _ in zones:
+            _NOMENCLATURES_LOCALES.add(g.lstrip('0').zfill(13))
+        return zones
+    except Exception as e:  # noqa: BLE001 - ne doit jamais bloquer le bon
+        print(f"  Zonage fruits/legumes impossible ({type(e).__name__}: {e})")
+        return []
+
+
 def _traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, dossier_mm_aaaa,
                           heure_cron, shopopop_token, shopopop_drive_id, shopopop_connecte):
     """Genere le bon_prepa/bon_anticipation d'un BonDeCommande_NUMERO.pdf deja
@@ -2692,13 +2753,7 @@ def _traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, 
     if not os.path.exists(bdc_dst):
         shutil.copy2(cache_path, bdc_dst)
 
-    for fname in [
-        "bon_prepa.txt", "bon_anticipation.txt",
-        "bon_prepa_NEW.txt", "bon_prepa_dlc.txt",
-        "bon_encaissement.pdf", "bon_encaissement.csv", "bon_encaissement_NEW.csv",
-        "base_client.txt", "tri_cde.txt", "tri_heures.txt",
-        "tmp", "tmp2", "tmp_NEW", "temp", "gentemp.txt", "temp_lib.txt",
-    ]:
+    for fname in FICHIERS_MOTEUR:
         fpath = os.path.join(WORK_DIR, fname)
         if os.path.exists(fpath):
             os.remove(fpath)
@@ -2805,6 +2860,51 @@ def _traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, 
             f"bon_prepa.txt.\nsortie : {r.stdout[:300]}")
         return "processed", shopopop_token, shopopop_drive_id, shopopop_connecte
     print(f" OK ({duree_moteur:.2f} s)")
+
+    # Fruits/legumes nouveaux (sans nomenclature) : zone R/S tout de suite,
+    # par ajout a la copie locale de gencod_nomenclatures.csv puis
+    # regeneration du bon (cf. _zoner_fruits_legumes).
+    zones_fl = _zoner_fruits_legumes(bon_prepa_path)
+    if zones_fl:
+        print(f"  [{order_num}] {len(zones_fl)} fruit(s)/legume(s) place(s) en zone "
+              f"fruits/legumes, regeneration...", end="", flush=True)
+        sauvegarde = tempfile.mkdtemp(prefix="zonage_")
+        for fname in FICHIERS_MOTEUR:
+            fpath = os.path.join(WORK_DIR, fname)
+            if os.path.exists(fpath):
+                shutil.move(fpath, os.path.join(sauvegarde, fname))
+        shutil.copy2(cache_path, os.path.join(WORK_DIR, pdf))
+        if ombre:
+            shutil.rmtree(ombre, ignore_errors=True)
+        ombre = (moteur_ombre.preparer(WORK_DIR, pdf)
+                 if moteur_ombre.actif(MOTEUR_PREPA) else None)
+        t_moteur = time.perf_counter()
+        try:
+            r2 = subprocess.run(commande, cwd=WORK_DIR,
+                                capture_output=True, text=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            r2 = None
+        duree_moteur += time.perf_counter() - t_moteur
+        if (r2 is not None and r2.returncode == 0 and os.path.exists(bon_prepa_path)
+                and os.path.getsize(bon_prepa_path) > 0):
+            r = r2
+            print(f" OK ({duree_moteur:.2f} s)")
+        else:
+            # Echec : on garde le bon de la premiere generation.
+            for fname in FICHIERS_MOTEUR:
+                fpath = os.path.join(WORK_DIR, fname)
+                if os.path.exists(fpath):
+                    os.remove(fpath)
+            for fname in os.listdir(sauvegarde):
+                shutil.move(os.path.join(sauvegarde, fname), os.path.join(WORK_DIR, fname))
+            for fname in os.listdir(WORK_DIR):
+                if fname.lower().endswith(".pdf"):
+                    os.remove(os.path.join(WORK_DIR, fname))
+            if ombre:
+                shutil.rmtree(ombre, ignore_errors=True)
+            ombre = None
+            print(" ECHEC, bon initial conserve")
+        shutil.rmtree(sauvegarde, ignore_errors=True)
     # Mode ombre : le portage Python refait le bon à côté et on compare
     # (n'affecte jamais le bon du C ; cf. moteur_ombre.py).
     # Mode ombre : sorties brutes du C mises de cote tout de suite, le
@@ -2907,8 +3007,12 @@ def _traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, 
         _envoyer_email_alerte_livraison(gmail_svc, order_num, montant_pdf,
                                         nom, prenom, date_cde, creneau)
 
-    adresses_inconnues.noter_produits_non_adresses(
-        drive_svc, order_num, adresses_inconnues.extraire_produits_non_adresses(lignes))
+    # Les fruits/legumes zones pendant le run restent notes : la routine du
+    # soir les ajoute alors a gencod_nomenclatures.csv sur Drive.
+    non_adresses = adresses_inconnues.extraire_produits_non_adresses(lignes)
+    deja = {g for g, _, _ in non_adresses}
+    non_adresses += [(g, lib, "") for g, lib, _ in zones_fl if g not in deja]
+    adresses_inconnues.noter_produits_non_adresses(drive_svc, order_num, non_adresses)
 
     if articles_pdf is not None and produits_pdf is not None:
         with open(bon_prepa_path, 'r', encoding='utf-8') as _f:
