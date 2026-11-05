@@ -32,6 +32,7 @@ SUJETS = {
     "m2": "Confirmation commande 04/11/2026 à 11:00 -- Mme B - N° cde:57000001",  # deja la
     "m3": "Confirmation commande 04/11/2026 à 12:00 -- Mme C - N° cde:57000002",  # deplace
     "m4": "Confirmation commande 05/11/2026 à 12:00 -- Mme D - N° cde:57000003",  # autre jour
+    "m5": "Confirmation commande 04/11/2026 à 13:00 -- Mme E - N° cde:57000004",  # annulee
 }
 
 
@@ -81,8 +82,10 @@ class TestRattrapageBdc(unittest.TestCase):
         self.drive = _Drive()
         self._sauve = {n: getattr(cs, n) for n in (
             "DRIVE_BDC_FOLDER_ID", "_charger_gmail_filters", "_get_gmail_service",
-            "_get_drive_service", "_get_or_create_subfolder_drive")}
+            "_get_drive_service", "_get_or_create_subfolder_drive",
+            "numeros_annules_registre")}
         cs.DRIVE_BDC_FOLDER_ID = "bdc"
+        cs.numeros_annules_registre = lambda: {"57000004"}
         cs._charger_gmail_filters = lambda: {"conf_from": "no-reply@exemple.fr"}
         cs._get_gmail_service = lambda: _Gmail()
         cs._get_drive_service = lambda: self.drive

@@ -864,6 +864,10 @@ def rattraper_bdc_manquants_gmail(date_j1):
             match = _RE_SUJET_CONF.search(sujet)
             if match and match.group(1) == date_str:
                 commandes.setdefault(match.group(2), m["id"])
+        # Commande annulee/remplacee : son BDC a ete supprime volontairement
+        # (definitivement, pas de trace en corbeille), on ne le remet pas.
+        for numero in numeros_annules_registre():
+            commandes.pop(numero, None)
         if not commandes:
             return []
 
