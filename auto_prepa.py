@@ -2062,55 +2062,6 @@ def _envoyer_email_anomalie_bon(gmail_svc, numero, lignes_invalides):
     except Exception as e:
         print(f"    Envoi email anomalie {numero} echoue : {e}")
 
-# Alerte temporaire (demandee le 30/10/2026, a garder quelques jours) : toute
-# commande en livraison d'au moins SEUIL_ALERTE_LIVRAISON euros traitee a
-# partir de DEBUT_ALERTE_LIVRAISON est signalee par email au destinataire 1.
-SEUIL_ALERTE_LIVRAISON = 170.0
-DEBUT_ALERTE_LIVRAISON = datetime(2026, 10, 31, 1, 0, tzinfo=_TZ)
-
-
-def _alerte_livraison_due(montant_pdf, maintenant=None):
-    """Vrai si une commande en livraison de ce montant ("Montant initial" du
-    bon de commande, ex. "172.40") doit etre signalee."""
-    maintenant = maintenant or datetime.now(_TZ)
-    if maintenant < DEBUT_ALERTE_LIVRAISON:
-        return False
-    try:
-        return float(montant_pdf) >= SEUIL_ALERTE_LIVRAISON
-    except (TypeError, ValueError):
-        return False
-
-
-def _envoyer_email_alerte_livraison(gmail_svc, numero, montant, nom, prenom,
-                                    date_cde, creneau):
-    """Signale au destinataire 1 l'arrivee d'une commande en livraison d'au
-    moins SEUIL_ALERTE_LIVRAISON euros."""
-    from email.mime.text import MIMEText
-    destinataire = EMAIL_ANTICIPATION
-    if not destinataire:
-        return False
-    corps = (
-        f"Bonjour,\n\n"
-        f"Une commande en livraison d'au moins {SEUIL_ALERTE_LIVRAISON:.0f} EUR "
-        f"vient de tomber :\n\n"
-        f"  Commande : {numero}\n"
-        f"  Montant  : {montant} EUR\n"
-        f"  Client   : {nom} {prenom}\n"
-        f"  Livraison: {date_cde or '?'} {creneau or ''}\n"
-    )
-    try:
-        msg = MIMEText(corps, "plain", "utf-8")
-        msg["to"] = destinataire
-        msg["subject"] = f"Commande {numero} - livraison de {montant} EUR"
-        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-        gmail_svc.users().messages().send(userId="me", body={"raw": raw}).execute()
-        print(f"    Email alerte livraison >= {SEUIL_ALERTE_LIVRAISON:.0f} EUR envoye pour cde {numero}")
-        return True
-    except Exception as e:
-        print(f"    Envoi email alerte livraison {numero} echoue : {e}")
-        return False
-
-
 _SUJET_BON_ABSENT = "AUCUN bon de prepa genere"
 
 
@@ -3000,12 +2951,6 @@ def _traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, 
         # workflow d'ici la, meme sans nouvel email a traiter.
         if km_manquant:
             livraison_drive.noter_km_en_attente(drive_svc, order_num)
-
-    # Une commande regeneree a deja ete signalee a son premier traitement.
-    if (len(lignes) > 1 and ',Livraison,' in lignes[1] and not regeneration
-            and _alerte_livraison_due(montant_pdf)):
-        _envoyer_email_alerte_livraison(gmail_svc, order_num, montant_pdf,
-                                        nom, prenom, date_cde, creneau)
 
     # Les fruits/legumes zones pendant le run restent notes : la routine du
     # soir les ajoute alors a gencod_nomenclatures.csv sur Drive.
