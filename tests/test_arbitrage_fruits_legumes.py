@@ -49,6 +49,14 @@ class TestClassification(unittest.TestCase):
             "Tomate cerise souveraine, catégorie extra, barquette 250g, FRANCE"),
             ("legume", None))
 
+    def test_viande_en_sauce_non_concernee(self):
+        self.assertEqual(afl.classifier_fruit_legume(
+            "Joue de porc cuite et sauce échalote, BIGARD, France, barquette, 400g"),
+            (None, None))
+
+    def test_boeuf_avec_oe_non_concerne(self):
+        self.assertEqual(afl.classifier_fruit_legume("Bœuf carottes FRANCE"), (None, None))
+
     def test_cote_d_ivoire(self):
         self.assertEqual(afl.classifier_fruit_legume("BANANES CÔTE D'IVOIRE"), ("fruit", None))
 
