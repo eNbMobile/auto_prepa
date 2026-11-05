@@ -796,38 +796,55 @@ def _get_or_create_subfolder(drive_svc, parent_id, name):
         print(f"    Creation dossier Drive '{name}' echouee : {e}")
         return None
 
+ARCHIVAGE_BDC_TENTATIVES = 5
+ARCHIVAGE_BDC_ATTENTE = 5  # secondes, multipliees par le numero de l'essai
+
+
 def archiver_pdf_drive(drive_svc, pdf_path, dossier_jj_mm, dossier_mm_aaaa=""):
-    """Archive un PDF dans DRIVE_BDC_FOLDER_ID/MM_AAAA/JJ_MM/ sur Drive."""
+    """Archive un PDF dans DRIVE_BDC_FOLDER_ID/MM_AAAA/JJ_MM/ sur Drive.
+
+    Plusieurs essais : le calcul des ventes du soir (generer_ventes) ne lit
+    que ce dossier, un PDF non archive y est donc une commande dont les
+    ventes sont perdues (03/11/2026, cde 57069955 : un seul 502 de Drive et
+    la commande manquait aux ventes du 04/11). En dernier recours,
+    controle_stocks.rattraper_bdc_manquants_gmail l'archive le soir depuis
+    l'email de confirmation. Retourne True si le PDF est (deja) archive."""
     if not DRIVE_BDC_FOLDER_ID:
-        return
+        return False
     filename = os.path.basename(pdf_path)
-    try:
-        if dossier_mm_aaaa:
-            mois_id = _get_or_create_subfolder(drive_svc, DRIVE_BDC_FOLDER_ID, dossier_mm_aaaa)
-            if not mois_id:
-                return
-            subfolder_id = _get_or_create_subfolder(drive_svc, mois_id, dossier_jj_mm)
-        else:
-            subfolder_id = _get_or_create_subfolder(drive_svc, DRIVE_BDC_FOLDER_ID, dossier_jj_mm)
-        if not subfolder_id:
-            return
-        res = drive_svc.files().list(
-            q=f"name='{filename}' and '{subfolder_id}' in parents and trashed=false",
-            fields="files(id)",
-        ).execute()
-        if res.get("files"):
-            return
-        media = MediaFileUpload(pdf_path, mimetype="application/pdf", resumable=False)
-        drive_svc.files().create(
-            body={"name": filename, "parents": [subfolder_id]},
-            media_body=media,
-            fields="id",
-        ).execute()
-        path = f"BDC/{dossier_mm_aaaa}/{dossier_jj_mm}" if dossier_mm_aaaa else f"BDC/{dossier_jj_mm}"
-        print(f"    {filename} => Drive {path}/ OK")
-    except Exception as e:
-        path = f"BDC/{dossier_mm_aaaa}/{dossier_jj_mm}" if dossier_mm_aaaa else f"BDC/{dossier_jj_mm}"
-        print(f"    Archivage Drive {path}/ echoue : {e}")
+    path = f"BDC/{dossier_mm_aaaa}/{dossier_jj_mm}" if dossier_mm_aaaa else f"BDC/{dossier_jj_mm}"
+    for tentative in range(1, ARCHIVAGE_BDC_TENTATIVES + 1):
+        try:
+            if dossier_mm_aaaa:
+                mois_id = _get_or_create_subfolder(drive_svc, DRIVE_BDC_FOLDER_ID, dossier_mm_aaaa)
+                subfolder_id = (_get_or_create_subfolder(drive_svc, mois_id, dossier_jj_mm)
+                                if mois_id else None)
+            else:
+                subfolder_id = _get_or_create_subfolder(drive_svc, DRIVE_BDC_FOLDER_ID, dossier_jj_mm)
+            if not subfolder_id:
+                raise RuntimeError("dossier Drive introuvable ou non cree")
+            res = drive_svc.files().list(
+                q=f"name='{filename}' and '{subfolder_id}' in parents and trashed=false",
+                fields="files(id)",
+            ).execute()
+            if res.get("files"):
+                return True
+            media = MediaFileUpload(pdf_path, mimetype="application/pdf", resumable=False)
+            drive_svc.files().create(
+                body={"name": filename, "parents": [subfolder_id]},
+                media_body=media,
+                fields="id",
+            ).execute()
+            print(f"    {filename} => Drive {path}/ OK")
+            return True
+        except Exception as e:
+            print(f"    Archivage Drive {path}/ echoue (essai {tentative}/"
+                  f"{ARCHIVAGE_BDC_TENTATIVES}) : {str(e)[:200]}")
+            if tentative < ARCHIVAGE_BDC_TENTATIVES:
+                time.sleep(ARCHIVAGE_BDC_ATTENTE * tentative)
+    print(f"    {filename} non archive : rattrapage prevu le soir depuis Gmail "
+          f"avant le calcul des ventes.")
+    return False
 
 def _dossier_anticipation_jour(drive_svc, dossier_mm_aaaa, dossier_jj_mm, archives=False, creer=True):
     """Retourne l'ID du dossier Drive GITHUB/Anticipation/[archives/]MM_AAAA/JJ_MM,
