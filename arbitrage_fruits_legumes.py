@@ -40,6 +40,7 @@ _PHRASES_LEGUMES = (
     r"\bPATATES?\s+DOUCES?\b",
     r"\bPETITS?\s+POIS\b",
     r"\bCHOUX?[\s-]FLEURS?\b",
+    r"\bTOMATES?\s+CERISES?\b",
 )
 
 FRUITS_MOTS = {

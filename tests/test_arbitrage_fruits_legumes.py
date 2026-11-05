@@ -44,6 +44,11 @@ class TestClassification(unittest.TestCase):
     def test_peche_de_vigne_reste_un_fruit(self):
         self.assertEqual(afl.classifier_fruit_legume("PECHES DE VIGNE FRANCE"), ("fruit", None))
 
+    def test_tomate_cerise_est_un_legume(self):
+        self.assertEqual(afl.classifier_fruit_legume(
+            "Tomate cerise souveraine, catégorie extra, barquette 250g, FRANCE"),
+            ("legume", None))
+
     def test_cote_d_ivoire(self):
         self.assertEqual(afl.classifier_fruit_legume("BANANES CÔTE D'IVOIRE"), ("fruit", None))
 
