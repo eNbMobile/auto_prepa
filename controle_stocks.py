@@ -548,6 +548,8 @@ def generer_ventes(date_j1):
 
     bdc_subdir = os.path.join(BDC_DIR, dossier)
 
+    # Filet : PDF dont l'archivage par aut_prep a echoue, repris depuis Gmail.
+    rattraper_bdc_manquants_gmail(date_j1)
     synced = telecharger_bdc_depuis_drive(date_j1)
     if synced:
         bdc_subdir = synced
@@ -785,6 +787,153 @@ def _get_gmail_service():
     except Exception as e:
         print(f"  Gmail inaccessible : {e}")
         return None
+
+
+_RE_SUJET_CONF = re.compile(r'(\d{2}/\d{2}/\d{4}).*?N°\s*cde\s*[:\s]+(\d+)')
+
+
+def _charger_gmail_filters():
+    """Lit gmail_filters.json (dossier config Drive) ; {} en cas d'echec."""
+    svc = _get_drive_service()
+    if not svc or not DRIVE_CONFIG_FOLDER_ID:
+        return {}
+    try:
+        from googleapiclient.http import MediaIoBaseDownload
+        res = svc.files().list(
+            q=f"name='gmail_filters.json' and '{DRIVE_CONFIG_FOLDER_ID}' in parents and trashed=false",
+            fields="files(id)",
+        ).execute()
+        files = res.get("files", [])
+        if not files:
+            return {}
+        buf = io.BytesIO()
+        dl = MediaIoBaseDownload(buf, svc.files().get_media(fileId=files[0]["id"]))
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        return confidentiel.masquer_config(json.loads(buf.getvalue().decode("utf-8")))
+    except Exception as e:
+        print(f"  gmail_filters.json illisible : {e}")
+        return {}
+
+
+def rattraper_bdc_manquants_gmail(date_j1):
+    """Archive dans Drive BDC/MM_AAAA/JJ_MM tout bon de commande du jour
+    date_j1 dont l'email de confirmation existe mais dont le PDF manque.
+
+    aut_prep archive chaque PDF apres sa preparation, mais un echec Drive
+    (502 du 03/11/2026, cde 57069955) le laissait hors du dossier : ses
+    ventes etaient alors ignorees. L'email de confirmation (sujet
+    « Confirmation commande JJ/MM/AAAA à HH:MM -- ... N° cde:NUMERO », piece
+    jointe bon_encaissement.pdf) reste la source de reference. Les commandes
+    annulees/remplacees sont ecartees ensuite par generer_ventes (registre).
+    Retourne la liste des numeros rattrapes."""
+    if not DRIVE_BDC_FOLDER_ID:
+        return []
+    filtres = _charger_gmail_filters()
+    conf_from = filtres.get("conf_from", "")
+    gmail = _get_gmail_service()
+    drive = _get_drive_service()
+    if not conf_from or not gmail or not drive:
+        print("  Rattrapage des BDC depuis Gmail impossible (Gmail/Drive/filtres indisponibles).")
+        return []
+
+    date_str = date_j1.strftime("%d/%m/%Y")
+    try:
+        # Recherche large (Gmail ne respecte pas strictement la phrase), le
+        # sujet est verifie ci-dessous.
+        q = f'from:{conf_from} "Confirmation commande {date_str}" newer_than:60d'
+        messages, page_token = [], None
+        while True:
+            params = {"userId": "me", "q": q, "maxResults": 500}
+            if page_token:
+                params["pageToken"] = page_token
+            res = gmail.users().messages().list(**params).execute()
+            messages.extend(res.get("messages", []))
+            page_token = res.get("nextPageToken")
+            if not page_token:
+                break
+
+        commandes = {}  # numero -> message id
+        for m in messages:
+            meta = gmail.users().messages().get(
+                userId="me", id=m["id"], format="metadata",
+                metadataHeaders=["Subject"]).execute()
+            sujet = next((h["value"] for h in meta.get("payload", {}).get("headers", [])
+                          if h["name"].lower() == "subject"), "")
+            match = _RE_SUJET_CONF.search(sujet)
+            if match and match.group(1) == date_str:
+                commandes.setdefault(match.group(2), m["id"])
+        if not commandes:
+            return []
+
+        mois_id = _get_or_create_subfolder_drive(drive, DRIVE_BDC_FOLDER_ID, date_j1.strftime("%m_%Y"))
+        jour_id = mois_id and _get_or_create_subfolder_drive(drive, mois_id, date_j1.strftime("%d_%m"))
+        if not jour_id:
+            print("  Rattrapage des BDC : dossier Drive BDC du jour inaccessible.")
+            return []
+        presents, page_token = set(), None
+        while True:
+            params = {"q": f"'{jour_id}' in parents and trashed=false",
+                      "fields": "nextPageToken, files(name)", "pageSize": 1000}
+            if page_token:
+                params["pageToken"] = page_token
+            res = drive.files().list(**params).execute()
+            presents.update(f["name"] for f in res.get("files", []))
+            page_token = res.get("nextPageToken")
+            if not page_token:
+                break
+    except Exception as e:
+        print(f"  Rattrapage des BDC depuis Gmail echoue : {e}")
+        return []
+
+    import base64
+    import time
+    from googleapiclient.http import MediaIoBaseUpload
+    rattrapes = []
+    for numero, msg_id in sorted(commandes.items()):
+        nom = f"BonDeCommande_{numero}.pdf"
+        if nom in presents:
+            continue
+        # Present ailleurs (deplace vers un autre jour par deplacer_commande)
+        # ou mis a la corbeille (annulation, --supprimer) : volontaire, on n'y
+        # touche pas. Seul un PDF jamais archive nulle part est rattrape.
+        try:
+            ailleurs = drive.files().list(
+                q=f"name='{nom}'", fields="files(id)", pageSize=1).execute().get("files")
+        except Exception as e:
+            print(f"  Rattrapage {nom} : verification Drive echouee ({e}), ignore.")
+            continue
+        if ailleurs:
+            continue
+        for tentative in range(1, 4):
+            try:
+                msg = gmail.users().messages().get(userId="me", id=msg_id, format="full").execute()
+                pieces, attachment_id = [msg.get("payload", {})], None
+                while pieces:
+                    p = pieces.pop()
+                    pieces.extend(p.get("parts", []) or [])
+                    if p.get("filename", "").lower() == "bon_encaissement.pdf":
+                        attachment_id = p.get("body", {}).get("attachmentId")
+                        break
+                if not attachment_id:
+                    print(f"  Rattrapage {nom} : pas de bon_encaissement.pdf dans l'email.")
+                    break
+                att = gmail.users().messages().attachments().get(
+                    userId="me", messageId=msg_id, id=attachment_id).execute()
+                contenu = base64.urlsafe_b64decode(att["data"] + "==")
+                drive.files().create(
+                    body={"name": nom, "parents": [jour_id]},
+                    media_body=MediaIoBaseUpload(io.BytesIO(contenu), mimetype="application/pdf"),
+                    fields="id",
+                ).execute()
+                print(f"  {nom} absent de Drive BDC : archive depuis l'email de confirmation.")
+                rattrapes.append(numero)
+                break
+            except Exception as e:
+                print(f"  Rattrapage {nom} echoue (essai {tentative}/3) : {str(e)[:200]}")
+                time.sleep(5 * tentative)
+    return rattrapes
 
 
 def telecharger_bdc_depuis_drive(date_j1):
