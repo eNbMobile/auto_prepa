@@ -33,6 +33,8 @@ const OFFRE_ROBOT_BASE = 2.4;
 const OFFRE_ROBOT_HAUSSE = 0.6;
 const OFFRE_ROBOT_REFUS_MAX = 3;
 const OFFRE_ROBOT_PAUSE_TOURS = 3;
+// Probabilité qu'un robot laisse partir aux enchères un bien qui ne lui sert à rien.
+const ROBOT_ENCHERE_CHANCE = 0.5;
 // Loyer d'une rue selon ses constructions (0 à 4 maisons, 5 = hôtel), en multiples du loyer de base.
 const MULT_MAISONS = [1, 5, 15, 40, 55, 70];
 // Coût d'une maison (ou de l'hôtel) par quartier.
@@ -1252,6 +1254,19 @@ function robotAccepteEchange(salle, e) {
   return gagne >= cede * marge && salle.joueurs[e.a].argent - e.argentRecu >= 50;
 }
 
+/**
+ * Le robot laisse parfois partir aux enchères un bien qui ne lui sert à rien
+ * (aucune rue du quartier déjà prise, aucune autre gare ou compagnie à lui),
+ * pour tenter de l'avoir moins cher. Il garde de quoi miser.
+ */
+function robotTenteEnchere(salle, idx) {
+  const pos = salle.joueurs[idx].position;
+  const c = PLATEAU[pos];
+  if (salle.joueurs[idx].argent < 150 || Math.random() >= ROBOT_ENCHERE_CHANCE) return false;
+  if (c.t === 'rue') return ruesDuQuartier(c.g).every((k) => k === pos || salle.proprio[k] === null);
+  return !proprietesDe(salle, idx).some((k) => PLATEAU[k].t === c.t);
+}
+
 function choisirCoupRobot(salle) {
   const J = salle.joueurs;
   if (salle.echange && J[salle.echange.a] && J[salle.echange.a].robot && salle.etape !== 'enchere') {
@@ -1280,7 +1295,10 @@ function choisirCoupRobot(salle) {
   const t = J[salle.tour];
   if (!t || !t.robot || t.faillite) return null;
   const coup = (action, valeur) => ({ jeton: t.jeton, action, valeur });
-  if (salle.etape === 'achat') return coup(t.argent - PLATEAU[t.position].prix >= 50 ? 'acheter' : 'passer');
+  if (salle.etape === 'achat') {
+    const peut = t.argent - PLATEAU[t.position].prix >= 50;
+    return coup(peut && !robotTenteEnchere(salle, salle.tour) ? 'acheter' : 'passer');
+  }
   if (salle.etape === 'carte') return coup('okCarte');
   if (salle.etape === 'prison') return coup(t.cartesSortie.length ? 'carte' : (t.argent >= 400 ? 'caution' : 'lancer'));
   if (salle.etape !== 'lancer') return null;
