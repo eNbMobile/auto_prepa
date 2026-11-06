@@ -1188,8 +1188,8 @@ function dureeAnimation(anim) {
   if (!anim) return 0;
   let ms = 300;
   for (const e of anim.etapes) {
-    if (e.t === 'des') ms += 1030;
-    else if (e.t === 'pas') ms += 120 * (((e.recule ? e.de - e.a : e.a - e.de) + PLATEAU.length) % PLATEAU.length + 1) + 300;
+    if (e.t === 'des') ms += 730;
+    else if (e.t === 'pas') ms += 200 * (((e.recule ? e.de - e.a : e.a - e.de) + PLATEAU.length) % PLATEAU.length) + 350;
     else if (e.t === 'saut') ms += 800;
     else ms += 1400;
   }
@@ -1829,7 +1829,7 @@ function client() {
             ANIM.roule = false;
             ANIM.des = e.des;
             rendre();
-            setTimeout(suivant, 400);
+            setTimeout(suivant, 100);
           }
         }, 90);
       } else if (e.t === 'pas') {
@@ -1838,10 +1838,10 @@ function client() {
           if (AFF[e.j] === e.a) { setTimeout(suivant, 300); return; }
           AFF[e.j] = e.recule ? (AFF[e.j] + PLATEAU.length - 1) % PLATEAU.length : (AFF[e.j] + 1) % PLATEAU.length;
           rendre();
-          setTimeout(pas, 120);
+          setTimeout(pas, 200);
         };
         rendre();
-        setTimeout(pas, 120);
+        setTimeout(pas, 50);
       } else if (e.t === 'saut') {
         setTimeout(function () { AFF[e.j] = e.a; rendre(); setTimeout(suivant, 500); }, 300);
       } else {
