@@ -35,6 +35,9 @@ const OFFRE_ROBOT_REFUS_MAX = 3;
 const OFFRE_ROBOT_PAUSE_TOURS = 3;
 // Probabilité qu'un robot laisse partir aux enchères un bien qui ne lui sert à rien.
 const ROBOT_ENCHERE_CHANCE = 0.5;
+// Stock de la banque : 32 maisons et 12 hôtels (un hôtel lui rend ses 4 maisons).
+const MAISONS_MAX = 32;
+const HOTELS_MAX = 12;
 // Loyer d'une rue selon ses constructions (0 à 4 maisons, 5 = hôtel), en multiples du loyer de base.
 const MULT_MAISONS = [1, 5, 15, 40, 55, 70];
 // Coût d'une maison (ou de l'hôtel) par quartier.
@@ -430,6 +433,23 @@ function terminer(salle, raison) {
 
 function verifierFin(salle) {
   if (salle.phase === 'jeu' && actifs(salle).length <= 1) terminer(salle, 'Plus qu\'un joueur en lice.');
+}
+
+/** Maisons et hôtels encore disponibles à la banque. */
+function stockBanque(salle) {
+  let maisons = MAISONS_MAX, hotels = HOTELS_MAX;
+  for (const n of salle.maisons) {
+    if (n === 5) hotels--;
+    else maisons -= n || 0;
+  }
+  return { maisons, hotels };
+}
+
+/** Motif du refus si la banque ne peut pas fournir la prochaine construction sur `pos`, sinon null. */
+function manqueStock(salle, pos) {
+  const stock = stockBanque(salle);
+  if (salle.maisons[pos] === 4) return stock.hotels > 0 ? null : 'La banque n\'a plus d\'hôtel.';
+  return stock.maisons > 0 ? null : 'La banque n\'a plus de maison.';
 }
 
 function proprietesDe(salle, idx) {
@@ -891,6 +911,8 @@ function actionGestion(salle, moi, action, pos) {
     if (rues.some((i) => salle.hypo[i])) refuser('Lève d\'abord les hypothèques du quartier.');
     if (salle.maisons[pos] >= 5) refuser('Il y a déjà un hôtel.');
     if (salle.maisons[pos] > Math.min(...niveaux)) refuser('Construis d\'abord sur les autres rues du quartier.');
+    const manque = manqueStock(salle, pos);
+    if (manque) refuser(manque);
     if (j.argent < c.maison) refuser('Pas assez d\'argent (' + c.maison + ' €).');
     j.argent -= c.maison;
     salle.maisons[pos] += 1;
@@ -898,6 +920,9 @@ function actionGestion(salle, moi, action, pos) {
   } else if (action === 'demolir') {
     if (!salle.maisons[pos]) refuser('Aucune construction ici.');
     if (salle.maisons[pos] < Math.max(...niveaux)) refuser('Vends d\'abord sur les rues les plus bâties du quartier.');
+    if (salle.maisons[pos] === 5 && stockBanque(salle).maisons < 4) {
+      refuser('La banque n\'a pas les 4 maisons pour remplacer l\'hôtel.');
+    }
     salle.maisons[pos] -= 1;
     j.argent += c.maison / 2;
     noter(salle, j.nom + ' revend une construction ' + c.nom + ' (+' + c.maison / 2 + ' €).');
@@ -1329,6 +1354,7 @@ function choisirCoupRobot(salle) {
     const rues = ruesDuQuartier(c.g);
     if (rues.some((k) => salle.hypo[k])) continue;
     if (salle.maisons[i] > Math.min(...rues.map((k) => salle.maisons[k]))) continue;
+    if (manqueStock(salle, i)) continue;
     if (t.argent - c.maison >= 200) return coup('construire', i);
   }
   const hypo = mien.find((i) => salle.hypo[i] && t.argent - PLATEAU[i].leve >= 500);
@@ -2339,6 +2365,10 @@ function client() {
 
     c.appendChild(el('div', 'titre', 'Pavés de Paris'));
     c.appendChild(el('div', 'info', 'Salle ' + ETAT.code + ' · tour ' + ETAT.tourNo + (ETAT.toursMax ? '/' + ETAT.toursMax : '')));
+    var stock = { maisons: 32, hotels: 12 };
+    ETAT.maisons.forEach(function (n) { if (n === 5) stock.hotels--; else stock.maisons -= n || 0; });
+    c.appendChild(el('div', 'info', 'Banque : ' + stock.maisons + ' maison' + (stock.maisons > 1 ? 's' : '')
+      + ' · ' + stock.hotels + ' hôtel' + (stock.hotels > 1 ? 's' : '')));
     if (ETAT.des) c.appendChild(el('div', 'des', DES[ETAT.des[0] - 1] + ' ' + DES[ETAT.des[1] - 1]));
     c.appendChild(el('div', 'message', dernierMessage()));
     if (monTour) {
