@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 """
-Workflow "vav" : pour chaque commande listee dans Drive GITHUB/Avoir/
-"Commandes en cours" (civilite, numero, nom, prenom, date, creneau), verifie si le
-client a un avoir jaune (du, pas encore deduit) dans le classeur Google
-Sheets "Avoir/Demarque" — un avoir etant valable 3 mois a compter de sa
-DATE DEBUT, les onglets du mois courant et des 3 mois precedents sont
-regardes (cf. _onglets_a_verifier). Envoie un mail par avoir trouve, puis
-vide "Commandes en cours" (hors en-tete) pour ne pas retraiter ces
-commandes au prochain declenchement.
+Verification des avoirs, appelee par auto_prepa a chaque commande preparee
+(verifier_avoir_commande) : verifie si le client a un avoir jaune (du, pas
+encore deduit) dans le classeur Google Sheets "Avoir/Demarque" — un avoir
+etant valable 3 mois a compter de sa DATE DEBUT, les onglets du mois courant
+et des 3 mois precedents sont regardes (cf. _onglets_a_verifier). Envoie un
+mail par avoir trouve.
 """
 import base64
 import io
 import os
-import sys
 import unicodedata
 from datetime import date, datetime
 from email.mime.text import MIMEText
@@ -50,7 +47,7 @@ def _est_initiale(nom_normalise):
 
 
 def _champs_correspondent(a, b):
-    """Compare un nom ou prenom entre 'Commandes en cours' et l'Avoir, en
+    """Compare un nom ou prenom entre la commande et l'Avoir, en
     ignorant casse/accents (_normaliser) et en tolerant qu'un des deux cotes
     ne soit renseigne que par une initiale (ex. 'R' vs 'RENAUD') — les deux
     fichiers n'etant pas forcement remplis avec le meme niveau de detail."""
@@ -73,12 +70,12 @@ def _mots_personne(nom, prenom):
 
 
 def _personne_correspond(nom_a, prenom_a, nom_b, prenom_b):
-    """Compare une personne (nom, prenom) entre 'Commandes en cours' et
+    """Compare une personne (nom, prenom) entre la commande et
     l'Avoir. Essaie d'abord nom/prenom champ a champ (_champs_correspondent,
     avec tolerance sur une initiale) ; a defaut, compare l'ensemble des mots
     de nom+prenom des deux cotes, pour absorber une frontiere nom/prenom
-    differente selon la source — ex. 'MEICHE JEAN'/'PIERRE' cote 'Commandes
-    en cours' (extraire_client_creneau_pdf prend toujours le dernier mot
+    differente selon la source — ex. 'MEICHE JEAN'/'PIERRE' cote commande
+    (extraire_client_creneau_pdf prend toujours le dernier mot
     comme prenom) contre 'MEICHE'/'JEAN PIERRE' cote Avoir (saisi a la main),
     quand le client n'a pas mis de trait d'union a un prenom compose."""
     if _champs_correspondent(nom_a, nom_b) and _champs_correspondent(prenom_a, prenom_b):
@@ -149,49 +146,6 @@ def _date_fin_valide(date_fin, aujourdhui):
     if isinstance(date_fin, date):
         return date_fin >= aujourdhui
     return True  # type inattendu : on ne filtre pas plutot que de perdre un avoir valide
-
-
-def _get_sheets_service():
-    try:
-        from google.oauth2.credentials import Credentials
-        from google.auth.transport.requests import Request
-        from googleapiclient.discovery import build
-        if not os.path.exists(cs.TOKEN_FILE):
-            return None
-        creds = Credentials.from_authorized_user_file(cs.TOKEN_FILE, cs.SCOPES)
-        if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        return build("sheets", "v4", credentials=creds)
-    except Exception as e:
-        print(f"  Sheets inaccessible : {e}")
-        return None
-
-
-def _charger_config_avoir(drive_svc):
-    """Retourne (avoir_spreadsheet_id, email_destinataire, email_destinataire_2) depuis config.json."""
-    import json
-    from googleapiclient.http import MediaIoBaseDownload
-    res = drive_svc.files().list(
-        q=f"name='config.json' and '{cs.DRIVE_CONFIG_FOLDER_ID}' in parents and trashed=false",
-        fields="files(id)",
-    ).execute()
-    files = res.get("files", [])
-    if not files:
-        print("ERREUR : config.json introuvable dans le dossier Drive config.")
-        sys.exit(1)
-    buf = io.BytesIO()
-    dl = MediaIoBaseDownload(buf, drive_svc.files().get_media(fileId=files[0]["id"]))
-    done = False
-    while not done:
-        _, done = dl.next_chunk()
-    cfg = confidentiel.masquer_config(json.loads(buf.getvalue().decode()))
-    avoir_id = confidentiel.cle_obligatoire(cfg, "avoir_spreadsheet_id")
-    email = cfg.get("email_destinataire", "").strip()
-    if not email:
-        print("ERREUR : email_destinataire absent de config.json.")
-        sys.exit(1)
-    email_2 = cfg.get("email_destinataire_2", "").strip()
-    return avoir_id, email, email_2
 
 
 def _argb_vers_rgb01(argb):
@@ -289,60 +243,6 @@ def _lire_avoirs_jaunes(drive_svc, spreadsheet_id, date_ref):
     return avoirs
 
 
-def _trouver_fichier_commandes(drive_svc):
-    """Cherche GITHUB/Avoir/Commandes en cours sur Drive. Retourne (id, mimeType) ou None."""
-    res = drive_svc.files().list(
-        q=("name='GITHUB' and 'root' in parents "
-           "and mimeType='application/vnd.google-apps.folder' and trashed=false"),
-        fields="files(id)",
-    ).execute()
-    github = res.get("files", [])
-    if not github:
-        print("  Dossier GITHUB/ introuvable sur Drive.")
-        return None
-    res = drive_svc.files().list(
-        q=(f"name='Avoir' and '{github[0]['id']}' in parents "
-           f"and mimeType='application/vnd.google-apps.folder' and trashed=false"),
-        fields="files(id)",
-    ).execute()
-    avoir_folder = res.get("files", [])
-    if not avoir_folder:
-        print("  Dossier GITHUB/Avoir/ introuvable sur Drive.")
-        return None
-    res = drive_svc.files().list(
-        q=(f"name contains 'Commandes en cours' and '{avoir_folder[0]['id']}' in parents "
-           f"and trashed=false"),
-        fields="files(id,name,mimeType)",
-    ).execute()
-    fichiers = res.get("files", [])
-    if not fichiers:
-        print("  'Commandes en cours' introuvable dans GITHUB/Avoir/.")
-        return None
-    return fichiers[0]["id"], fichiers[0]["mimeType"]
-
-
-def _lire_commandes_en_cours(sheets_svc, file_id):
-    """Retourne [(civilite, numero, nom, prenom, date, creneau), ...] (lignes
-    non vides, hors en-tete). Colonnes A:F, alignees sur AVOIR_ENTETE
-    (auto_prepa.py) depuis l'ajout du n° de commande en 2e colonne."""
-    res = sheets_svc.spreadsheets().values().get(
-        spreadsheetId=file_id, range="A2:F1000").execute()
-    lignes = []
-    for row in res.get("values", []):
-        row = row + [""] * (6 - len(row))
-        if row[2].strip() or row[3].strip():
-            lignes.append(tuple(c.strip() for c in row[:6]))
-    return lignes
-
-
-def _vider_commandes_en_cours(sheets_svc, file_id):
-    """Vide les lignes de donnees (garde l'en-tete) pour ne pas retraiter ces
-    commandes au prochain declenchement."""
-    sheets_svc.spreadsheets().values().clear(
-        spreadsheetId=file_id, range="A2:F1000", body={}).execute()
-    print("  'Commandes en cours' vide.")
-
-
 def _envoyer_email_avoir(gmail_svc, destinataire, destinataire_2, civilite, avoir, date_cde, creneau):
     if not gmail_svc:
         print("  Gmail inaccessible — email non envoye.")
@@ -368,68 +268,46 @@ def _envoyer_email_avoir(gmail_svc, destinataire, destinataire_2, civilite, avoi
         print(f"  Email echoue ({avoir['onglet']}) : {e}")
 
 
-def main():
-    if not cs.DRIVE_CONFIG_FOLDER_ID:
-        print("ERREUR : secret DRIVE_CONFIG_FOLDER_ID manquant.")
-        sys.exit(1)
+# Avoirs jaunes lus une seule fois par run d'auto_prepa (export xlsx du
+# classeur, ~5-15 s), a la premiere commande preparee du run.
+_AVOIRS_CACHE = None
 
-    drive_svc = cs._get_drive_service()
-    if not drive_svc:
-        print("ERREUR : Drive inaccessible.")
-        sys.exit(1)
-    sheets_svc = _get_sheets_service()
-    if not sheets_svc:
-        print("ERREUR : Sheets inaccessible.")
-        sys.exit(1)
 
-    avoir_spreadsheet_id, email_destinataire, email_destinataire_2 = _charger_config_avoir(drive_svc)
-
-    aujourdhui = datetime.now(_TZ).date()
-    print(f"Lecture des avoirs jaunes ({aujourdhui.strftime('%d/%m/%Y')}) …")
-    avoirs_jaunes = _lire_avoirs_jaunes(drive_svc, avoir_spreadsheet_id, aujourdhui)
-    print(f"→ {len(avoirs_jaunes)} avoir(s) jaune(s) (du) sur les onglets "
-          f"{', '.join(_onglets_a_verifier(aujourdhui))}.")
-
-    fichier = _trouver_fichier_commandes(drive_svc)
-    if not fichier:
-        print("Rien a verifier : 'Commandes en cours' introuvable.")
+def verifier_avoir_commande(drive_svc, gmail_svc, avoir_spreadsheet_id,
+                            destinataire, destinataire_2,
+                            civilite, numero, nom, prenom, date_cde, creneau):
+    """Appele par auto_prepa des qu'un bon de preparation est genere : si le
+    client a un avoir jaune (du) encore valide, envoie le mail "Avoir a
+    deduire". Ne leve jamais d'exception : la preparation ne doit pas
+    dependre de cette verification."""
+    global _AVOIRS_CACHE
+    if not (nom or prenom):
+        print("    Avoir : nom/prenom introuvables dans le PDF, verification ignoree.")
         return
-    file_id, mime_type = fichier
-    if mime_type != "application/vnd.google-apps.spreadsheet":
-        print(f"ERREUR : 'Commandes en cours' doit etre une Google Sheet (type actuel : {mime_type}).")
-        sys.exit(1)
-
-    commandes = _lire_commandes_en_cours(sheets_svc, file_id)
-    print(f"{len(commandes)} commande(s) a verifier.")
-    if not commandes:
+    if not avoir_spreadsheet_id:
+        print("    Avoir : cle « avoir_spreadsheet_id » absente de config.json, "
+              "verification ignoree.")
         return
-
-    gmail_svc = cs._get_gmail_service()
-    nb_envoyes = 0
-    for civilite, numero, nom, prenom, date_cde, creneau in commandes:
-        confidentiel.masquer(nom, prenom)
-        print(f"\nVerification : commande {numero} du {date_cde} ({creneau})")
+    try:
+        aujourdhui = datetime.now(_TZ).date()
+        if _AVOIRS_CACHE is None:
+            _AVOIRS_CACHE = _lire_avoirs_jaunes(drive_svc, avoir_spreadsheet_id, aujourdhui)
+            print(f"    Avoir : {len(_AVOIRS_CACHE)} avoir(s) jaune(s) (du) sur les onglets "
+                  f"{', '.join(_onglets_a_verifier(aujourdhui))}.")
         trouve = False
-        for avoir in avoirs_jaunes:
+        for avoir in _AVOIRS_CACHE:
             if not _personne_correspond(nom, prenom, avoir["nom"], avoir["prenom"]):
                 continue
             trouve = True
             if not _date_fin_valide(avoir["date_fin"], aujourdhui):
-                print(f"  Avoir trouve ({avoir['onglet']}) "
-                      f"mais expire (date fin {_formatter_date(avoir['date_fin'])}) — ignore.")
+                print(f"    Avoir trouve ({avoir['onglet']}) mais expire "
+                      f"(date fin {_formatter_date(avoir['date_fin'])}) — ignore.")
                 continue
-            print(f"  Avoir trouve ({avoir['onglet']}, "
+            print(f"    Avoir trouve pour la commande {numero} ({avoir['onglet']}, "
                   f"{_formatter_montant(avoir['montant'])}) — envoi du mail.")
-            _envoyer_email_avoir(gmail_svc, email_destinataire, email_destinataire_2, civilite, avoir, date_cde, creneau)
-            nb_envoyes += 1
+            _envoyer_email_avoir(gmail_svc, destinataire, destinataire_2,
+                                 civilite, avoir, date_cde, creneau)
         if not trouve:
-            print("  Aucun avoir jaune correspondant.")
-
-    print(f"\n{nb_envoyes} email(s) envoye(s).")
-
-    print("\nVidage de 'Commandes en cours' …")
-    _vider_commandes_en_cours(sheets_svc, file_id)
-
-
-if __name__ == "__main__":
-    main()
+            print(f"    Avoir : aucun avoir jaune pour la commande {numero}.")
+    except Exception as e:
+        print(f"    Verification avoir de la commande {numero} echouee : {e}")

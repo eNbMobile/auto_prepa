@@ -29,6 +29,7 @@ import arbitrage_fruits_legumes
 import confidentiel
 import livraison_drive
 import moteur_ombre
+import verif_avoirs
 
 _BASE = os.path.dirname(os.path.abspath(__file__))
 WORK_DIR  = os.environ.get("WORK_DIR",  os.path.join(_BASE, "v 4.0.0"))
@@ -59,6 +60,7 @@ DRIVE_BDC_FOLDER_ID  = ""
 EMAIL_ANTICIPATION   = ""
 EMAIL_ANTICIPATION_2 = ""
 LIVRAISON_SPREADSHEET_ID = ""
+AVOIR_SPREADSHEET_ID = ""
 
 # Heure (Paris) de reception de l'email de confirmation de chaque commande
 # telechargee pendant ce run, {numero: datetime} (cf. telecharger_bons_email) :
@@ -283,34 +285,32 @@ def _commande_deja_traitee(drive_svc, numero, ignorer_parents=()):
     (bon redepose a la main, ou email de confirmation remis a traiter) et
     traiter_commande_pdf nettoie ses lignes de suivi avant de les reecrire et
     remplace son bloc dans l'anticipation du jour, pour qu'elle ne ressorte
-    pas en double dans l'anticipation, la livraison et le suivi des avoirs.
+    pas en double dans l'anticipation et la livraison.
 
-    Deux conditions, dans cet ordre : son BonDeCommande_NUMERO.pdf est archive
-    sur Drive ailleurs que dans `ignorer_parents` (le dossier de depot manuel),
-    test rapide et negatif pour toute commande nouvelle ; ET elle figure dans
-    le suivi Avoir/Commandes en cours. Le second test evite de tenir pour
-    traitee une commande dont seul le PDF a ete archive, la generation du bon
-    ayant echoue juste apres (traiter_commande_pdf archive avant de generer) :
-    celle-la doit au contraire etre retentee au run suivant."""
+    Critere : son BonDeCommande_NUMERO.pdf est archive sur Drive ailleurs que
+    dans `ignorer_parents` (le dossier de depot manuel) ET porte la propriete
+    Drive BON_GENERE_PROP, posee par archiver_pdf_drive quand le bon de
+    preparation a bien ete genere. Un PDF archive sans elle (generation
+    echouee) n'est pas tenu pour traite : la commande doit au contraire etre
+    retentee au run suivant."""
     if not drive_svc or not numero:
         return False
     nom = f"BonDeCommande_{numero}.pdf"
     try:
         res = drive_svc.files().list(
             q=f"name='{nom}' and trashed=false",
-            fields="files(id,parents)",
+            fields="files(id,parents,appProperties)",
         ).execute()
     except Exception as e:
         print(f"    Recherche de {nom} sur Drive echouee : {e}")
         return False
-    archive = False
     for f in res.get("files", []):
         parents = f.get("parents") or []
         if any(p in ignorer_parents for p in parents):
             continue
-        archive = True
-        break
-    return archive and _commande_dans_suivi_avoir(drive_svc, numero)
+        if (f.get("appProperties") or {}).get(BON_GENERE_PROP) == "1":
+            return True
+    return False
 
 
 def _archiver_depot_manuel(drive_svc, file_id, nom_fichier, motif):
@@ -535,7 +535,7 @@ def _etape_annexe_annulation(numero, etape, *args):
 def annuler_commande(drive_svc, gmail_svc, sheets_svc, numero):
     """Traitement complet d'une commande annulee (sans remplacement) : retrait
     de l'anticipation et de LIVRAISON DRIVE, des bons de MobUDrive_Bons, des
-    archives, de l'avoir, et depot de annuler_NUMERO.txt pour l'app. Appele a
+    archives, et depot de annuler_NUMERO.txt pour l'app. Appele a
     la reception du mail d'annulation, et par annuler_commande.py quand ce
     mail n'est jamais arrive (cde 56623475, 24/10/2026)."""
     _etape_annexe_annulation(
@@ -547,7 +547,6 @@ def annuler_commande(drive_svc, gmail_svc, sheets_svc, numero):
     _supprimer_anticipation_archive_drive(drive_svc, numero)
     _supprimer_bdc_drive(drive_svc, numero)
     _uploader_annulation_drive(drive_svc, numero)
-    supprimer_commande_avoir_drive(drive_svc, numero)
 
 
 def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc,
@@ -603,7 +602,6 @@ def traiter_modifications_clients(drive_svc, gmail_svc, sheets_svc,
                 _supprimer_anticipation_archive_drive(drive_svc, num_ancien)
                 _supprimer_bdc_drive(drive_svc, num_ancien)
                 _uploader_annulation_drive(drive_svc, num_ancien)
-                supprimer_commande_avoir_drive(drive_svc, num_ancien)
             elif match_annul:
                 num_annule = match_annul.group(1)
                 print(f"  Annulation : cde {num_annule} supprimee")
@@ -801,7 +799,16 @@ ARCHIVAGE_BDC_TENTATIVES = 5
 ARCHIVAGE_BDC_ATTENTE = 5  # secondes, multipliees par le numero de l'essai
 
 
-def archiver_pdf_drive(drive_svc, pdf_path, dossier_jj_mm, dossier_mm_aaaa=""):
+# Propriete Drive (invisible) posee sur le BonDeCommande archive une fois son
+# bon de preparation genere : trace qu'une commande a ete preparee (cf.
+# _commande_deja_traitee).
+BON_GENERE_PROP = "bon_genere"
+
+# BonDeCommande_*.pdf dont le bon de preparation a ete genere pendant ce run.
+_BONS_GENERES = set()
+
+def archiver_pdf_drive(drive_svc, pdf_path, dossier_jj_mm, dossier_mm_aaaa="",
+                       bon_genere=False):
     """Archive un PDF dans DRIVE_BDC_FOLDER_ID/MM_AAAA/JJ_MM/ sur Drive.
 
     Plusieurs essais : le calcul des ventes du soir (generer_ventes) ne lit
@@ -809,7 +816,9 @@ def archiver_pdf_drive(drive_svc, pdf_path, dossier_jj_mm, dossier_mm_aaaa=""):
     ventes sont perdues (03/11/2026, cde 57069955 : un seul 502 de Drive et
     la commande manquait aux ventes du 04/11). En dernier recours,
     controle_stocks.rattraper_bdc_manquants_gmail l'archive le soir depuis
-    l'email de confirmation. Retourne True si le PDF est (deja) archive."""
+    l'email de confirmation. bon_genere : poser BON_GENERE_PROP sur le PDF
+    archive (bon de preparation genere). Retourne True si le PDF est (deja)
+    archive."""
     if not DRIVE_BDC_FOLDER_ID:
         return False
     filename = os.path.basename(pdf_path)
@@ -826,13 +835,21 @@ def archiver_pdf_drive(drive_svc, pdf_path, dossier_jj_mm, dossier_mm_aaaa=""):
                 raise RuntimeError("dossier Drive introuvable ou non cree")
             res = drive_svc.files().list(
                 q=f"name='{filename}' and '{subfolder_id}' in parents and trashed=false",
-                fields="files(id)",
+                fields="files(id,appProperties)",
             ).execute()
             if res.get("files"):
+                existant = res["files"][0]
+                if (bon_genere and (existant.get("appProperties") or {}).get(BON_GENERE_PROP) != "1"):
+                    drive_svc.files().update(
+                        fileId=existant["id"],
+                        body={"appProperties": {BON_GENERE_PROP: "1"}}).execute()
                 return True
             media = MediaFileUpload(pdf_path, mimetype="application/pdf", resumable=False)
+            corps = {"name": filename, "parents": [subfolder_id]}
+            if bon_genere:
+                corps["appProperties"] = {BON_GENERE_PROP: "1"}
             drive_svc.files().create(
-                body={"name": filename, "parents": [subfolder_id]},
+                body=corps,
                 media_body=media,
                 fields="id",
             ).execute()
@@ -2398,161 +2415,6 @@ def log_ecart_drive(drive_svc, numero, articles_pdf, produits_pdf, articles_gen,
     except Exception as e:
         print(f"    Log ecart Drive echoue : {e}")
 
-AVOIR_SHEET_FILENAME = "Commandes en cours"
-AVOIR_ENTETE = ["Civilité", "N° commande", "Nom", "Prénom", "Date", "Créneau"]
-
-def inscrire_commande_avoir_drive(drive_svc, civilite, numero, nom, prenom, date_cde, creneau):
-    """Ajoute une ligne (civilite, numero, nom, prenom, date, creneau) au Google Sheet
-    Drive GITHUB/Avoir/Commandes en cours, pour chaque commande geree. Le numero de
-    commande en deuxieme colonne permet de retrouver/supprimer la ligne en cas
-    d'annulation ou de remplacement."""
-    if not (nom or prenom):
-        print("    Civilite/nom/prenom introuvables dans le PDF, ligne Avoir ignoree.")
-        return
-    try:
-        github_id = _get_or_create_subfolder(drive_svc, "root", "GITHUB")
-        if not github_id:
-            return
-        avoir_id = _get_or_create_subfolder(drive_svc, github_id, "Avoir")
-        if not avoir_id:
-            return
-
-        res = drive_svc.files().list(
-            q=(f"name='{AVOIR_SHEET_FILENAME}' and '{avoir_id}' in parents "
-               f"and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"),
-            fields="files(id)",
-        ).execute()
-        existing = res.get("files", [])
-
-        lignes = [AVOIR_ENTETE]
-        if existing:
-            buf = io.BytesIO()
-            dl = MediaIoBaseDownload(
-                buf, drive_svc.files().export_media(fileId=existing[0]["id"], mimeType="text/csv"))
-            done = False
-            while not done:
-                _, done = dl.next_chunk()
-            contenu = buf.getvalue().decode("utf-8-sig", errors="replace")
-            lues = [l for l in csv.reader(io.StringIO(contenu)) if l]
-            if lues:
-                lignes = lues
-                lignes[0] = AVOIR_ENTETE
-
-        lignes.append([civilite, numero, nom, prenom, date_cde, creneau])
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv",
-                                         delete=False, encoding="utf-8", newline="") as f:
-            csv.writer(f).writerows(lignes)
-            tmp = f.name
-        try:
-            media = MediaFileUpload(tmp, mimetype="text/csv", resumable=False)
-            if existing:
-                drive_svc.files().update(fileId=existing[0]["id"], media_body=media).execute()
-            else:
-                drive_svc.files().create(
-                    body={"name": AVOIR_SHEET_FILENAME, "parents": [avoir_id],
-                          "mimeType": "application/vnd.google-apps.spreadsheet"},
-                    media_body=media, fields="id",
-                ).execute()
-            print(f"    Avoir/{AVOIR_SHEET_FILENAME} : commande {numero} | {date_cde} | {creneau}")
-        finally:
-            os.remove(tmp)
-    except Exception as e:
-        print(f"    Ecriture Drive GITHUB/Avoir/{AVOIR_SHEET_FILENAME} echouee : {e}")
-
-def supprimer_commande_avoir_drive(drive_svc, numero):
-    """Supprime, dans Drive GITHUB/Avoir/Commandes en cours, la ligne dont le
-    numero de commande (2e colonne) correspond a numero, suite a une
-    annulation ou un remplacement de commande."""
-    try:
-        github_id = _get_or_create_subfolder(drive_svc, "root", "GITHUB")
-        if not github_id:
-            return
-        avoir_id = _get_or_create_subfolder(drive_svc, github_id, "Avoir")
-        if not avoir_id:
-            return
-
-        res = drive_svc.files().list(
-            q=(f"name='{AVOIR_SHEET_FILENAME}' and '{avoir_id}' in parents "
-               f"and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"),
-            fields="files(id)",
-        ).execute()
-        existing = res.get("files", [])
-        if not existing:
-            return
-
-        buf = io.BytesIO()
-        dl = MediaIoBaseDownload(
-            buf, drive_svc.files().export_media(fileId=existing[0]["id"], mimeType="text/csv"))
-        done = False
-        while not done:
-            _, done = dl.next_chunk()
-        contenu = buf.getvalue().decode("utf-8-sig", errors="replace")
-        lignes = [l for l in csv.reader(io.StringIO(contenu)) if l]
-        if not lignes:
-            return
-
-        entete, corps = lignes[0], lignes[1:]
-        nouveau_corps = [l for l in corps if len(l) < 2 or l[1] != numero]
-        if len(nouveau_corps) == len(corps):
-            return
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv",
-                                         delete=False, encoding="utf-8", newline="") as f:
-            csv.writer(f).writerows([entete] + nouveau_corps)
-            tmp = f.name
-        try:
-            media = MediaFileUpload(tmp, mimetype="text/csv", resumable=False)
-            drive_svc.files().update(fileId=existing[0]["id"], media_body=media).execute()
-            print(f"    Avoir/{AVOIR_SHEET_FILENAME} : ligne commande {numero} supprimee")
-        finally:
-            os.remove(tmp)
-    except Exception as e:
-        print(f"    Suppression Drive GITHUB/Avoir/{AVOIR_SHEET_FILENAME} echouee : {e}")
-
-def _commande_dans_suivi_avoir(drive_svc, numero):
-    """Vrai si `numero` figure dans Drive GITHUB/Avoir/Commandes en cours (2e
-    colonne). La ligne y est inscrite par inscrire_commande_avoir_drive une
-    fois le bon de preparation genere : c'est donc la trace qu'une commande a
-    reellement ete preparee. Le suivi etant vide periodiquement par
-    verif_avoirs.py, une commande ancienne n'y figure plus et est alors tenue
-    pour non traitee — au pire elle est repreparee, jamais perdue."""
-    try:
-        parent = "root"
-        for nom in ("GITHUB", "Avoir"):
-            res = drive_svc.files().list(
-                q=(f"name='{nom}' and '{parent}' in parents "
-                   f"and mimeType='application/vnd.google-apps.folder' and trashed=false"),
-                fields="files(id)",
-            ).execute()
-            files = res.get("files", [])
-            if not files:
-                return False
-            parent = files[0]["id"]
-
-        res = drive_svc.files().list(
-            q=(f"name='{AVOIR_SHEET_FILENAME}' and '{parent}' in parents "
-               f"and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"),
-            fields="files(id)",
-        ).execute()
-        existing = res.get("files", [])
-        if not existing:
-            return False
-
-        buf = io.BytesIO()
-        dl = MediaIoBaseDownload(
-            buf, drive_svc.files().export_media(fileId=existing[0]["id"], mimeType="text/csv"))
-        done = False
-        while not done:
-            _, done = dl.next_chunk()
-        contenu = buf.getvalue().decode("utf-8-sig", errors="replace")
-        for ligne in csv.reader(io.StringIO(contenu)):
-            if len(ligne) > 1 and ligne[1].strip() == str(numero):
-                return True
-    except Exception as e:
-        print(f"    Lecture Drive GITHUB/Avoir/{AVOIR_SHEET_FILENAME} echouee : {e}")
-    return False
-
 LOCK_FILE = os.path.expanduser("~/.auto_prepa.lock")
 
 def main():
@@ -2572,6 +2434,7 @@ def main():
 def _charger_config(drive_svc):
     """Charge config.json depuis DRIVE_CONFIG_FOLDER_ID et initialise les globals."""
     global DRIVE_BONS_FOLDER_ID, DRIVE_BDC_FOLDER_ID, EMAIL_ANTICIPATION, EMAIL_ANTICIPATION_2, LIVRAISON_SPREADSHEET_ID
+    global AVOIR_SPREADSHEET_ID
     if not DRIVE_CONFIG_FOLDER_ID:
         print("ERREUR : secret DRIVE_CONFIG_FOLDER_ID manquant.")
         sys.exit(1)
@@ -2594,6 +2457,7 @@ def _charger_config(drive_svc):
         DRIVE_BDC_FOLDER_ID  = cfg["drive_bdc_folder_id"]
         EMAIL_ANTICIPATION   = cfg.get("email_destinataire", "")
         EMAIL_ANTICIPATION_2 = cfg.get("email_destinataire_2", "")
+        AVOIR_SPREADSHEET_ID = str(cfg.get("avoir_spreadsheet_id", "") or "").strip()
         # Pas d'arret si la cle manque : la preparation des commandes ne doit
         # pas dependre du classeur LIVRAISON. Les etapes livraison sont alors
         # sautees et une alerte part (une fois par jour, cf. _main).
@@ -2619,7 +2483,8 @@ def traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, d
     finally:
         cache_path = os.path.join(CACHE_DIR, pdf)
         if dossier_jj_mm and os.path.exists(cache_path):
-            archiver_pdf_drive(drive_svc, cache_path, dossier_jj_mm, dossier_mm_aaaa)
+            archiver_pdf_drive(drive_svc, cache_path, dossier_jj_mm, dossier_mm_aaaa,
+                               bon_genere=pdf in _BONS_GENERES)
 
 
 # Fichiers ecrits par le moteur de generation dans WORK_DIR (nettoyes avant
@@ -2905,19 +2770,25 @@ def _traiter_commande_pdf(drive_svc, gmail_svc, sheets_svc, pdf, dossier_jj_mm, 
     # Commande deja preparee que l'on regenere (email de confirmation replace a
     # la main en boite de reception apres une mise a jour de gencod_adresses /
     # gencod_nomenclatures) : ses lignes de suivi existantes sont retirees
-    # avant d'etre reecrites plus bas. Ni inscrire_commande_avoir_drive ni
-    # LIVRAISON DRIVE ne dedoublonnent : sans ce nettoyage, chaque reprise
-    # laisserait la commande deux fois dans Avoir/Commandes en cours et dans
+    # avant d'etre reecrites plus bas. LIVRAISON DRIVE ne dedoublonne pas :
+    # sans ce nettoyage, chaque reprise laisserait la commande deux fois dans
     # l'onglet du mois (ou EN ATTENTE).
     regeneration = _commande_deja_traitee(drive_svc, order_num)
     if regeneration:
         print(f"    Commande {order_num} deja preparee : suivis nettoyes avant regeneration.")
-        supprimer_commande_avoir_drive(drive_svc, order_num)
         livraison_drive.annuler_commande_livraison(
             sheets_svc, LIVRAISON_SPREADSHEET_ID, nom, prenom, date_cde,
             numero_commande=order_num)
 
-    inscrire_commande_avoir_drive(drive_svc, civilite, order_num, nom, prenom, date_cde, creneau)
+    _BONS_GENERES.add(pdf)
+
+    # Avoir du au client : verifie tout de suite (mail "Avoir a deduire"),
+    # une regeneration ne renvoie pas le mail.
+    if not regeneration:
+        verif_avoirs.verifier_avoir_commande(
+            drive_svc, gmail_svc, AVOIR_SPREADSHEET_ID,
+            EMAIL_ANTICIPATION, EMAIL_ANTICIPATION_2,
+            civilite, order_num, nom, prenom, date_cde, creneau)
 
     avertissements_nomenclature = [
         ligne.rstrip('\n')

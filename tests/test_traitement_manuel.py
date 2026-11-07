@@ -35,17 +35,9 @@ Total de la commande 37 articles 78 produits
 DOSSIER_MANUEL = {"id": MANUEL_ID, "name": "traitement manuel", "parents": [BDC_ID],
                   "mimeType": "application/vnd.google-apps.folder"}
 
-# GITHUB/Avoir/Commandes en cours : trace qu'une commande a ete preparee.
-SUIVI_AVOIR = [
-    {"id": "id_github", "name": "GITHUB", "parents": ["root"],
-     "mimeType": "application/vnd.google-apps.folder"},
-    {"id": "id_avoir", "name": "Avoir", "parents": ["id_github"],
-     "mimeType": "application/vnd.google-apps.folder"},
-    {"id": "id_sheet", "name": ap.AVOIR_SHEET_FILENAME, "parents": ["id_avoir"],
-     "mimeType": "application/vnd.google-apps.spreadsheet"},
-]
-CSV_AVOIR = ("Civilité,N° commande,Nom,Prénom,Date,Créneau\r\n"
-             "Mme,54868421,DUPONT,MARIE,12/09/2026,13h00 - 14h00\r\n")
+# Propriete Drive posee sur le BonDeCommande archive : trace qu'une commande
+# a ete preparee (bon de preparation genere).
+PREPAREE = {"appProperties": {ap.BON_GENERE_PROP: "1"}}
 
 
 class _FakeRequete:
@@ -196,7 +188,7 @@ class TestCommandeDejaTraitee(unittest.TestCase):
         drive = _FakeDrive([
             {"id": "f1", "name": "BonDeCommande_54868421.pdf", "parents": [MANUEL_ID],
              "mimeType": "application/pdf"},
-        ] + SUIVI_AVOIR, CSV_AVOIR)
+        ])
         self.assertFalse(
             ap._commande_deja_traitee(drive, "54868421", ignorer_parents=(MANUEL_ID,)))
 
@@ -205,18 +197,18 @@ class TestCommandeDejaTraitee(unittest.TestCase):
             {"id": "f1", "name": "BonDeCommande_54868421.pdf", "parents": [MANUEL_ID],
              "mimeType": "application/pdf"},
             {"id": "f2", "name": "BonDeCommande_54868421.pdf", "parents": ["id_jour"],
-             "mimeType": "application/pdf"},
-        ] + SUIVI_AVOIR, CSV_AVOIR)
+             "mimeType": "application/pdf", **PREPAREE},
+        ])
         self.assertTrue(
             ap._commande_deja_traitee(drive, "54868421", ignorer_parents=(MANUEL_ID,)))
 
     def test_bon_archive_mais_generation_echouee(self):
-        """PDF archive sans ligne de suivi : la generation a echoue juste apres
-        l'archivage, la commande reste a preparer."""
+        """PDF archive sans la propriete 'bon genere' : la generation a
+        echoue, la commande reste a preparer."""
         drive = _FakeDrive([
             {"id": "f2", "name": "BonDeCommande_54868421.pdf", "parents": ["id_jour"],
              "mimeType": "application/pdf"},
-        ] + SUIVI_AVOIR, "Civilité,N° commande,Nom,Prénom,Date,Créneau\r\n")
+        ])
         self.assertFalse(
             ap._commande_deja_traitee(drive, "54868421", ignorer_parents=(MANUEL_ID,)))
 
@@ -277,8 +269,8 @@ class TestTelechargerBonsTraitementManuel(unittest.TestCase):
             {"id": "depot1", "name": "Copie de BonDeCommande_54868421.pdf",
              "parents": [MANUEL_ID], "mimeType": "application/pdf"},
             {"id": "archive", "name": "BonDeCommande_54868421.pdf",
-             "parents": ["id_jour"], "mimeType": "application/pdf"},
-        ] + SUIVI_AVOIR, CSV_AVOIR)
+             "parents": ["id_jour"], "mimeType": "application/pdf", **PREPAREE},
+        ])
         nouveaux, depots = ap.telecharger_bons_traitement_manuel(drive, self.cache)
 
         self.assertEqual(nouveaux, {"BonDeCommande_54868421.pdf": ("12_09", "09_2026")})
@@ -296,7 +288,7 @@ class TestTelechargerBonsTraitementManuel(unittest.TestCase):
              "parents": [MANUEL_ID], "mimeType": "application/pdf"},
             {"id": "archive", "name": "BonDeCommande_54868421.pdf",
              "parents": ["id_jour"], "mimeType": "application/pdf"},
-        ] + SUIVI_AVOIR, "Civilité,N° commande,Nom,Prénom,Date,Créneau\r\n")
+        ])
         nouveaux, depots = ap.telecharger_bons_traitement_manuel(drive, self.cache)
 
         self.assertEqual(nouveaux, {"BonDeCommande_54868421.pdf": ("12_09", "09_2026")})
