@@ -100,8 +100,7 @@ class TestModificationToujoursRetireeDeLApp(unittest.TestCase):
         _patch("_traiter_commande_potentiellement_anticipee", _plante)
         _patch("_traiter_annulation_livraison", _plante)
         for nom in ("_supprimer_bons_drive", "_supprimer_anticipation_archive_drive",
-                    "_supprimer_bdc_drive", "_uploader_annulation_drive",
-                    "supprimer_commande_avoir_drive"):
+                    "_supprimer_bdc_drive", "_uploader_annulation_drive"):
             _patch(nom, lambda d, numero, _nom=nom: self.appels.append((_nom, numero)))
 
     def tearDown(self):
