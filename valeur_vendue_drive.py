@@ -244,13 +244,15 @@ def inscrire_valeur(xml_onglet, semaine, jour_idx, valeur):
     return xml
 
 
-def modifier_classeur(contenu_xlsx, jour, valeur):
-    """Retourne les octets du .xlsx avec la valeur du jour inscrite."""
-    semaine = jour.isocalendar()[1]
+def modifier_classeur(contenu_xlsx, jour, valeur=None):
+    """Retourne les octets du .xlsx avec la valeur du jour inscrite.
+    `jour` peut aussi être un dict {date: valeur} pour inscrire plusieurs jours."""
+    valeurs = jour if isinstance(jour, dict) else {jour: valeur}
     with zipfile.ZipFile(io.BytesIO(contenu_xlsx)) as zin:
         chemin = _chemin_onglet(zin, ONGLET)
         xml = zin.read(chemin).decode("utf-8")
-        xml = inscrire_valeur(xml, semaine, jour.weekday(), valeur)
+        for j, v in sorted(valeurs.items()):
+            xml = inscrire_valeur(xml, j.isocalendar()[1], j.weekday(), v)
         sortie = io.BytesIO()
         with zipfile.ZipFile(sortie, "w") as zout:
             for info in zin.infolist():
@@ -276,32 +278,41 @@ def _trouver_classeur(svc, annee):
     return files[0]["id"], fichier
 
 
-def inscrire_dans_ca_drive(jour, valeur):
-    """Inscrit `valeur` pour `jour` dans « CA DRIVE <année ISO>.xlsx »."""
+def inscrire_dans_ca_drive(jour, valeur=None):
+    """Inscrit `valeur` pour `jour` (ou un dict {date: valeur}) dans
+    « CA DRIVE <année ISO>.xlsx », en un seul aller-retour par classeur."""
     from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
-    if jour.weekday() == 6:
-        print("  Dimanche : pas de colonne dans le tableau, rien inscrit.")
+    valeurs = jour if isinstance(jour, dict) else {jour: valeur}
+    for j in [j for j in valeurs if j.weekday() == 6]:
+        print(f"  {j.strftime('%d/%m/%Y')} (dimanche) : pas de colonne, rien inscrit.")
+        del valeurs[j]
+    if not valeurs:
         return
     svc = cs._get_drive_service()
     if not svc:
         raise RuntimeError("Drive inaccessible.")
-    file_id, fichier = _trouver_classeur(svc, jour.isocalendar()[0])
-    buf = io.BytesIO()
-    dl = MediaIoBaseDownload(buf, svc.files().get_media(fileId=file_id))
-    done = False
-    while not done:
-        _, done = dl.next_chunk()
-    nouveau = modifier_classeur(buf.getvalue(), jour, valeur)
-    media = MediaIoBaseUpload(io.BytesIO(nouveau), mimetype=_MIME_XLSX, resumable=False)
-    svc.files().update(fileId=file_id, media_body=media, supportsAllDrives=True).execute()
-    print(f"  {fichier} / {ONGLET} : S {jour.isocalendar()[1]}, "
-          f"{['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'][jour.weekday()]} "
-          f"= {valeur:.2f} €")
+    par_annee = {}
+    for j, v in valeurs.items():
+        par_annee.setdefault(j.isocalendar()[0], {})[j] = v
+    for annee, vals in sorted(par_annee.items()):
+        file_id, fichier = _trouver_classeur(svc, annee)
+        buf = io.BytesIO()
+        dl = MediaIoBaseDownload(buf, svc.files().get_media(fileId=file_id))
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        nouveau = modifier_classeur(buf.getvalue(), vals)
+        media = MediaIoBaseUpload(io.BytesIO(nouveau), mimetype=_MIME_XLSX, resumable=False)
+        svc.files().update(fileId=file_id, media_body=media, supportsAllDrives=True).execute()
+        for j, v in sorted(vals.items()):
+            print(f"  {fichier} / {ONGLET} : S {j.isocalendar()[1]}, "
+                  f"{_JOURS[j.weekday()]} {j.strftime('%d/%m')} = {v:.2f} €")
 
 
-def traiter(jour, ventes):
-    """Calcule la valeur vendue du jour et l'inscrit dans CA DRIVE.
-    Retourne la valeur. Lève une exception en cas d'échec."""
+_JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+
+
+def _valeur_du_jour(jour, ventes):
     nom_stock = cs.nom_archive_stock(jour, "matin")
     os.makedirs(cs.WORK_DIR, exist_ok=True)
     chemin = cs.telecharger_fichier_archive(
@@ -316,5 +327,62 @@ def traiter(jour, ventes):
     if sans_prix:
         print(f"  {len(sans_prix)} gencod(s) vendu(s) sans prix dans {nom_stock} "
               f"(non valorisés) : {', '.join(sans_prix[:20])}{' …' if len(sans_prix) > 20 else ''}")
+    return valeur
+
+
+def traiter(jour, ventes):
+    """Calcule la valeur vendue du jour et l'inscrit dans CA DRIVE.
+    Retourne la valeur. Lève une exception en cas d'échec."""
+    valeur = _valeur_du_jour(jour, ventes)
     inscrire_dans_ca_drive(jour, valeur)
     return valeur
+
+
+def rattraper(du, au):
+    """Rattrapage du..au (inclus, lundi–samedi) depuis les ventes archivées
+    (Archives/ventes/ventes_JJ_MM.csv) : aucun recalcul depuis les BDC.
+    Retourne la liste des jours non traités."""
+    from datetime import timedelta
+    valeurs, manquants = {}, []
+    os.makedirs(cs.WORK_DIR, exist_ok=True)
+    j = du
+    while j <= au:
+        if j.weekday() != 6:
+            nom_csv = f"ventes_{j.strftime('%d_%m')}.csv"
+            chemin = cs.telecharger_fichier_archive(
+                "ventes", nom_csv, os.path.join(cs.WORK_DIR, nom_csv),
+                root_id=cs.DRIVE_CONFIG_FOLDER_ID)
+            try:
+                if not chemin:
+                    raise FileNotFoundError(f"Archives/ventes/{nom_csv} introuvable.")
+                ventes, _ = cs._charger_ventes_csv(chemin)
+                valeurs[j] = _valeur_du_jour(j, ventes)
+            except Exception as e:
+                print(f"  {j.strftime('%d/%m/%Y')} non traité : {e}")
+                manquants.append(j)
+        j += timedelta(days=1)
+    print(f"\n{len(valeurs)} jour(s) à inscrire, {len(manquants)} non traité(s).")
+    inscrire_dans_ca_drive(valeurs)
+    return manquants
+
+
+def _parse_date(texte):
+    jj, mm, aaaa = texte.split("/")
+    return date(int(aaaa), int(mm), int(jj))
+
+
+def main():
+    import argparse
+    p = argparse.ArgumentParser(description="Rattrapage de la valeur vendue au Drive.")
+    p.add_argument("--du", required=True, help="JJ/MM/AAAA")
+    p.add_argument("--au", required=True, help="JJ/MM/AAAA")
+    a = p.parse_args()
+    cs._charger_config()
+    manquants = rattraper(_parse_date(a.du), _parse_date(a.au))
+    if manquants:
+        print("Jours non traités : " + ", ".join(j.strftime("%d/%m/%Y") for j in manquants))
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()
