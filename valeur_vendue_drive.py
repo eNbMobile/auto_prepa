@@ -312,24 +312,61 @@ def inscrire_dans_ca_drive(jour, valeur=None):
 _JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 
 
-def _candidats_stock(jour, secours=False):
+FENETRE_SECOURS_JOURS = 3
+_SUFFIXES = ("matin", "j", "soir", "j1")
+
+
+def _candidats_stock(jour, secours=False, disponibles=None):
     """Noms d'archive du stock donnant les prix du jour, par ordre de préférence :
-    stock du matin (stock_JJ_MM_AAAA_matin.xlsx, ou _j.xlsx avant le 12/09/2026),
-    puis — en secours, pour le rattrapage — le stock du soir de la veille
-    (_soir / _j1), et enfin celui du soir du jour même."""
+    stock du matin (stock_JJ_MM_AAAA_matin.xlsx, ou _j.xlsx avant le 12/09/2026).
+    En secours (rattrapage) : l'export le plus proche dans une fenêtre de
+    ±FENETRE_SECOURS_JOURS jours, la veille passant avant le lendemain.
+    `disponibles` (noms présents dans Archives/stocks) évite les essais inutiles."""
     from datetime import timedelta
-    noms = [cs.nom_archive_stock(jour, "matin"), f"stock_{jour.strftime('%d_%m_%Y')}_j.xlsx"]
+
+    def noms(j, suffixes):
+        return [f"stock_{j.strftime('%d_%m_%Y')}_{x}.xlsx" for x in suffixes]
+
+    liste = noms(jour, ("matin", "j"))
     if secours:
-        veille = jour - timedelta(days=1)
-        for j in (veille, jour):
-            noms += [cs.nom_archive_stock(j, "soir"), f"stock_{j.strftime('%d_%m_%Y')}_j1.xlsx"]
-    return noms
+        liste += noms(jour - timedelta(days=1), ("soir", "j1"))
+        for d in range(1, FENETRE_SECOURS_JOURS + 1):
+            liste += noms(jour - timedelta(days=d), _SUFFIXES)
+            liste += noms(jour + timedelta(days=d), _SUFFIXES)
+            if d == 1:
+                liste += noms(jour, ("soir", "j1"))
+    vus, ordre = set(), []
+    for n in liste:
+        if n not in vus and (disponibles is None or n in disponibles):
+            vus.add(n)
+            ordre.append(n)
+    return ordre
 
 
-def _valeur_du_jour(jour, ventes, secours=False):
+def _lister_archives_stocks():
+    """Noms des fichiers de Archives/stocks (None si Drive indisponible)."""
+    try:
+        svc = cs._get_drive_service()
+        archives = cs._trouver_dossier_drive(svc, cs.DRIVE_CONFIG_FOLDER_ID, "Archives")
+        stocks = cs._trouver_dossier_drive(svc, archives, "stocks")
+        noms, token = set(), None
+        while True:
+            res = svc.files().list(q=f"'{stocks}' in parents and trashed=false",
+                                   fields="nextPageToken, files(name)", pageSize=1000,
+                                   pageToken=token).execute()
+            noms.update(f["name"] for f in res.get("files", []))
+            token = res.get("nextPageToken")
+            if not token:
+                return noms
+    except Exception as e:
+        print(f"  Liste Archives/stocks indisponible ({e}) : essais un par un.")
+        return None
+
+
+def _valeur_du_jour(jour, ventes, secours=False, disponibles=None):
     os.makedirs(cs.WORK_DIR, exist_ok=True)
     chemin = nom_stock = None
-    for nom_stock in _candidats_stock(jour, secours):
+    for nom_stock in _candidats_stock(jour, secours, disponibles):
         chemin = cs.telecharger_fichier_archive(
             "stocks", nom_stock, os.path.join(cs.WORK_DIR, nom_stock),
             root_id=cs.DRIVE_CONFIG_FOLDER_ID)
@@ -367,6 +404,7 @@ def rattraper(du, au):
     # Les ventes archivées les plus anciennes (mai 2026) couvrent tous les
     # produits : même filtre R1 que la routine, pour des valeurs comparables.
     gencods_r1 = cs.charger_gencods_r1()
+    disponibles = _lister_archives_stocks()
     j = du
     while j <= au:
         if j.weekday() != 6:
@@ -380,7 +418,7 @@ def rattraper(du, au):
                 ventes, _ = cs._charger_ventes_csv(chemin)
                 if gencods_r1:
                     ventes = {g: q for g, q in ventes.items() if g in gencods_r1}
-                valeurs[j] = _valeur_du_jour(j, ventes, secours=True)
+                valeurs[j] = _valeur_du_jour(j, ventes, secours=True, disponibles=disponibles)
             except Exception as e:
                 print(f"  {j.strftime('%d/%m/%Y')} non traité : {e}")
                 manquants.append(j)
