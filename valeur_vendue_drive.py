@@ -312,15 +312,19 @@ def inscrire_dans_ca_drive(jour, valeur=None):
 _JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 
 
-FENETRE_SECOURS_JOURS = 3
+# Seul le prix sert : en rattrapage, on prend l'export archivé le plus proche,
+# quel que soit l'écart (borné à 3 jours si la liste des archives est indisponible,
+# pour ne pas multiplier les essais de téléchargement).
+FENETRE_SECOURS_JOURS = 366
+FENETRE_SECOURS_SANS_LISTE = 3
 _SUFFIXES = ("matin", "j", "soir", "j1")
 
 
 def _candidats_stock(jour, secours=False, disponibles=None):
     """Noms d'archive du stock donnant les prix du jour, par ordre de préférence :
     stock du matin (stock_JJ_MM_AAAA_matin.xlsx, ou _j.xlsx avant le 12/09/2026).
-    En secours (rattrapage) : l'export le plus proche dans une fenêtre de
-    ±FENETRE_SECOURS_JOURS jours, la veille passant avant le lendemain.
+    En secours (rattrapage) : l'export archivé le plus proche, la veille passant
+    avant le lendemain (seul le prix sert, pas le stock).
     `disponibles` (noms présents dans Archives/stocks) évite les essais inutiles."""
     from datetime import timedelta
 
@@ -330,7 +334,8 @@ def _candidats_stock(jour, secours=False, disponibles=None):
     liste = noms(jour, ("matin", "j"))
     if secours:
         liste += noms(jour - timedelta(days=1), ("soir", "j1"))
-        for d in range(1, FENETRE_SECOURS_JOURS + 1):
+        fenetre = FENETRE_SECOURS_JOURS if disponibles is not None else FENETRE_SECOURS_SANS_LISTE
+        for d in range(1, fenetre + 1):
             liste += noms(jour - timedelta(days=d), _SUFFIXES)
             liste += noms(jour + timedelta(days=d), _SUFFIXES)
             if d == 1:
