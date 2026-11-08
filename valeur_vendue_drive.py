@@ -312,14 +312,32 @@ def inscrire_dans_ca_drive(jour, valeur=None):
 _JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 
 
-def _valeur_du_jour(jour, ventes):
-    nom_stock = cs.nom_archive_stock(jour, "matin")
+def _candidats_stock(jour, secours=False):
+    """Noms d'archive du stock donnant les prix du jour, par ordre de préférence :
+    stock du matin (stock_JJ_MM_AAAA_matin.xlsx, ou _j.xlsx avant le 12/09/2026),
+    puis — en secours, pour le rattrapage — le stock du soir de la veille
+    (_soir / _j1), et enfin celui du soir du jour même."""
+    from datetime import timedelta
+    noms = [cs.nom_archive_stock(jour, "matin"), f"stock_{jour.strftime('%d_%m_%Y')}_j.xlsx"]
+    if secours:
+        veille = jour - timedelta(days=1)
+        for j in (veille, jour):
+            noms += [cs.nom_archive_stock(j, "soir"), f"stock_{j.strftime('%d_%m_%Y')}_j1.xlsx"]
+    return noms
+
+
+def _valeur_du_jour(jour, ventes, secours=False):
     os.makedirs(cs.WORK_DIR, exist_ok=True)
-    chemin = cs.telecharger_fichier_archive(
-        "stocks", nom_stock, os.path.join(cs.WORK_DIR, nom_stock),
-        root_id=cs.DRIVE_CONFIG_FOLDER_ID)
+    chemin = nom_stock = None
+    for nom_stock in _candidats_stock(jour, secours):
+        chemin = cs.telecharger_fichier_archive(
+            "stocks", nom_stock, os.path.join(cs.WORK_DIR, nom_stock),
+            root_id=cs.DRIVE_CONFIG_FOLDER_ID)
+        if chemin:
+            break
     if not chemin:
-        raise FileNotFoundError(f"Archives/stocks/{nom_stock} introuvable sur Drive.")
+        raise FileNotFoundError(f"Archives/stocks/{cs.nom_archive_stock(jour, 'matin')} "
+                                f"introuvable sur Drive.")
     prix = lire_prix(chemin)
     valeur, sans_prix = calculer_valeur_vendue(ventes, prix)
     print(f"\nValeur vendue au Drive du {jour.strftime('%d/%m/%Y')} : {valeur:.2f} € "
@@ -340,11 +358,15 @@ def traiter(jour, ventes):
 
 def rattraper(du, au):
     """Rattrapage du..au (inclus, lundi–samedi) depuis les ventes archivées
-    (Archives/ventes/ventes_JJ_MM.csv) : aucun recalcul depuis les BDC.
+    (Archives/ventes/ventes_JJ_MM.csv, filtrées sur les gencods R1 comme la
+    routine) : aucun recalcul depuis les BDC.
     Retourne la liste des jours non traités."""
     from datetime import timedelta
     valeurs, manquants = {}, []
     os.makedirs(cs.WORK_DIR, exist_ok=True)
+    # Les ventes archivées les plus anciennes (mai 2026) couvrent tous les
+    # produits : même filtre R1 que la routine, pour des valeurs comparables.
+    gencods_r1 = cs.charger_gencods_r1()
     j = du
     while j <= au:
         if j.weekday() != 6:
@@ -356,7 +378,9 @@ def rattraper(du, au):
                 if not chemin:
                     raise FileNotFoundError(f"Archives/ventes/{nom_csv} introuvable.")
                 ventes, _ = cs._charger_ventes_csv(chemin)
-                valeurs[j] = _valeur_du_jour(j, ventes)
+                if gencods_r1:
+                    ventes = {g: q for g, q in ventes.items() if g in gencods_r1}
+                valeurs[j] = _valeur_du_jour(j, ventes, secours=True)
             except Exception as e:
                 print(f"  {j.strftime('%d/%m/%Y')} non traité : {e}")
                 manquants.append(j)
