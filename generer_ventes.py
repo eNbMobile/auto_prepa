@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
 Génère les ventes du jour depuis les BDC PDFs.
-Sauvegarde ventes_JJ_MM.csv et l'archive sur Drive.
+Sauvegarde ventes_JJ_MM.csv et l'archive sur Drive, puis calcule la valeur
+vendue au Drive (UVC vendues × prix du stock du matin) et l'inscrit dans
+CA DRIVE AAAA.xlsx (onglet RÉALISATION).
 Ne génère PAS de fichier de stock théorique.
 """
 import base64
@@ -12,6 +14,7 @@ from datetime import date
 from email.mime.text import MIMEText
 
 import controle_stocks as cs
+import valeur_vendue_drive as vvd
 
 
 def _alerter_echec(date_j1, motif):
@@ -76,10 +79,23 @@ def main():
             writer.writerow([gencod, qty, libelles.get(gencod, "")])
 
     print(f"Ventes sauvegardées : {chemin_ventes} ({len(ventes)} gencods)")
+    echec = False
     ok = cs.upload_to_archive(chemin_ventes, "ventes", root_id=cs.DRIVE_CONFIG_FOLDER_ID)
     if not ok:
         _alerter_echec(date_j1, f"{os.path.basename(chemin_ventes)} généré localement mais "
                                  "l'upload vers Drive Archives/ventes/ a échoué.")
+        echec = True
+
+    # Valeur vendue au Drive (UVC × prix du stock du matin) → CA DRIVE AAAA.xlsx
+    try:
+        vvd.traiter(date_j1, ventes)
+    except Exception as e:
+        print(f"  Valeur vendue au Drive : échec — {e}")
+        _alerter_echec(date_j1, f"Valeur vendue au Drive non calculée ou non inscrite "
+                                 f"dans CA DRIVE : {e}")
+        echec = True
+
+    if echec:
         sys.exit(1)
 
 

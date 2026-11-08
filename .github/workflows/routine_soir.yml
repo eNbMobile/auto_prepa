@@ -17,7 +17,10 @@ name: Routine du soir
 #    commandes en LIVRAISON du jour (LIVRAISON DRIVE 2026) et l'onglet
 #    "Terminées" du back-office Shopopop.
 # 4. Générer Ventes : calcule et archive les ventes du jour depuis les
-#    BonDeCommande PDF (une fois les commandes non récupérées déplacées).
+#    BonDeCommande PDF (une fois les commandes non récupérées déplacées),
+#    puis calcule la valeur vendue au Drive (UVC vendues × « Prix Vte » du
+#    stock du matin archivé) et l'inscrit dans CA DRIVE AAAA.xlsx, onglet
+#    RÉALISATION, tableau « VALEUR VENDUE DRIVE » sous NB COMMANDES DRIVE.
 #
 # Chaque étape est indépendante (continue-on-error: true) : l'échec de
 # l'une n'empêche pas les suivantes de s'exécuter, comme lorsqu'il
