@@ -8,9 +8,9 @@
     <ImageView android:id="@+id/t_volp" android:layout_width="0dp" android:layout_height="match_parent"
             android:layout_weight="1" android:layout_margin="3dp" android:padding="12dp"
             android:scaleType="fitCenter" android:src="@drawable/ic_t_plus" android:background="@drawable/bouton_notif" />
-    <ImageView android:id="@+id/t_mute" android:layout_width="0dp" android:layout_height="match_parent"
+    <ImageView android:id="@+id/t_menu" android:layout_width="0dp" android:layout_height="match_parent"
             android:layout_weight="1" android:layout_margin="3dp" android:padding="12dp"
-            android:scaleType="fitCenter" android:src="@drawable/ic_t_son" android:background="@drawable/bouton_notif" />
+            android:scaleType="fitCenter" android:src="@drawable/ic_t_reglages" android:background="@drawable/bouton_notif" />
     <ImageView android:id="@+id/t_play" android:layout_width="0dp" android:layout_height="match_parent"
             android:layout_weight="1" android:layout_margin="3dp" android:padding="12dp"
             android:scaleType="fitCenter" android:src="@drawable/ic_t_lecture" android:background="@drawable/bouton_notif" />
