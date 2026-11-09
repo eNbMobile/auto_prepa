@@ -33,6 +33,7 @@ public final class NotifTele {
         { R.id.t_play, "PLAY" }, { R.id.t_volm, "VOL-" }, { R.id.t_up, "UP" }, { R.id.t_volp, "VOL+" },
         { R.id.t_left, "LEFT" }, { R.id.t_ok, "OK" }, { R.id.t_right, "RIGHT" },
         { R.id.t_down, "DOWN" }, { R.id.t_netflix, "NETFLIX" }, { R.id.t_m6, "M6PLUS" },
+        { R.id.t_menu, "MENU" },
     };
 
     private NotifTele() {}
