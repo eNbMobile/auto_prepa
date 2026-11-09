@@ -1668,8 +1668,47 @@ def _telecharger_commandes_anticipation_envoyee(drive_svc, dossier_mm_aaaa, doss
         f"commandes_envoyées_{dossier_jj_mm}.txt")
 
 
+_JOURS_SEMAINE = ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche")
+
+
+def _date_dossier(dossier_jj_mm, dossier_mm_aaaa):
+    """'JJ/MM/AAAA' a partir des dossiers JJ_MM et MM_AAAA, '' si incomplet."""
+    if not (dossier_jj_mm and dossier_mm_aaaa):
+        return ""
+    return f"{dossier_jj_mm[:2]}/{dossier_mm_aaaa.replace('_', '/')}"
+
+
+def _date_livraison_commande(gmail_svc, numero):
+    """Date de livraison/retrait 'JJ/MM/AAAA' de la commande, lue dans le sujet
+    de son email de confirmation ('' si introuvable)."""
+    if not numero:
+        return ""
+    _, dossier_jj_mm, dossier_mm_aaaa = _infos_email_original(gmail_svc, numero)
+    return _date_dossier(dossier_jj_mm, dossier_mm_aaaa)
+
+
+def _date_avec_jour(date_txt):
+    """'10/11/2026' -> 'mardi 10/11/2026' (date inchangee si illisible)."""
+    try:
+        jour = datetime.strptime(date_txt, "%d/%m/%Y")
+    except ValueError:
+        return date_txt
+    return f"{_JOURS_SEMAINE[jour.weekday()]} {date_txt}"
+
+
+def _phrase_changement_jour(date_ancienne, date_nouvelle):
+    """Phrase signalant que la commande de remplacement n'est pas prevue le
+    meme jour que la commande anticipee ('' si meme jour ou date inconnue)."""
+    if not (date_ancienne and date_nouvelle) or date_ancienne == date_nouvelle:
+        return ""
+    return (f"Attention, la nouvelle commande n'est pas prévue le même jour : "
+            f"elle est prévue le {_date_avec_jour(date_nouvelle)} au lieu du "
+            f"{_date_avec_jour(date_ancienne)}.")
+
+
 def _envoyer_email_anticipation_annulee(gmail_svc, civilite, nom, prenom, num_ancien,
-                                        num_nouveau=None, phrases_comparaison=None):
+                                        num_nouveau=None, phrases_comparaison=None,
+                                        date_ancienne="", date_nouvelle=""):
     """Alerte : la commande annulee (remplacee ou non) faisait partie d'une
     anticipation DEJA ENVOYEE par mail a l'equipe (cf.
     _alerter_si_commande_anticipee_annulee) — ses produits ont donc pu etre
@@ -1680,6 +1719,10 @@ def _envoyer_email_anticipation_annulee(gmail_svc, civilite, nom, prenom, num_an
     ranger et ce qu'ils doivent sortir en plus quand la commande de
     remplacement n'anticipe pas exactement les memes produits (ou qui disent
     que rien ne change, ou que le detail est introuvable).
+
+    date_ancienne / date_nouvelle ('JJ/MM/AAAA') : dates prevues de la
+    commande annulee et de sa commande de remplacement. Si elles different,
+    le mail le signale (les produits sortis ne sont pas pour le meme jour).
 
     Envoye en HTML, un seul <p> par paragraphe : en text/plain, Gmail replie le
     corps a ~78 colonnes en inserant ses propres <br>, ce qui coupait les
@@ -1697,6 +1740,9 @@ def _envoyer_email_anticipation_annulee(gmail_svc, civilite, nom, prenom, num_an
         "Bonjour,",
         (f"La commande de {client}, n°{num_ancien} {motif} et faisait partie de "
          f"l'anticipation déjà envoyée."),
+        *[escape(p) for p in (
+            [_phrase_changement_jour(date_ancienne, date_nouvelle)] if num_nouveau else [])
+          if p],
         *[escape(p) for p in (phrases_comparaison or [])],
         "Merci d'être vigilant sur les produits de cette commande.",
         "Cordialement,<br>Erwan",
@@ -1753,7 +1799,8 @@ _DELAI_ALERTE_ANTICIPATION_MINUTES = 15
 
 
 def _deposer_alerte_anticipation_en_attente(drive_svc, num_ancien, num_nouveau,
-                                            civilite, nom, prenom, contenu_ancien):
+                                            civilite, nom, prenom, contenu_ancien,
+                                            date_ancienne=""):
     """Met l'alerte en attente du traitement de la commande de remplacement.
     Retourne True si elle est bien deposee (ou deja presente), False sinon —
     a l'appelant, alors, d'alerter tout de suite sans comparatif."""
@@ -1775,6 +1822,7 @@ def _deposer_alerte_anticipation_en_attente(drive_svc, num_ancien, num_nouveau,
             "civilite": civilite,
             "nom": nom,
             "prenom": prenom,
+            "date_ancienne": date_ancienne,
             "horodatage": datetime.now(_TZ).isoformat(),
         }
         contenu = ("\n".join(f"{c}={v}" for c, v in entetes.items())
@@ -1892,7 +1940,9 @@ def _envoyer_alerte_anticipation_en_attente(drive_svc, gmail_svc, file_id, entet
         _envoyer_email_anticipation_annulee(
             gmail_svc, entetes.get("civilite", ""), entetes.get("nom", ""),
             entetes.get("prenom", ""), num_ancien, num_nouveau or None,
-            _phrases_comparaison_anticipation(contenu_ancien, contenu_nouveau))
+            _phrases_comparaison_anticipation(contenu_ancien, contenu_nouveau),
+            date_ancienne=entetes.get("date_ancienne", ""),
+            date_nouvelle=_date_livraison_commande(gmail_svc, num_nouveau))
     try:
         drive_svc.files().update(fileId=file_id, body={"trashed": True}).execute()
     except Exception as e:
@@ -2014,20 +2064,27 @@ def _alerter_si_commande_anticipee_annulee(drive_svc, gmail_svc, num_ancien, dos
     contenu_ancien = (_anticipation_commande(drive_svc, num_ancien, contenu_ancien)
                       or _anticipation_envoyee_commande(
                           drive_svc, num_ancien, dossier_mm_aaaa, dossier_jj_mm))
+    date_ancienne = _date_dossier(dossier_jj_mm, dossier_mm_aaaa)
     contenu_nouveau = _anticipation_commande(drive_svc, num_nouveau)
     if contenu_nouveau or _commande_deja_traitee(drive_svc, num_nouveau):
         _envoyer_email_anticipation_annulee(
             gmail_svc, civilite, nom, prenom, num_ancien, num_nouveau,
-            _phrases_comparaison_anticipation(contenu_ancien, contenu_nouveau))
+            _phrases_comparaison_anticipation(contenu_ancien, contenu_nouveau),
+            date_ancienne=date_ancienne,
+            date_nouvelle=_date_livraison_commande(gmail_svc, num_nouveau))
         return
 
     if _deposer_alerte_anticipation_en_attente(
-            drive_svc, num_ancien, num_nouveau, civilite, nom, prenom, contenu_ancien):
+            drive_svc, num_ancien, num_nouveau, civilite, nom, prenom, contenu_ancien,
+            date_ancienne=date_ancienne):
         return
 
     # Mise en attente impossible (Drive indisponible) : l'alerte part quand
     # meme, sans le comparatif — mieux vaut un mail incomplet que pas de mail.
-    _envoyer_email_anticipation_annulee(gmail_svc, civilite, nom, prenom, num_ancien, num_nouveau)
+    _envoyer_email_anticipation_annulee(
+        gmail_svc, civilite, nom, prenom, num_ancien, num_nouveau,
+        date_ancienne=date_ancienne,
+        date_nouvelle=_date_livraison_commande(gmail_svc, num_nouveau))
 
 
 def _envoyer_email_anticipation(gmail_svc, numero, contenu):

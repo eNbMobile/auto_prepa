@@ -188,6 +188,59 @@ class TestMailAnticipationAnnulee(unittest.TestCase):
         self.assertNotIn("anticipation supplémentaire", corps)
 
 
+class TestChangementDeJour(unittest.TestCase):
+    """Commande de remplacement prevue un autre jour que la commande anticipee
+    (cas 57310692 du 09/11/2026 remplacee par 57327140 du 10/11/2026)."""
+
+    def setUp(self):
+        self._destinataire = ap.EMAIL_ANTICIPATION
+        ap.EMAIL_ANTICIPATION = "prepa@exemple.fr"
+        self.gmail = _FakeGmail()
+
+    def tearDown(self):
+        ap.EMAIL_ANTICIPATION = self._destinataire
+
+    def test_jour_different_signale(self):
+        ap._envoyer_email_anticipation_annulee(
+            self.gmail, "Mme", "LARMARAUD", "GWENAELLE", "57310692", "57327140",
+            date_ancienne="09/11/2026", date_nouvelle="10/11/2026")
+        corps = _corps(self.gmail.envoyes[0])
+        self.assertIn("pas prévue le même jour : elle est prévue le "
+                      "mardi 10/11/2026 au lieu du lundi 09/11/2026.", corps)
+
+    def test_meme_jour_rien_ajoute(self):
+        ap._envoyer_email_anticipation_annulee(
+            self.gmail, "Mme", "LARMARAUD", "GWENAELLE", "57310692", "57327140",
+            date_ancienne="09/11/2026", date_nouvelle="09/11/2026")
+        self.assertNotIn("même jour", _corps(self.gmail.envoyes[0]))
+
+    def test_date_nouvelle_inconnue_rien_ajoute(self):
+        ap._envoyer_email_anticipation_annulee(
+            self.gmail, "Mme", "LARMARAUD", "GWENAELLE", "57310692", "57327140",
+            date_ancienne="09/11/2026")
+        self.assertNotIn("même jour", _corps(self.gmail.envoyes[0]))
+
+    def test_alerte_lit_la_date_de_la_nouvelle_commande(self):
+        patchs = {
+            "_telecharger_commandes_anticipation_envoyee": lambda d, mm, jj: {"57310692"},
+            "_client_archive_bdc": lambda d, num: ("Mme", "LARMARAUD", "GWENAELLE"),
+            "_anticipation_commande": lambda d, num, c="": f"{LESSIVE}\n",
+            "_infos_email_original": lambda g, num: (
+                (None, "10_11", "11_2026") if num == "57327140" else (None, "", "")),
+        }
+        anciens = {n: getattr(ap, n) for n in patchs}
+        try:
+            for n, v in patchs.items():
+                setattr(ap, n, v)
+            ap._alerter_si_commande_anticipee_annulee(
+                None, self.gmail, "57310692", "09_11", "11_2026", "57327140")
+        finally:
+            for n, v in anciens.items():
+                setattr(ap, n, v)
+        corps = _corps(self.gmail.envoyes[0])
+        self.assertIn("prévue le mardi 10/11/2026 au lieu du lundi 09/11/2026", corps)
+
+
 class TestAlerteImmediateOuDifferee(unittest.TestCase):
     """L'anticipation de la commande de remplacement n'existe que si celle-ci a
     deja ete traitee — et traiter_modifications_clients tourne AVANT
@@ -212,7 +265,7 @@ class TestAlerteImmediateOuDifferee(unittest.TestCase):
         _patch("_telecharger_anticipation_archive_drive", lambda d, num: "")
         _patch("_commande_deja_traitee", lambda d, num: num in self.traitees)
         _patch("_deposer_alerte_anticipation_en_attente",
-               lambda d, anc, nouv, civ, nom, prenom, contenu: (
+               lambda d, anc, nouv, civ, nom, prenom, contenu, **k: (
                    self.en_attente.update({nouv: (anc, civ, nom, prenom, contenu)}) or True))
         self.anticipations = {"54764266": f"{LESSIVE}\n{JOUET}\n"}
         self.traitees = set()
