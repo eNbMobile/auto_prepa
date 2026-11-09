@@ -279,6 +279,7 @@ const MANIFESTE = {
   shortcuts: [
     { name: 'Télécommande', short_name: 'Télé', url: '/#tele', icons: [{ src: '/icone-192.png', sizes: '192x192' }] },
     { name: 'Scènes', url: '/#scenes', icons: [{ src: '/icone-192.png', sizes: '192x192' }] },
+    { name: 'Réglages', url: '/#reglages', icons: [{ src: '/icone-192.png', sizes: '192x192' }] },
   ],
 };
 
