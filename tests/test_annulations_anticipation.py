@@ -243,7 +243,7 @@ class TestAlerteAnticipationAnnulee(unittest.TestCase):
         self._patch = _patch
         _patch(ap, "_telecharger_bdc_archive_drive", lambda d, num: None)
         _patch(ap, "_envoyer_email_anticipation_annulee",
-               lambda gmail, civ, nom, prenom, ancien, nouveau=None:
+               lambda gmail, civ, nom, prenom, ancien, nouveau=None, *a, **k:
                    self.envois.append((ancien, nouveau)))
 
     def tearDown(self):
