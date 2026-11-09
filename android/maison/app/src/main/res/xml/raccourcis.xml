@@ -13,4 +13,11 @@
         <intent android:action="android.intent.action.VIEW"
             android:targetPackage="fr.maison.app" android:targetClass="fr.maison.app.ConfigActivity" />
     </shortcut>
+    <shortcut android:shortcutId="reglages" android:enabled="true" android:icon="@drawable/ic_reglages"
+        android:shortcutShortLabel="@string/raccourci_reglages">
+        <intent android:action="android.intent.action.VIEW"
+            android:targetPackage="fr.maison.app" android:targetClass="fr.maison.app.MainActivity">
+            <extra android:name="vue" android:value="reglages" />
+        </intent>
+    </shortcut>
 </shortcuts>
