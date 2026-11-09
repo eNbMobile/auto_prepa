@@ -22,6 +22,10 @@
     </LinearLayout>
     <LinearLayout android:layout_width="match_parent" android:layout_height="150dp" android:orientation="horizontal"
         android:layout_marginTop="4dp">
+        <!-- Paramètres de la télé (touche MENU : ouvre le bandeau des réglages rapides). -->
+        <ImageView android:id="@+id/t_menu" android:layout_width="0dp" android:layout_height="match_parent"
+            android:layout_weight="0.6" android:layout_margin="3dp" android:padding="8dp"
+            android:scaleType="fitCenter" android:src="@drawable/ic_t_reglages" android:background="@drawable/bouton_notif" />
         <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
             android:layout_margin="3dp" android:orientation="vertical" android:background="@drawable/bloc_notif">
             <ImageView android:id="@+id/t_volp" android:layout_width="match_parent" android:layout_height="0dp"
