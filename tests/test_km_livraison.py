@@ -20,6 +20,8 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import googleapiclient.http  # noqa: F401 (patché dans setUp, même lancé seul)
+
 import controle_stocks as cs
 import livraison_drive as ld
 

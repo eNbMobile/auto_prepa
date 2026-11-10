@@ -6,6 +6,8 @@
 - Les pull requests créées en brouillon (draft) doivent systématiquement être passées en "ready for review" puis mergées (toujours selon la règle ci-dessus), sans redemander confirmation.
 - Ne jamais terminer un tour en laissant une PR prête encore en brouillon ou non mergée : l'utilisateur ne doit pas avoir à écrire « Merge la PR ».
 
+- Avant de créer ou mettre à jour une PR, lancer l'agent `relecteur-confidentialite` sur le diff (dépôt public : aucune donnée client dans les logs ni le code) et corriger ce qu'il signale.
+
 ## Façon de travailler
 
 - **Faire soi-même avant de déléguer** : avant de demander à l'utilisateur une manipulation (renommer, déposer, exporter, zipper ou chercher un fichier, fournir une info technique), utiliser ses propres outils (connecteur Google Drive : mise à jour, import, suppression ; scripts ; navigateur ; API). Ne lui demander qu'en dernier recours, en expliquant précisément ce qui bloque.
