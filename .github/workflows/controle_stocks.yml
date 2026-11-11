@@ -17,7 +17,7 @@ on:
           - "6"
           - "7"
       date:
-        description: "Date du dernier jour de ventes (JJ/MM/AAAA) — laisser vide pour hier"
+        description: "Date du dernier jour de ventes (JJ/MM/AAAA) — laisser vide pour le dernier jour ouvré (cf. jours_fermes.txt)"
         required: false
         type: string
 
@@ -60,10 +60,9 @@ jobs:
           DATE_ARG=""
           if [ -n "${{ inputs.date }}" ]; then
             DATE_ARG="--date ${{ inputs.date }}"
-          elif [ "$(date +%u)" -eq 1 ]; then
-            # Lundi : on prend samedi (J-2) car le dimanche n'a pas de ventes
-            DATE_ARG="--date $(date -d '2 days ago' +%d/%m/%Y)"
           fi
+          # Sans date : les scripts prennent le dernier jour ouvré (samedi le
+          # lundi, et on saute les jours fermés listés dans jours_fermes.txt)
           python3 bootstrap.py download_stocks.py --jours $JOURS $DATE_ARG
           python3 controle_stocks.py j1.xlsx j.xlsx --jours $JOURS $DATE_ARG --upload
 
