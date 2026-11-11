@@ -7,6 +7,8 @@ import urllib.request
 import urllib.parse
 from datetime import date, timedelta
 
+import jours_fermes
+
 import confidentiel
 
 DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
@@ -89,9 +91,9 @@ def main():
         if i + 1 < len(args):
             nb_jours = max(1, int(args[i + 1]))
 
-    # Dernier jour de ventes : hier par défaut, samedi si lundi, ou --date override
-    delta = timedelta(days=2) if date.today().weekday() == 0 else timedelta(days=1)
-    date_j1 = date.today() - delta
+    # Dernier jour de ventes : dernier jour ouvré avant aujourd'hui (hier, ou
+    # plus tôt après un dimanche / jour fermé de jours_fermes.txt), ou --date
+    date_j1 = jours_fermes.dernier_jour_ventes()
     if "--date" in args:
         i = args.index("--date")
         if i + 1 < len(args):

@@ -14,6 +14,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import confidentiel
+import jours_fermes
 
 _TZ = ZoneInfo("Europe/Paris")
 
@@ -1522,8 +1523,9 @@ def main():
     args = sys.argv[1:]
     args = [a for a in args if a != "--upload"]  # flag ignoré, upload toujours actif
 
-    # --date JJ/MM/AAAA (dernier jour de ventes)
-    date_j1 = date.today() - timedelta(days=1)
+    # --date JJ/MM/AAAA (dernier jour de ventes) ; par défaut, dernier jour
+    # ouvré avant aujourd'hui (cf. jours_fermes.txt)
+    date_j1 = jours_fermes.dernier_jour_ventes()
     if "--date" in args:
         i = args.index("--date")
         if i + 1 < len(args):
