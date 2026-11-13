@@ -20,7 +20,10 @@ name: Routine du soir
 #    BonDeCommande PDF (une fois les commandes non récupérées déplacées),
 #    puis calcule la valeur vendue au Drive (UVC vendues × « Prix Vte » du
 #    stock du matin archivé) et l'inscrit dans CA DRIVE AAAA.xlsx, onglet
-#    RÉALISATION, tableau « VALEUR VENDUE DRIVE » sous NB COMMANDES DRIVE.
+#    RÉALISATION, tableau « VALEUR VENDUE DRIVE » sous NB COMMANDES DRIVE,
+#    et la même valeur restreinte aux classeurs DRIVE EPICERIE / DPH /
+#    LIQUIDES / « DRIVE Snn … » du stock du jour dans le tableau voisin
+#    « VALEUR VENDUE DRIVE CLASSEURS CDE ».
 # 5. Différence de stocks (mardi et mercredi uniquement) : stock du matin
 #    archivé comparé au j1.xlsx du dossier Contrôle Stock ; PDF envoyé au
 #    premier destinataire s'il y a au moins une différence, sinon pas de mail.

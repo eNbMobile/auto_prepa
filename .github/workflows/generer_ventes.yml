@@ -11,6 +11,11 @@ on:
         description: "Rattrapage valeur vendue au Drive seulement : date de fin (JJ/MM/AAAA) — la date de début est le champ « Date ». Ne recalcule pas les ventes."
         required: false
         type: string
+      classeurs_seulement:
+        description: "Rattrapage : ne réécrire que le tableau VALEUR VENDUE DRIVE CLASSEURS CDE"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: generer_ventes
@@ -47,7 +52,11 @@ jobs:
           WORK_DIR: "v 4.0.0"
         run: |
           if [ -n "${{ inputs.valeur_vendue_au }}" ]; then
-            python3 bootstrap.py valeur_vendue_drive.py --du "${{ inputs.date }}" --au "${{ inputs.valeur_vendue_au }}"
+            OPT=""
+            if [ "${{ inputs.classeurs_seulement }}" = "true" ]; then
+              OPT="--classeurs-seulement"
+            fi
+            python3 bootstrap.py valeur_vendue_drive.py --du "${{ inputs.date }}" --au "${{ inputs.valeur_vendue_au }}" $OPT
             exit $?
           fi
           DATE_ARG=""

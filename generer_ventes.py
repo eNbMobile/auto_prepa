@@ -3,7 +3,8 @@
 Génère les ventes du jour depuis les BDC PDFs.
 Sauvegarde ventes_JJ_MM.csv et l'archive sur Drive, puis calcule la valeur
 vendue au Drive (UVC vendues × prix du stock du matin) et l'inscrit dans
-CA DRIVE AAAA.xlsx (onglet RÉALISATION).
+CA DRIVE AAAA.xlsx (onglet RÉALISATION), totale et restreinte aux classeurs
+de commande (tableau VALEUR VENDUE DRIVE CLASSEURS CDE).
 Ne génère PAS de fichier de stock théorique.
 """
 import base64

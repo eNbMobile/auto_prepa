@@ -15,6 +15,14 @@ Le classeur est un .xlsx (pas un Google Sheets natif) : il est téléchargé,
 seul le XML de l'onglet RÉALISATION est modifié (les autres parties du
 fichier sont recopiées octet pour octet, pour ne rien perdre de la mise en
 forme, des commentaires…), puis réimporté sous le même identifiant Drive.
+
+Un second tableau, « VALEUR VENDUE DRIVE CLASSEURS CDE » (T58:AA113, même
+disposition), reçoit la même valeur restreinte aux produits rangés, dans le
+stock du jour, dans les classeurs DRIVE EPICERIE, DRIVE DPH, DRIVE LIQUIDES
+ou un classeur de semaine « DRIVE Snn … » (aucun autre). Le classeur d'un
+produit change d'un jour à l'autre : il est lu dans le même export que les
+prix (ou, si cet export n'a pas de colonne « Classeur », dans l'export
+archivé le plus proche qui en a une).
 """
 import io
 import os
@@ -28,10 +36,18 @@ import controle_stocks as cs
 
 ONGLET = "RÉALISATION"
 TITRE_TABLEAU = "VALEUR VENDUE DRIVE"
+TITRE_TABLEAU_CLASSEURS = "VALEUR VENDUE DRIVE CLASSEURS CDE"
+
+# Classeurs retenus pour le tableau « CLASSEURS CDE » (comparés normalisés :
+# majuscules, sans accents ni astérisques), plus tous les classeurs de
+# semaine « DRIVE S<n°> … ».
+CLASSEURS_CDE = ("DRIVE EPICERIE", "DRIVE DPH", "DRIVE LIQUIDES")
+_RE_CLASSEUR_SEMAINE = re.compile(r"^DRIVE S\d+\b")
 
 # Tableau modèle (CA MAGASIN, A..H) et tableau cible (K..R), lignes 58 à 113.
 COLS_MODELE = ["A", "B", "C", "D", "E", "F", "G", "H"]
 COLS_CIBLE  = ["K", "L", "M", "N", "O", "P", "Q", "R"]
+COLS_CIBLE_CLASSEURS = ["T", "U", "V", "W", "X", "Y", "Z", "AA"]
 LIGNE_TITRE    = 58
 LIGNE_JOURS    = 59
 LIGNE_S1       = 60          # « S 1 » ; « S n » en ligne 59 + n
@@ -95,6 +111,17 @@ def calculer_valeur_vendue(ventes, prix):
     return round(total, 2), sorted(sans_prix)
 
 
+def est_classeur_cde(classeur):
+    """Vrai pour DRIVE EPICERIE / DPH / LIQUIDES et les classeurs « DRIVE Snn … »."""
+    n = cs._normaliser_classeur(classeur)
+    return n in CLASSEURS_CDE or bool(_RE_CLASSEUR_SEMAINE.match(n))
+
+
+def filtrer_classeurs_cde(ventes, classeurs):
+    """Ventes restreintes aux gencods rangés dans un classeur retenu."""
+    return {g: q for g, q in ventes.items() if est_classeur_cde(classeurs.get(g, ""))}
+
+
 # ─────────────────────────────────────────────────────────────────
 # Écriture dans le .xlsx (XML de l'onglet uniquement)
 # ─────────────────────────────────────────────────────────────────
@@ -147,11 +174,12 @@ def _col_idx(col):
     return cs._col_index(col)
 
 
-def inscrire_valeur(xml_onglet, semaine, jour_idx, valeur):
-    """Construit/met à jour le tableau K58:R113 dans le XML de l'onglet et y
-    inscrit `valeur` pour la semaine ISO `semaine` (1..53) et le jour
-    `jour_idx` (0 = lundi … 5 = samedi). Les valeurs déjà présentes dans le
-    tableau sont conservées. Retourne le nouveau XML."""
+def inscrire_valeur(xml_onglet, semaine, jour_idx, valeur,
+                    cols_cible=COLS_CIBLE, titre=TITRE_TABLEAU):
+    """Construit/met à jour le tableau `cols_cible` (K58:R113 par défaut) dans
+    le XML de l'onglet et y inscrit `valeur` pour la semaine ISO `semaine`
+    (1..53) et le jour `jour_idx` (0 = lundi … 5 = samedi). Les valeurs déjà
+    présentes dans le tableau sont conservées. Retourne le nouveau XML."""
     if not 1 <= semaine <= 53 or not 0 <= jour_idx <= 5:
         raise ValueError(f"Semaine {semaine} / jour {jour_idx} hors tableau.")
 
@@ -166,7 +194,7 @@ def inscrire_valeur(xml_onglet, semaine, jour_idx, valeur):
     valeurs = {}
     for n in range(LIGNE_S1, LIGNE_DERNIERE_SEMAINE + 1):
         cells = _cellules(lignes[n].group(2))
-        for j, col in enumerate(COLS_CIBLE[1:7]):
+        for j, col in enumerate(cols_cible[1:7]):
             if col in cells:
                 v = _nombre(cells[col][1])
                 if v is not None:
@@ -186,13 +214,13 @@ def inscrire_valeur(xml_onglet, semaine, jour_idx, valeur):
         cells = _cellules(m.group(2))
         modele = {c: cells.get(c, ("", None)) for c in COLS_MODELE}
         nouvelles = {}
-        for k, (cm, cc) in enumerate(zip(COLS_MODELE, COLS_CIBLE)):
+        for k, (cm, cc) in enumerate(zip(COLS_MODELE, cols_cible)):
             attrs, contenu = modele[cm]
             s = _style(attrs)
             ref = f"{cc}{n}"
             if n == LIGNE_TITRE:
                 if k == 0:
-                    nouvelles[cc] = (f'<c r="{ref}"{s} t="inlineStr"><is><t>{TITRE_TABLEAU}</t></is></c>')
+                    nouvelles[cc] = (f'<c r="{ref}"{s} t="inlineStr"><is><t>{titre}</t></is></c>')
                 else:
                     nouvelles[cc] = f'<c r="{ref}"{s}/>'
             elif n == LIGNE_JOURS or (k == 0):
@@ -206,13 +234,13 @@ def inscrire_valeur(xml_onglet, semaine, jour_idx, valeur):
             elif n == LIGNE_TOTAL:
                 if k == 7:
                     tot = sum(somme_jour(j) for j in range(6))
-                    f = f"SUM({COLS_CIBLE[1]}{n}:{COLS_CIBLE[6]}{n})"
+                    f = f"SUM({cols_cible[1]}{n}:{cols_cible[6]}{n})"
                 else:
                     tot = somme_jour(k - 1)
                     f = f"SUM({cc}{LIGNE_S1}:{cc}{LIGNE_FIN_SOMME_TOTAL})"
                 nouvelles[cc] = f'<c r="{ref}"{s}><f>{f}</f><v>{_fmt(tot)}</v></c>'
             elif k == 7:
-                f = f"SUM({COLS_CIBLE[1]}{n}:{COLS_CIBLE[6]}{n})"
+                f = f"SUM({cols_cible[1]}{n}:{cols_cible[6]}{n})"
                 nouvelles[cc] = f'<c r="{ref}"{s}><f>{f}</f><v>{_fmt(somme_ligne(n))}</v></c>'
             else:
                 v = valeurs.get((n, k - 1))
@@ -221,7 +249,7 @@ def inscrire_valeur(xml_onglet, semaine, jour_idx, valeur):
 
         # Fusion : cellules existantes hors K..R + nouvelles, triées par colonne
         conservees = [(mm.group(1), mm.group(0)) for mm in _RE_CELLULE.finditer(m.group(2))
-                      if mm.group(1) not in COLS_CIBLE]
+                      if mm.group(1) not in cols_cible]
         toutes = conservees + list(nouvelles.items())
         toutes.sort(key=lambda x: _col_idx(x[0]))
         attrs_ligne = re.sub(r'\sspans="[^"]*"', "", m.group(1))
@@ -232,7 +260,7 @@ def inscrire_valeur(xml_onglet, semaine, jour_idx, valeur):
     xml = "".join(morceaux)
 
     # Fusion du titre K58:R58
-    fusion = f"{COLS_CIBLE[0]}{LIGNE_TITRE}:{COLS_CIBLE[-1]}{LIGNE_TITRE}"
+    fusion = f"{cols_cible[0]}{LIGNE_TITRE}:{cols_cible[-1]}{LIGNE_TITRE}"
     if f'<mergeCell ref="{fusion}"/>' not in xml:
         if "<mergeCells" in xml:
             xml = re.sub(r'<mergeCells count="(\d+)">',
@@ -244,15 +272,19 @@ def inscrire_valeur(xml_onglet, semaine, jour_idx, valeur):
     return xml
 
 
-def modifier_classeur(contenu_xlsx, jour, valeur=None):
+def modifier_classeur(contenu_xlsx, jour, valeur=None, valeurs_classeurs=None):
     """Retourne les octets du .xlsx avec la valeur du jour inscrite.
-    `jour` peut aussi être un dict {date: valeur} pour inscrire plusieurs jours."""
+    `jour` peut aussi être un dict {date: valeur} pour inscrire plusieurs jours.
+    `valeurs_classeurs` ({date: valeur}) va dans le tableau CLASSEURS CDE."""
     valeurs = jour if isinstance(jour, dict) else {jour: valeur}
     with zipfile.ZipFile(io.BytesIO(contenu_xlsx)) as zin:
         chemin = _chemin_onglet(zin, ONGLET)
         xml = zin.read(chemin).decode("utf-8")
         for j, v in sorted(valeurs.items()):
             xml = inscrire_valeur(xml, j.isocalendar()[1], j.weekday(), v)
+        for j, v in sorted((valeurs_classeurs or {}).items()):
+            xml = inscrire_valeur(xml, j.isocalendar()[1], j.weekday(), v,
+                                  COLS_CIBLE_CLASSEURS, TITRE_TABLEAU_CLASSEURS)
         sortie = io.BytesIO()
         with zipfile.ZipFile(sortie, "w") as zout:
             for info in zin.infolist():
@@ -278,35 +310,40 @@ def _trouver_classeur(svc, annee):
     return files[0]["id"], fichier
 
 
-def inscrire_dans_ca_drive(jour, valeur=None):
-    """Inscrit `valeur` pour `jour` (ou un dict {date: valeur}) dans
+def inscrire_dans_ca_drive(jour, valeur=None, valeurs_classeurs=None):
+    """Inscrit `valeur` pour `jour` (ou un dict {date: valeur}) et, s'il est
+    fourni, `valeurs_classeurs` ({date: valeur}, tableau CLASSEURS CDE) dans
     « CA DRIVE <année ISO>.xlsx », en un seul aller-retour par classeur."""
     from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
-    valeurs = jour if isinstance(jour, dict) else {jour: valeur}
-    for j in [j for j in valeurs if j.weekday() == 6]:
+    valeurs = dict(jour) if isinstance(jour, dict) else {jour: valeur}
+    valeurs_classeurs = dict(valeurs_classeurs or {})
+    for j in sorted({j for j in list(valeurs) + list(valeurs_classeurs) if j.weekday() == 6}):
         print(f"  {j.strftime('%d/%m/%Y')} (dimanche) : pas de colonne, rien inscrit.")
-        del valeurs[j]
-    if not valeurs:
+        valeurs.pop(j, None)
+        valeurs_classeurs.pop(j, None)
+    if not valeurs and not valeurs_classeurs:
         return
     svc = cs._get_drive_service()
     if not svc:
         raise RuntimeError("Drive inaccessible.")
     par_annee = {}
-    for j, v in valeurs.items():
-        par_annee.setdefault(j.isocalendar()[0], {})[j] = v
-    for annee, vals in sorted(par_annee.items()):
+    for k, d in ((0, valeurs), (1, valeurs_classeurs)):
+        for j, v in d.items():
+            par_annee.setdefault(j.isocalendar()[0], ({}, {}))[k][j] = v
+    for annee, (vals, vals_cl) in sorted(par_annee.items()):
         file_id, fichier = _trouver_classeur(svc, annee)
         buf = io.BytesIO()
         dl = MediaIoBaseDownload(buf, svc.files().get_media(fileId=file_id))
         done = False
         while not done:
             _, done = dl.next_chunk()
-        nouveau = modifier_classeur(buf.getvalue(), vals)
+        nouveau = modifier_classeur(buf.getvalue(), vals, valeurs_classeurs=vals_cl)
         media = MediaIoBaseUpload(io.BytesIO(nouveau), mimetype=_MIME_XLSX, resumable=False)
         svc.files().update(fileId=file_id, media_body=media, supportsAllDrives=True).execute()
-        for j, v in sorted(vals.items()):
-            print(f"  {fichier} / {ONGLET} : S {j.isocalendar()[1]}, "
-                  f"{_JOURS[j.weekday()]} {j.strftime('%d/%m')} = {v:.2f} €")
+        for titre, d in ((TITRE_TABLEAU, vals), (TITRE_TABLEAU_CLASSEURS, vals_cl)):
+            for j, v in sorted(d.items()):
+                print(f"  {fichier} / {titre} : S {j.isocalendar()[1]}, "
+                      f"{_JOURS[j.weekday()]} {j.strftime('%d/%m')} = {v:.2f} €")
 
 
 _JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
@@ -368,13 +405,38 @@ def _lister_archives_stocks():
         return None
 
 
+def _telecharger_stock(nom_stock):
+    return cs.telecharger_fichier_archive(
+        "stocks", nom_stock, os.path.join(cs.WORK_DIR, nom_stock),
+        root_id=cs.DRIVE_CONFIG_FOLDER_ID)
+
+
+def _classeurs_du_jour(jour, chemin, nom_stock, disponibles=None):
+    """({gencod: classeur}, nom de l'export lu) : classeurs de l'export des
+    prix ; s'il n'a pas de colonne « Classeur » (certains exports de l'été
+    2026), ceux de l'export archivé le plus proche qui en a une.
+    ({}, None) si aucun n'en a."""
+    classeurs = cs.lire_stock(chemin, classeur_requis=False)[2]
+    if classeurs:
+        return classeurs, nom_stock
+    for autre in _candidats_stock(jour, True, disponibles):
+        if autre == nom_stock:
+            continue
+        chemin_autre = _telecharger_stock(autre)
+        if chemin_autre:
+            classeurs = cs.lire_stock(chemin_autre, classeur_requis=False)[2]
+            if classeurs:
+                return classeurs, autre
+    return {}, None
+
+
 def _valeur_du_jour(jour, ventes, secours=False, disponibles=None):
+    """(valeur vendue, valeur vendue classeurs CDE — None si aucun export
+    archivé ne donne les classeurs)."""
     os.makedirs(cs.WORK_DIR, exist_ok=True)
     chemin = nom_stock = None
     for nom_stock in _candidats_stock(jour, secours, disponibles):
-        chemin = cs.telecharger_fichier_archive(
-            "stocks", nom_stock, os.path.join(cs.WORK_DIR, nom_stock),
-            root_id=cs.DRIVE_CONFIG_FOLDER_ID)
+        chemin = _telecharger_stock(nom_stock)
         if chemin:
             break
     if not chemin:
@@ -387,24 +449,39 @@ def _valeur_du_jour(jour, ventes, secours=False, disponibles=None):
     if sans_prix:
         print(f"  {len(sans_prix)} gencod(s) vendu(s) sans prix dans {nom_stock} "
               f"(non valorisés) : {', '.join(sans_prix[:20])}{' …' if len(sans_prix) > 20 else ''}")
-    return valeur
+    classeurs, source = _classeurs_du_jour(jour, chemin, nom_stock, disponibles)
+    if not classeurs:
+        print("  Classeurs CDE : aucun export archivé avec une colonne « Classeur ».")
+        return valeur, None
+    ventes_cde = filtrer_classeurs_cde(ventes, classeurs)
+    valeur_cde, _ = calculer_valeur_vendue(ventes_cde, prix)
+    print(f"  Dont classeurs CDE : {valeur_cde:.2f} € ({len(ventes_cde)} gencods, "
+          f"classeurs de {source})")
+    return valeur, valeur_cde
 
 
 def traiter(jour, ventes):
-    """Calcule la valeur vendue du jour et l'inscrit dans CA DRIVE.
-    Retourne la valeur. Lève une exception en cas d'échec."""
-    valeur = _valeur_du_jour(jour, ventes)
-    inscrire_dans_ca_drive(jour, valeur)
+    """Calcule la valeur vendue du jour (totale et classeurs CDE) et
+    l'inscrit dans CA DRIVE. Retourne la valeur totale. Lève une exception
+    en cas d'échec (après avoir inscrit la valeur totale si seuls les
+    classeurs manquent)."""
+    valeur, valeur_cde = _valeur_du_jour(jour, ventes)
+    inscrire_dans_ca_drive(jour, valeur,
+                           valeurs_classeurs={jour: valeur_cde} if valeur_cde is not None else None)
+    if valeur_cde is None:
+        raise RuntimeError("valeur vendue classeurs CDE non calculée : aucun export de "
+                           "stock archivé avec une colonne « Classeur ».")
     return valeur
 
 
-def rattraper(du, au):
+def rattraper(du, au, classeurs_seulement=False):
     """Rattrapage du..au (inclus, lundi–samedi) depuis les ventes archivées
     (Archives/ventes/ventes_JJ_MM.csv, filtrées sur les gencods R1 comme la
-    routine) : aucun recalcul depuis les BDC.
+    routine) : aucun recalcul depuis les BDC. Avec `classeurs_seulement`,
+    seul le tableau CLASSEURS CDE est réécrit.
     Retourne la liste des jours non traités."""
     from datetime import timedelta
-    valeurs, manquants = {}, []
+    valeurs, valeurs_cde, manquants = {}, {}, []
     os.makedirs(cs.WORK_DIR, exist_ok=True)
     # Les ventes archivées les plus anciennes (mai 2026) couvrent tous les
     # produits : même filtre R1 que la routine, pour des valeurs comparables.
@@ -423,13 +500,20 @@ def rattraper(du, au):
                 ventes, _ = cs._charger_ventes_csv(chemin)
                 if gencods_r1:
                     ventes = {g: q for g, q in ventes.items() if g in gencods_r1}
-                valeurs[j] = _valeur_du_jour(j, ventes, secours=True, disponibles=disponibles)
+                v, v_cde = _valeur_du_jour(j, ventes, secours=True, disponibles=disponibles)
+                if not classeurs_seulement:
+                    valeurs[j] = v
+                if v_cde is not None:
+                    valeurs_cde[j] = v_cde
+                else:
+                    manquants.append(j)
             except Exception as e:
                 print(f"  {j.strftime('%d/%m/%Y')} non traité : {e}")
                 manquants.append(j)
         j += timedelta(days=1)
-    print(f"\n{len(valeurs)} jour(s) à inscrire, {len(manquants)} non traité(s).")
-    inscrire_dans_ca_drive(valeurs)
+    print(f"\n{len(valeurs)} valeur(s) totale(s) et {len(valeurs_cde)} valeur(s) classeurs CDE "
+          f"à inscrire, {len(manquants)} jour(s) non traité(s) ou incomplet(s).")
+    inscrire_dans_ca_drive(valeurs, valeurs_classeurs=valeurs_cde)
     return manquants
 
 
@@ -443,9 +527,11 @@ def main():
     p = argparse.ArgumentParser(description="Rattrapage de la valeur vendue au Drive.")
     p.add_argument("--du", required=True, help="JJ/MM/AAAA")
     p.add_argument("--au", required=True, help="JJ/MM/AAAA")
+    p.add_argument("--classeurs-seulement", action="store_true",
+                   help="Ne réécrire que le tableau VALEUR VENDUE DRIVE CLASSEURS CDE.")
     a = p.parse_args()
     cs._charger_config()
-    manquants = rattraper(_parse_date(a.du), _parse_date(a.au))
+    manquants = rattraper(_parse_date(a.du), _parse_date(a.au), a.classeurs_seulement)
     if manquants:
         print("Jours non traités : " + ", ".join(j.strftime("%d/%m/%Y") for j in manquants))
         raise SystemExit(1)
