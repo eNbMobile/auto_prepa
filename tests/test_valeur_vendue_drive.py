@@ -68,6 +68,21 @@ class TestCalcul(unittest.TestCase):
         self.assertEqual(sans_prix, ["0000000000001"])
 
 
+class TestClasseursCde(unittest.TestCase):
+    def test_classeurs_retenus(self):
+        for c in ("DRIVE EPICERIE", "Drive Épicerie", "DRIVE DPH", "DRIVE LIQUIDES",
+                  "DRIVE S43 TRAFIC HALLOWEEN", "DRIVE S31", "**DRIVE S22 GROS VOLUMES 1**"):
+            self.assertTrue(vvd.est_classeur_cde(c), c)
+        for c in ("DRIVE ANIMAUX", "DRIVE CARTE U SEPTEMBRE", "**DRIVE LGV**",
+                  "**DRIVE STOCK MAGASIN**", "DRIVE PALETTE COMPLETE", "DRIVE SPECIAL", ""):
+            self.assertFalse(vvd.est_classeur_cde(c), c)
+
+    def test_filtre_selon_classeur_du_jour(self):
+        ventes = {"1": 2, "2": 1, "3": 4, "4": 1}
+        classeurs = {"1": "DRIVE EPICERIE", "2": "DRIVE ANIMAUX", "3": "DRIVE S45 TRAFIC"}
+        self.assertEqual(vvd.filtrer_classeurs_cde(ventes, classeurs), {"1": 2, "3": 4})
+
+
 class TestInscription(unittest.TestCase):
     def test_cellule_du_jour_et_totaux(self):
         # Samedi 07/11/2026 = S 45 (ligne 104), colonne Q
@@ -93,6 +108,26 @@ class TestInscription(unittest.TestCase):
         self.assertIn('<f>SUM(L104:Q104)</f><v>1434.5</v>', xml)
         self.assertEqual(xml.count('<mergeCell ref="K58:R58"/>'), 1)
         self.assertEqual(xml.count('<c r="Q104"'), 1)
+
+    def test_tableau_classeurs_cde(self):
+        # Samedi 07/11/2026 = S 45 (ligne 104), colonne Z ; total en AA
+        b = vvd.modifier_classeur(_classeur(), {date(2026, 11, 7): 1931.02},
+                                  valeurs_classeurs={date(2026, 11, 7): 1500.5})
+        b = vvd.modifier_classeur(b, {}, valeurs_classeurs={date(2026, 11, 6): 10})
+        xml, _ = _onglet(b)
+        self.assertIn('<c r="Q104" s="44"><v>1931.02</v></c>', xml)
+        self.assertIn('<c r="Z104" s="44"><v>1500.5</v></c>', xml)
+        self.assertIn('<c r="Y104" s="44"><v>10</v></c>', xml)
+        self.assertIn('<f>SUM(U104:Z104)</f><v>1510.5</v>', xml)
+        self.assertIn('<f>SUM(Z60:Z111)</f><v>1500.5</v>', xml)
+        self.assertIn('<t>VALEUR VENDUE DRIVE CLASSEURS CDE</t>', xml)
+        self.assertIn('<mergeCell ref="T58:AA58"/>', xml)
+        self.assertIn('<c r="T104" s="32" t="s"><v>4</v></c>', xml)
+        # Ordre des colonnes conservé (R avant T avant Z avant AA)
+        ligne = xml[xml.index('<row r="104"'):]
+        ligne = ligne[:ligne.index("</row>")]
+        self.assertLess(ligne.index('r="R104"'), ligne.index('r="T104"'))
+        self.assertLess(ligne.index('r="Z104"'), ligne.index('r="AA104"'))
 
     def test_semaine_1(self):
         xml, _ = _onglet(vvd.modifier_classeur(_classeur(), date(2026, 1, 2), 50))
