@@ -1710,6 +1710,8 @@ const CSS = `
   .titre-prop .sep{border-top:1px solid #ccd; margin:2px 0;}
   .centre button{padding:7px 10px; font-size:clamp(0.75rem, 3cqw, 2.18rem); margin:2px;}
   .centre .boutons{display:flex; flex-wrap:wrap; justify-content:center;}
+  .centre .mise-autre{display:flex; gap:4px; justify-content:center; align-items:center; margin:2px auto;}
+  .centre .mise-autre input{width:9em; flex:none; padding:7px; font-size:clamp(0.75rem, 3cqw, 2.18rem);}
   .btn-or{background:var(--or); color:var(--ink);} .btn-gris{background:#D9E2D5; color:var(--ink);}
   .btn-rouge{background:#E63946; color:#fff;}
   .dette{border:2px solid #E63946;}
@@ -1814,6 +1816,8 @@ function client() {
      d'un vrai plateau avant d'afficher l'état final. */
   var BROUILLON = null;
   var EDITION = false;
+  var MISE_AUTRE = '';
+  var MISE_AUTRE_ID = null;
   var RENDU_DIFFERE = false;
   var AFF = null;
   var ANIM = null;
@@ -2333,6 +2337,39 @@ function client() {
           boutons.appendChild(b);
         });
         boutons.appendChild(bouton('Je passe', 'btn-gris', function () { agir('passerEnchere'); }));
+        c.appendChild(boutons);
+        boutons = el('div', 'boutons');
+        // Case « Autre » : le joueur tape le montant exact de sa mise.
+        if (MISE_AUTRE_ID !== e.depuis) { MISE_AUTRE = ''; MISE_AUTRE_ID = e.depuis; }
+        var autre = el('form', 'mise-autre');
+        var champ = el('input');
+        champ.type = 'number';
+        champ.min = String(e.prix + 1);
+        champ.max = String(moi.argent);
+        champ.step = '1';
+        champ.inputMode = 'numeric';
+        champ.placeholder = 'Autre montant (€)';
+        champ.value = MISE_AUTRE;
+        champ.oninput = function () { MISE_AUTRE = champ.value; };
+        champ.onfocus = function () { EDITION = true; };
+        champ.onblur = function () {
+          setTimeout(function () { EDITION = false; if (RENDU_DIFFERE) rendre(); }, 300);
+        };
+        autre.appendChild(champ);
+        var ok = el('button', 'btn-or', 'Miser');
+        ok.type = 'submit';
+        autre.appendChild(ok);
+        autre.onsubmit = function (ev) {
+          ev.preventDefault();
+          var mise = parseInt(champ.value, 10);
+          if (!(mise > e.prix)) { alert('Il faut dépasser ' + euros(e.prix) + '.'); return; }
+          if (mise > moi.argent) { alert('Tu n\u2019as que ' + euros(moi.argent) + '.'); return; }
+          MISE_AUTRE = '';
+          EDITION = false;
+          champ.blur();
+          agir('miser', mise);
+        };
+        c.appendChild(autre);
       }
       if ((Date.now() - ECART - e.depuis) / 1000 > ETAT.delaiEnchere) {
         boutons.appendChild(bouton('Clore l\u2019enchère', 'btn-gris', function () { agir('clore'); }));
