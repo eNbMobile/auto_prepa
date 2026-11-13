@@ -71,15 +71,17 @@ class TestCalcul(unittest.TestCase):
 class TestClasseursCde(unittest.TestCase):
     def test_classeurs_retenus(self):
         for c in ("DRIVE EPICERIE", "Drive Épicerie", "DRIVE DPH", "DRIVE LIQUIDES",
-                  "DRIVE S43 TRAFIC HALLOWEEN", "DRIVE S31", "**DRIVE S22 GROS VOLUMES 1**"):
+                  "DRIVE S43 TRAFIC HALLOWEEN", "DRIVE S31", "**DRIVE S22 GROS VOLUMES 1**",
+                  "DRIVE ANIMAUX", "DRIVE PALETTE COMPLETE", "DRIVE CARTE U AOÛT",
+                  "DRIVE CARTE U SEPTEMBRE"):
             self.assertTrue(vvd.est_classeur_cde(c), c)
-        for c in ("DRIVE ANIMAUX", "DRIVE CARTE U SEPTEMBRE", "**DRIVE LGV**",
-                  "**DRIVE STOCK MAGASIN**", "DRIVE PALETTE COMPLETE", "DRIVE SPECIAL", ""):
+        for c in ("**DRIVE LGV**", "**DRIVE LGV NE PAS TRANSM**", "**DRIVE STOCK MAGASIN**",
+                  "**DRIVE DÉLOTAGE**", "DRIVE PRODUIT A ENLEVER", "DRIVE SPECIAL", ""):
             self.assertFalse(vvd.est_classeur_cde(c), c)
 
     def test_filtre_selon_classeur_du_jour(self):
         ventes = {"1": 2, "2": 1, "3": 4, "4": 1}
-        classeurs = {"1": "DRIVE EPICERIE", "2": "DRIVE ANIMAUX", "3": "DRIVE S45 TRAFIC"}
+        classeurs = {"1": "DRIVE EPICERIE", "2": "**DRIVE LGV**", "3": "DRIVE S45 TRAFIC"}
         self.assertEqual(vvd.filtrer_classeurs_cde(ventes, classeurs), {"1": 2, "3": 4})
 
 

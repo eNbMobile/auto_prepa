@@ -18,7 +18,8 @@ forme, des commentaires…), puis réimporté sous le même identifiant Drive.
 
 Un second tableau, « VALEUR VENDUE DRIVE CLASSEURS CDE » (T58:AA113, même
 disposition), reçoit la même valeur restreinte aux produits rangés, dans le
-stock du jour, dans les classeurs DRIVE EPICERIE, DRIVE DPH, DRIVE LIQUIDES
+stock du jour, dans les classeurs DRIVE EPICERIE, DRIVE DPH, DRIVE LIQUIDES,
+DRIVE ANIMAUX, DRIVE PALETTE COMPLETE, un classeur « DRIVE CARTE U <mois> »
 ou un classeur de semaine « DRIVE Snn … » (aucun autre). Le classeur d'un
 produit change d'un jour à l'autre : il est lu dans le même export que les
 prix (ou, si cet export n'a pas de colonne « Classeur », dans l'export
@@ -40,9 +41,10 @@ TITRE_TABLEAU_CLASSEURS = "VALEUR VENDUE DRIVE CLASSEURS CDE"
 
 # Classeurs retenus pour le tableau « CLASSEURS CDE » (comparés normalisés :
 # majuscules, sans accents ni astérisques), plus tous les classeurs de
-# semaine « DRIVE S<n°> … ».
-CLASSEURS_CDE = ("DRIVE EPICERIE", "DRIVE DPH", "DRIVE LIQUIDES")
-_RE_CLASSEUR_SEMAINE = re.compile(r"^DRIVE S\d+\b")
+# semaine « DRIVE S<n°> … » et tous les « DRIVE CARTE U <mois> ».
+CLASSEURS_CDE = ("DRIVE EPICERIE", "DRIVE DPH", "DRIVE LIQUIDES",
+                 "DRIVE ANIMAUX", "DRIVE PALETTE COMPLETE")
+_RE_CLASSEUR_SEMAINE = re.compile(r"^DRIVE (S\d+|CARTE U)\b")
 
 # Tableau modèle (CA MAGASIN, A..H) et tableau cible (K..R), lignes 58 à 113.
 COLS_MODELE = ["A", "B", "C", "D", "E", "F", "G", "H"]
@@ -112,7 +114,8 @@ def calculer_valeur_vendue(ventes, prix):
 
 
 def est_classeur_cde(classeur):
-    """Vrai pour DRIVE EPICERIE / DPH / LIQUIDES et les classeurs « DRIVE Snn … »."""
+    """Vrai pour DRIVE EPICERIE / DPH / LIQUIDES / ANIMAUX / PALETTE COMPLETE
+    et les classeurs « DRIVE Snn … » et « DRIVE CARTE U … »."""
     n = cs._normaliser_classeur(classeur)
     return n in CLASSEURS_CDE or bool(_RE_CLASSEUR_SEMAINE.match(n))
 
