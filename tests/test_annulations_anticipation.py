@@ -18,6 +18,20 @@ import anticipation_commandes as ac
 import assembler_anticipation as aa
 
 
+# Ces tests portent sur le contenu de l'alerte, pas sur sa fenetre d'envoi
+# (commande prevue le jour meme, modification avant 18h) : elle est ouverte ici
+# et testee a part (TestFenetreAlerte).
+_DANS_LES_TEMPS = ap._alerte_anticipation_annulee_dans_les_temps
+
+
+def setUpModule():
+    ap._alerte_anticipation_annulee_dans_les_temps = lambda date_prevue: True
+
+
+def tearDownModule():
+    ap._alerte_anticipation_annulee_dans_les_temps = _DANS_LES_TEMPS
+
+
 def _lire(chemin):
     with open(chemin, encoding="utf-8") as f:
         return f.read()
