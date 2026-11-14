@@ -880,6 +880,12 @@ class Moteur:
                                 i_lib = i
                                 new.ajouter(" ")
                             else:
+                                # Le PU vient d'etre ecrit dans temp : le
+                                # vider, sinon il reste en tete et decale
+                                # prix/qte du prochain produit lu via temp
+                                # (ex. « 10.00 € » de l'offre AVANTAGES, vu
+                                # nul par _pu_nul -> bon de prepa invalide).
+                                temp.supprimer()
                                 recup_lib = 0
                                 i_lib = 0
                         if compte >= 1:
