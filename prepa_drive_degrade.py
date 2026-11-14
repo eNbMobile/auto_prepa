@@ -40,6 +40,7 @@ import sys
 NL = 10      # '\n'
 SP = 32      # ' '
 SEMI = 59    # ';'
+BOURRAGE_AMP = b"\x01"  # remplace « amp; » apres un « & » (cf. change_format_fichier)
 
 
 def _o(c):
@@ -392,7 +393,13 @@ class Moteur:
         pdf = pdfs[0]
         r = subprocess.run(["pdftotext", "-layout", pdf, "-"], capture_output=True)
         os.remove(pdf)
-        self.encaissement = r.stdout.replace(b";", b"")
+        # « &amp; » (HTML non decode dans le PDF) -> « & » + 4 octets \x01 : meme
+        # largeur (colonnes intactes) ; le scan du libelle saute les 4 caracteres
+        # qui suivent un « & » (prevus pour « amp; »), ce qui sans ce bourrage
+        # mangeait une lettre une fois le « ; » retire (« Fish&hips »). Les
+        # \x01 restants sont retires des bons a l'ecriture.
+        self.encaissement = (r.stdout.replace(b"&amp;", b"&" + BOURRAGE_AMP * 4)
+                             .replace(b";", b""))
         self.printf("\t\t\t\t\t\t\t\tTerminé.\n")
 
     # -- 2. test_bon_encaissement
@@ -1429,11 +1436,11 @@ class Moteur:
         self.rangement_produits(1)
         self.ajout_dlc()
         with open(self.chemin("bon_prepa.txt"), "wb") as fh:
-            fh.write(self.bon_prepa or b"")
+            fh.write((self.bon_prepa or b"").replace(BOURRAGE_AMP, b""))
         self.crea_anticipation()
         if self.bon_anticipation:
             with open(self.chemin("bon_anticipation.txt"), "wb") as fh:
-                fh.write(self.bon_anticipation)
+                fh.write(self.bon_anticipation.replace(BOURRAGE_AMP, b""))
         self.printf("\n\nProgramme terminé.\n")
 
 
