@@ -25,6 +25,8 @@ const TOURS_DEFAUT = 25;
 const CASE_POSTE = 10;
 const DELAI_ENCHERE_S = 20;
 const MISE_MAX = 5000;
+// Mise minimale aux enchères (règle de base) : la première offre est d'au moins 10 €.
+const MISE_MIN = 10;
 const NOMS_ROBOTS = ['Bip', 'Zap', 'Kiwi', 'Pixel', 'Momo', 'Tic'];
 const REFLEXION_ROBOT_MS = 1200;
 // Offre d'un robot pour la rue qui lui manque : 2,4 × le prix, +0,6 × à chaque refus,
@@ -884,7 +886,8 @@ function actionEnchere(salle, moi, action, valeur) {
   } else {
     if (e.meneur === moi) refuser('Tu mènes déjà l\'enchère.');
     const mise = parseInt(valeur, 10);
-    if (!Number.isInteger(mise) || mise <= e.prix || mise > MISE_MAX) refuser('Mise trop basse : il faut dépasser ' + e.prix + ' €.');
+    if (!Number.isInteger(mise) || mise < MISE_MIN) refuser('Mise minimale : ' + MISE_MIN + ' €.');
+    if (mise <= e.prix || mise > MISE_MAX) refuser('Mise trop basse : il faut dépasser ' + e.prix + ' €.');
     if (mise > j.argent) refuser('Tu n\'as que ' + j.argent + ' €.');
     e.prix = mise;
     e.meneur = moi;
@@ -1419,6 +1422,7 @@ function vuePour(salle, version, jeton) {
       passe: salle.enchere.passe, depuis: salle.enchere.depuis,
     } : null,
     delaiEnchere: DELAI_ENCHERE_S,
+    miseMin: MISE_MIN,
     anim: salle.anim || null,
     noms: PLATEAU.map((c) => [c.nom, c.court, c.prix || null, c.loyers || null, c.leve || null, c.montant || null]),
     ressources: salle.joueurs.map((j, i) => (salle.phase === 'jeu' && !j.faillite ? ressources(salle, i) : 0)),
@@ -2344,7 +2348,8 @@ function client() {
         var autre = el('form', 'mise-autre');
         var champ = el('input');
         champ.type = 'number';
-        champ.min = String(e.prix + 1);
+        var miseMin = Math.max(e.prix + 1, ETAT.miseMin || 10);
+        champ.min = String(miseMin);
         champ.max = String(moi.argent);
         champ.step = '1';
         champ.inputMode = 'numeric';
@@ -2362,7 +2367,7 @@ function client() {
         autre.onsubmit = function (ev) {
           ev.preventDefault();
           var mise = parseInt(champ.value, 10);
-          if (!(mise > e.prix)) { alert('Il faut dépasser ' + euros(e.prix) + '.'); return; }
+          if (!(mise >= miseMin)) { alert(e.meneur === null ? 'Mise minimale : ' + euros(miseMin) + '.' : 'Il faut dépasser ' + euros(e.prix) + '.'); return; }
           if (mise > moi.argent) { alert('Tu n\u2019as que ' + euros(moi.argent) + '.'); return; }
           MISE_AUTRE = '';
           EDITION = false;
