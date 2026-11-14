@@ -13,11 +13,26 @@ import base64
 import os
 import sys
 import unittest
+from datetime import datetime
 from email import message_from_bytes
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import auto_prepa as ap
+
+
+# Ces tests portent sur le contenu de l'alerte, pas sur sa fenetre d'envoi
+# (commande prevue le jour meme, modification avant 18h) : elle est ouverte ici
+# et testee a part (TestFenetreAlerte).
+_DANS_LES_TEMPS = ap._alerte_anticipation_annulee_dans_les_temps
+
+
+def setUpModule():
+    ap._alerte_anticipation_annulee_dans_les_temps = lambda date_prevue: True
+
+
+def tearDownModule():
+    ap._alerte_anticipation_annulee_dans_les_temps = _DANS_LES_TEMPS
 
 
 def _ligne(gencod, libelle, qte):
@@ -575,6 +590,48 @@ class TestMailAnticipationRenouvelee(unittest.TestCase):
 
         self.assertEqual(self.alertes[0][1]["commandes_envoyees"], self.envoyees)
 
+
+
+class TestFenetreAlerte(unittest.TestCase):
+    """L'alerte ne concerne que les commandes initialement prevues le jour meme,
+    modifiees avant 18h (cde 57184414 du 07/11/2026, remplacee le 13/11 :
+    alerte recue une semaine trop tard)."""
+
+    def setUp(self):
+        self._maintenant = ap._maintenant
+        self._dans_les_temps = ap._alerte_anticipation_annulee_dans_les_temps
+        self._telecharger = ap._telecharger_commandes_anticipation_envoyee
+        self._client = ap._client_archive_bdc
+        self._destinataire = ap.EMAIL_ANTICIPATION
+        ap._alerte_anticipation_annulee_dans_les_temps = _DANS_LES_TEMPS
+        ap._telecharger_commandes_anticipation_envoyee = lambda d, mm, jj: {"57184414"}
+        ap._client_archive_bdc = lambda d, num: ("Mme", "DUPONT", "Anne")
+        ap.EMAIL_ANTICIPATION = "prepa@exemple.fr"
+        self.gmail = _FakeGmail()
+
+    def tearDown(self):
+        ap._maintenant = self._maintenant
+        ap._alerte_anticipation_annulee_dans_les_temps = self._dans_les_temps
+        ap._telecharger_commandes_anticipation_envoyee = self._telecharger
+        ap._client_archive_bdc = self._client
+        ap.EMAIL_ANTICIPATION = self._destinataire
+
+    def _alerter_le(self, jour, heure, minute=0):
+        ap._maintenant = lambda: datetime(2026, 11, jour, heure, minute, tzinfo=ap._TZ)
+        ap._alerter_si_commande_anticipee_annulee(
+            None, self.gmail, "57184414", "07_11", "11_2026")
+
+    def test_commande_du_jour_avant_18h_alerte(self):
+        self._alerter_le(7, 17, 59)
+        self.assertEqual(len(self.gmail.envoyes), 1)
+
+    def test_commande_du_jour_a_18h_pas_d_alerte(self):
+        self._alerter_le(7, 18)
+        self.assertEqual(self.gmail.envoyes, [])
+
+    def test_commande_d_un_autre_jour_pas_d_alerte(self):
+        self._alerter_le(13, 10)
+        self.assertEqual(self.gmail.envoyes, [])
 
 if __name__ == "__main__":
     unittest.main()

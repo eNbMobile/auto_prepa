@@ -2017,6 +2017,26 @@ def _purger_alertes_anticipation_en_attente(drive_svc, gmail_svc, numeros_en_cou
             drive_svc, gmail_svc, f["id"], entetes, contenu_ancien, contenu_nouveau)
 
 
+# L'alerte "Attention commande anticipee et annulee" ne concerne que les
+# commandes initialement prevues le jour meme, modifiees avant cette heure :
+# au-dela (ou pour une commande d'un autre jour), les produits sortis ont deja
+# ete traites et le mail n'a plus d'objet (cde 57184414 du 07/11/2026,
+# remplacee le 13/11 : alerte recue une semaine apres).
+_HEURE_LIMITE_ALERTE_ANTICIPATION = 18
+
+
+def _maintenant():
+    return datetime.now(_TZ)
+
+
+def _alerte_anticipation_annulee_dans_les_temps(date_prevue):
+    """True si la commande annulee etait prevue aujourd'hui ('JJ/MM/AAAA') et
+    que la modification a lieu avant _HEURE_LIMITE_ALERTE_ANTICIPATION."""
+    maintenant = _maintenant()
+    return (date_prevue == maintenant.strftime("%d/%m/%Y")
+            and maintenant.hour < _HEURE_LIMITE_ALERTE_ANTICIPATION)
+
+
 def _alerter_si_commande_anticipee_annulee(drive_svc, gmail_svc, num_ancien, dossier_jj_mm,
                                             dossier_mm_aaaa, num_nouveau=None,
                                             contenu_ancien="", commandes_envoyees=None):
@@ -2042,6 +2062,12 @@ def _alerter_si_commande_anticipee_annulee(drive_svc, gmail_svc, num_ancien, dos
         commandes_envoyees = _telecharger_commandes_anticipation_envoyee(
             drive_svc, dossier_mm_aaaa, dossier_jj_mm)
     if num_ancien not in commandes_envoyees:
+        return
+    if not _alerte_anticipation_annulee_dans_les_temps(
+            _date_dossier(dossier_jj_mm, dossier_mm_aaaa)):
+        print(f"    Cde {num_ancien} (anticipation du {dossier_jj_mm}) : pas prevue "
+              f"aujourd'hui ou modification apres {_HEURE_LIMITE_ALERTE_ANTICIPATION}h, "
+              f"pas d'alerte anticipation annulee.")
         return
 
     print(f"    ATTENTION : commande {num_ancien} annulee faisait partie de "
