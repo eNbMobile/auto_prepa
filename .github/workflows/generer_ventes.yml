@@ -76,9 +76,7 @@ jobs:
               --repo "${{ github.repository }}"
           fi
 
-      # Cas non couvert par l'alerte email de generer_ventes.py (celle-ci ne
-      # peut pas s'exécuter) : le run est annulé avant même de lancer le
-      # script, par ex. si un autre déclenchement est arrivé entre-temps dans
+      # Run annulé avant même de lancer le script, par ex. si un autre déclenchement est arrivé entre-temps dans
       # le même groupe de concurrence.
       - name: Annotation si run annulé
         if: cancelled()

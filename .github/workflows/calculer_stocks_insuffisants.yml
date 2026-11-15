@@ -1,0 +1,64 @@
+name: Calculer Stocks Insuffisants
+
+on:
+  workflow_dispatch:
+    inputs:
+      dates:
+        description: "Jour(s) de ventes (JJ/MM/AAAA, plusieurs séparés par un espace)"
+        required: true
+        type: string
+      j1:
+        description: "Nom du fichier J1 dans le dossier Drive du contrôle de stocks"
+        required: false
+        default: "j1.xlsx"
+        type: string
+
+concurrency:
+  group: calculer_stocks_insuffisants
+  cancel-in-progress: false
+
+jobs:
+  calcul:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python et dépendances
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Installer poppler-utils avec cache
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: poppler-utils
+          version: 1.0
+
+      - name: Installer les dépendances pip
+        run: pip install -r requirements.txt
+
+      - name: Calculer les stocks insuffisants
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          BOOTSTRAP_LOCAL: "1"
+          WORK_DIR: "v 4.0.0"
+          DATES: ${{ inputs.dates }}
+          J1: ${{ inputs.j1 }}
+        run: python3 bootstrap.py calculer_stocks_insuffisants.py --dates "$DATES" --j1 "${J1:-j1.xlsx}"
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+          fi

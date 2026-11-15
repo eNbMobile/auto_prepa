@@ -133,6 +133,27 @@ const WORKFLOWS = {
     },
   },
 
+  calculer_stocks_insuffisants: {
+    file: 'calculer_stocks_insuffisants.yml',
+    label: 'Calculer Stocks Insuffisants',
+    buildInputs(params) {
+      const morceaux = String(params.dates || '').split(/[\s,;]+/).filter(Boolean);
+      if (!morceaux.length) throw new Error('Saisis au moins un jour de ventes (JJ/MM/AAAA).');
+      const dates = [];
+      for (const m of morceaux) {
+        const d = parseDDMMYYYY(m);
+        if (!d) throw new Error(`Date invalide : ${m} (format attendu JJ/MM/AAAA).`);
+        if (!dates.includes(d)) dates.push(d);
+      }
+      const j1 = String(params.j1 || '').trim() || 'j1.xlsx';
+      if (/['\\]/.test(j1)) throw new Error('Nom de fichier J1 invalide.');
+      return {
+        inputs: { dates: dates.join(' '), j1 },
+        detail: `${j1} moins les ventes du ${dates.join(', ')}`,
+      };
+    },
+  },
+
   deplacer_commandes: {
     file: 'deplacer_commandes.yml',
     label: 'Déplacer commandes',
@@ -442,6 +463,28 @@ const PAGE = `<!doctype html>
                    inputmode="numeric" autocomplete="off" required>
           </div>
           <button type="submit">Lancer le cumul</button>
+        </div>
+        <p class="status" role="status"></p>
+      </form>
+    </section>
+
+    <!--carte:calculer_stocks_insuffisants-->
+    <section class="card">
+      <h2>Calculer Stocks Insuffisants</h2>
+      <p class="hint">Stock J1 moins les ventes du ou des jours choisis : dépose le PDF
+        des stocks insuffisants dans le dossier Drive du contrôle de stocks.</p>
+      <form data-workflow="calculer_stocks_insuffisants">
+        <div class="fields">
+          <div class="field">
+            <label for="csi-dates">Jour(s) de ventes</label>
+            <input type="text" id="csi-dates" name="dates" placeholder="16/11/2026 17/11/2026"
+                   autocomplete="off" required>
+          </div>
+          <div class="field">
+            <label for="csi-j1">Fichier J1</label>
+            <input type="text" id="csi-j1" name="j1" value="j1.xlsx" autocomplete="off">
+          </div>
+          <button type="submit">Calculer</button>
         </div>
         <p class="status" role="status"></p>
       </form>
