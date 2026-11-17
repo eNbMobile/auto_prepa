@@ -1615,7 +1615,13 @@ def main():
     stock_bas  = []
     a_deloter  = []
 
+    sans_classeur = 0
     for gencod in sorted(tous):
+        # Articles sans classeur (colonne « Classeur » vide dans le stock J,
+        # à défaut J-1) : exclus du contrôle (écarts et stocks insuffisants).
+        if not classeurs_stock.get(gencod, '').strip():
+            sans_classeur += 1
+            continue
         present_j1 = gencod in stock_j1
         s_j1   = stock_j1.get(gencod, 0.0)
         v      = ventes.get(gencod, 0.0)
@@ -1679,6 +1685,7 @@ def main():
         a_deloter.sort(key=cle_chemin)
 
     print(f"\n── Résultats ──────────────────────────────────────")
+    print(f"  Sans classeur     : {sans_classeur} (exclus)")
     print(f"  Gencods appairés  : {len(compares)}")
     print(f"    Sans écart (OK) : {nb_ok}")
     print(f"    Avec écart      : {nb_ecart}")
