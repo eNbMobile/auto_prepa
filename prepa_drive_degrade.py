@@ -40,6 +40,10 @@ import sys
 NL = 10      # '\n'
 SP = 32      # ' '
 SEMI = 59    # ';'
+# UC de BVP sans gencod 200000... classees BVP (lettre C) d'office :
+# 3289664281803 Baguette au Mais (liee a 2000000280356), 3289668521400
+# Baguette aux cereales.
+_UC_BVP = (b"3289664281803", b"3289668521400")
 BOURRAGE_AMP = b"\x01"  # remplace « amp; » apres un « & » (cf. change_format_fichier)
 
 
@@ -1402,7 +1406,7 @@ class Moteur:
                         elif nom[:4] == b"0260":
                             lettre = b"B"
                         elif ((nom[:4] == b"0205" and g[:6] == b"200000") or gencod1 == b"3486850001645"
-                              or (g[:6] == b"200000" and nom[:5] != b"02303") or gencod1 == b"3289664281803") \
+                              or (g[:6] == b"200000" and nom[:5] != b"02303") or gencod1 in _UC_BVP) \
                               and g[:10] != b"2000000902":
                             lettre = b"C"
                         elif nom[:5] == b"02655" and nom[5] in (49, 50):
@@ -1413,7 +1417,7 @@ class Moteur:
                             out.ajouter(gencod1 + b";" + reste + b";" + lettre + b"\n")
             if deja_classe == 0 and compteur == l:
                 g = gencod1 + b"\0" * 13
-                if g[:7] == b"2000000" or gencod1 == b"3289664281803":
+                if g[:7] == b"2000000" or gencod1 in _UC_BVP:
                     out.ajouter(gencod1 + b";" + reste + b";C\n")
         self.bon_anticipation = out.data
         self.printf("\t\t\t\t\t\t\t\tTerminé.\n")
