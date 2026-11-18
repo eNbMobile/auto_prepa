@@ -126,5 +126,28 @@ class TestPrixUnitaire(unittest.TestCase):
         self.assertIn(self._pu(" " * 60 + "0.00 €"), (None, b""))
 
 
+class TestAnticipationUcBvp(unittest.TestCase):
+    """UC de BVP portant l'EAN fabricant (pas de gencod 200000...) : classees
+    BVP (lettre C), qu'elles aient ou non une nomenclature."""
+
+    def _lettres(self, nomenclatures):
+        m = pdd.Moteur(".")
+        m.printf = lambda t: None
+        m.nomenclatures = pdd.TableGencods(nomenclatures)
+        m.bon_prepa = (b"M,1,3,3,entete\n"
+                       b"3289664281803;Baguette au Mais;1,20;4;M2-MM-2-8;X;1\n"
+                       b"3289668521400;Baguette aux cereales;1,10;1;AUCUNE ADRESSE;X;1\n")
+        m.crea_anticipation()
+        return [(l.split(b";")[0], l.split(b";")[-1]) for l in m.bon_anticipation.splitlines()]
+
+    def test_sans_nomenclature(self):
+        self.assertEqual(self._lettres(b"3760242644772;0320000\n"),
+                         [(b"3289664281803", b"C"), (b"3289668521400", b"C")])
+
+    def test_avec_nomenclature_boulangerie(self):
+        self.assertEqual(self._lettres(b"3289664281803;0205180\n3289668521400;0205180\n"),
+                         [(b"3289664281803", b"C"), (b"3289668521400", b"C")])
+
+
 if __name__ == "__main__":
     unittest.main()
