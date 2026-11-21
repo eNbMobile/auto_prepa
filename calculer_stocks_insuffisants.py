@@ -10,7 +10,8 @@ SEUIL_STOCK_BAS, comme dans le contrôle de stocks : les produits du
 classeur « PRODUIT A ENLEVER » sont exclus, ceux du classeur « DÉLOTAGE »
 aussi (traités par le délotage). Le PDF (même format que le PDF « Stocks
 insuffisant Drive » du contrôle, trié selon le chemin de préparation) est
-déposé dans le dossier Drive du contrôle de stocks, à côté du J1. Aucun mail.
+envoyé par mail aux deux adresses du contrôle de stocks (email_destinataire
+et email_destinataire_2 de config.json).
 
 Usage :
   python3 calculer_stocks_insuffisants.py --dates "16/11/2026 17/11/2026" [--j1 j1.xlsx]
@@ -58,24 +59,32 @@ def calculer_stock_insuffisant(stock_j1, classeurs, ventes_jours, gencods_r1, li
     return rows
 
 
-def deposer_dans_dossier_controle(chemin):
-    """Dépose (ou remplace) le PDF dans le dossier Drive du contrôle de stocks."""
-    from googleapiclient.http import MediaFileUpload
-    svc = cs._get_drive_service()
-    if not svc or not cs.DRIVE_CONTROLE_FOLDER_ID:
+def envoyer_par_mail(chemin, dates_txt, nom_j1, nb):
+    """Envoie le PDF par mail aux deux adresses du contrôle de stocks."""
+    import base64
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from email.mime.application import MIMEApplication
+    svc = cs._get_gmail_service()
+    if not svc or not cs.EMAIL_DESTINATAIRE:
         return False
-    nom_fichier = os.path.basename(chemin)
-    existants = svc.files().list(
-        q=f"name='{nom_fichier}' and '{cs.DRIVE_CONTROLE_FOLDER_ID}' in parents and trashed=false",
-        fields="files(id)",
-    ).execute().get("files", [])
-    media = MediaFileUpload(chemin, mimetype="application/pdf", resumable=False)
-    if existants:
-        svc.files().update(fileId=existants[0]["id"], media_body=media).execute()
-    else:
-        svc.files().create(body={"name": nom_fichier, "parents": [cs.DRIVE_CONTROLE_FOLDER_ID]},
-                           media_body=media, fields="id").execute()
-    print(f"  {nom_fichier} déposé dans le dossier Drive du contrôle de stocks.")
+    msg = MIMEMultipart()
+    msg['To'] = cs.EMAIL_DESTINATAIRE
+    if cs.EMAIL_COPIE_STOCK:
+        msg['Cc'] = cs.EMAIL_COPIE_STOCK
+    pluriel = 's' if nb > 1 else ''
+    msg['Subject'] = f"Stocks insuffisant Drive - ventes du {dates_txt} — {nb} produit{pluriel}"
+    corps = (f"Stocks insuffisant Drive - {nom_j1} - ventes du {dates_txt}\n\n"
+             f"  {nb} produit{pluriel} (stock restant ≤ {cs.SEUIL_STOCK_BAS})\n\n"
+             f"Détail en pièce jointe.")
+    msg.attach(MIMEText(corps, 'plain', 'utf-8'))
+    with open(chemin, 'rb') as f:
+        part = MIMEApplication(f.read(), 'pdf')
+    part.add_header('Content-Disposition', 'attachment', filename=os.path.basename(chemin))
+    msg.attach(part)
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+    svc.users().messages().send(userId='me', body={'raw': raw}).execute()
+    print("  Email envoyé.")
     return True
 
 
@@ -134,8 +143,8 @@ def main():
     titre = (f"<b>Stocks insuffisant Drive - {nom_j1} - ventes du {dates_txt}</b>"
              f"&nbsp;&nbsp;({len(rows)} produit{'s' if len(rows) > 1 else ''})")
     pdf = cs._construire_pdf_tableau(rows, titre, nom_pdf, complet=False, vms_map=vms_map)
-    if not pdf or not deposer_dans_dossier_controle(pdf):
-        print("ERREUR : PDF non généré ou non déposé sur Drive.")
+    if not pdf or not envoyer_par_mail(pdf, dates_txt, nom_j1, len(rows)):
+        print("ERREUR : PDF non généré ou non envoyé par mail.")
         sys.exit(1)
 
 
