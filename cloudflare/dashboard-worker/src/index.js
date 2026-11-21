@@ -471,8 +471,8 @@ const PAGE = `<!doctype html>
     <!--carte:calculer_stocks_insuffisants-->
     <section class="card">
       <h2>Calculer Stocks Insuffisants</h2>
-      <p class="hint">Stock J1 moins les ventes du ou des jours choisis : dépose le PDF
-        des stocks insuffisants dans le dossier Drive du contrôle de stocks.</p>
+      <p class="hint">Stock J1 moins les ventes du ou des jours choisis : envoie le PDF
+        des stocks insuffisants par mail aux deux adresses du contrôle de stocks.</p>
       <form data-workflow="calculer_stocks_insuffisants">
         <div class="fields">
           <div class="field">
