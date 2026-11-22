@@ -26,19 +26,9 @@ class TestCalculerDifferences(unittest.TestCase):
         self.assertEqual(ds.calculer_differences({"1": 2.0}, {"1": 2.0}, {"1"}, {}), [])
 
 
-class TestJoursActifs(unittest.TestCase):
-    def _lancer(self, date_txt):
-        with mock.patch.object(sys, "argv", ["difference_stocks.py", "--date", date_txt]), \
-             mock.patch.object(ds.cs, "_charger_config") as charger:
-            ds.main()
-        return charger.called
-
-    def test_ignore_hors_mardi_mercredi(self):
-        self.assertFalse(self._lancer("12/11/2026"))  # jeudi
-        self.assertFalse(self._lancer("09/11/2026"))  # lundi
-
+class TestMain(unittest.TestCase):
     def test_pas_de_mail_sans_difference(self):
-        with mock.patch.object(sys, "argv", ["difference_stocks.py", "--date", "10/11/2026"]), \
+        with mock.patch.object(sys, "argv", ["difference_stocks.py", "--date", "12/11/2026"]), \
              mock.patch.object(ds.cs, "_charger_config"), \
              mock.patch.object(ds.cs, "telecharger_fichier_archive", return_value="m.xlsx"), \
              mock.patch.object(ds.cs, "telecharger_fichier_controle", return_value="j1.xlsx"), \
