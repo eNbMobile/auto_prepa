@@ -4,7 +4,7 @@ Différence de stocks du jour : stock du matin (archive
 stock_JJ_MM_AAAA_matin.xlsx) comparé au J1 (j1.xlsx du dossier Drive du
 contrôle de stocks), sur les gencods R1.
 
-Lancé par la routine du soir, le mardi et le mercredi uniquement. Envoie le
+Lancé par la routine du soir, chaque jour d'ouverture. Envoie le
 PDF des différences au premier destinataire (email_destinataire) s'il y en a
 au moins une ; sinon, aucun mail.
 
@@ -20,8 +20,6 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import controle_stocks as cs
-
-JOURS_ACTIFS = (1, 2)  # mardi, mercredi (date.weekday())
 
 
 def calculer_differences(stock_matin, stock_j1, gencods_r1, libelles):
@@ -73,10 +71,6 @@ def main():
         except (IndexError, ValueError):
             print("Format de date invalide (attendu JJ/MM/AAAA).")
             sys.exit(1)
-
-    if jour.weekday() not in JOURS_ACTIFS:
-        print("Différence de stocks : uniquement le mardi et le mercredi — ignorée.")
-        return
 
     cs._charger_config()
 

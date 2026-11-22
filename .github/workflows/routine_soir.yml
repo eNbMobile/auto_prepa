@@ -25,7 +25,7 @@ name: Routine du soir
 #    LIQUIDES / ANIMAUX / PALETTE COMPLETE / « DRIVE CARTE U … » /
 #    « DRIVE Snn … » du stock du jour dans le tableau voisin
 #    « VALEUR VENDUE DRIVE CLASSEURS CDE ».
-# 5. Différence de stocks (mardi et mercredi uniquement) : stock du matin
+# 5. Différence de stocks (chaque jour d'ouverture) : stock du matin
 #    archivé comparé au j1.xlsx du dossier Contrôle Stock ; PDF envoyé au
 #    premier destinataire s'il y a au moins une différence, sinon pas de mail.
 #
@@ -137,7 +137,7 @@ jobs:
           fi
           python3 bootstrap.py generer_ventes.py $DATE_ARG
 
-      - name: 5. Différence de stocks (mardi et mercredi)
+      - name: 5. Différence de stocks
         id: difference_stocks
         if: steps.ouvert.outputs.ouvert == '1'
         continue-on-error: true
