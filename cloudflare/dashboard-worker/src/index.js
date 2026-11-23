@@ -608,6 +608,32 @@ function renderPage(hidden, env) {
 
 /* ------------------------------------------------------------------ fetch */
 
+/**
+ * Trace de chaque clic sur un bouton « Lancer » : qui (adresse IP, appareil,
+ * localisation approximative fournie par Cloudflare), quoi et le résultat.
+ * Visible dans Cloudflare → Workers & Pages → wf / wf2 → Observability
+ * (activé par [observability] dans wrangler.toml). Rien n'est écrit dans le
+ * dépôt ni dans GitHub Actions.
+ */
+function journaliserClic(request, workflow, inputs, failureStatus) {
+  const cf = request.cf || {};
+  console.log(
+    JSON.stringify({
+      evenement: 'lancement',
+      workflow: workflow.file,
+      parametres: inputs,
+      resultat: failureStatus ? `echec HTTP ${failureStatus}` : 'ok',
+      ip: request.headers.get('cf-connecting-ip') || '',
+      appareil: request.headers.get('user-agent') || '',
+      langue: request.headers.get('accept-language') || '',
+      pays: cf.country || '',
+      region: cf.region || '',
+      ville: cf.city || '',
+      operateur: cf.asOrganization || '',
+    })
+  );
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -636,6 +662,7 @@ export default {
       }
 
       const failureStatus = await dispatchWorkflow(workflow, built.inputs, env.GH_TOKEN);
+      journaliserClic(request, workflow, built.inputs, failureStatus);
       if (failureStatus) {
         return json(
           {
