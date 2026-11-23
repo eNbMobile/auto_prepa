@@ -7,6 +7,7 @@ from datetime import date, datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import adresses_inconnues as ai
+import controle_stocks as cs
 
 ENTETE = "M,1,4,6,0,54.20,10h05\n"
 INFOS = "MARDI 13/10/2026 - 10h30-11h00,56209742,Retrait,Paiement en ligne,M. X Y,Pas de sacs"
@@ -112,6 +113,48 @@ class TestExtraction(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             chemin = ai.generer_pdf(produits, date(2026, 10, 13), os.path.join(d, "t.pdf"))
             self.assertGreater(os.path.getsize(chemin), 1000)
+
+    def test_pdf_genere_avec_rayons_et_top_20(self):
+        # Rayon "A" avec plus de TOP_PAR_RAYON produits (seuls les 20 les
+        # plus anciens sans adresse doivent apparaître) et rayon "?" (sans
+        # correspondance de nomenclature) gardé à part.
+        produits = {}
+        for i in range(25):
+            gencod = str(1000000000000 + i)
+            produits[gencod] = {"libelle": f"PRODUIT {i}", "adresse": "",
+                                "commandes": ["111"], "jours": i + 1, "rayon": "A"}
+        produits["9999999999999"] = {"libelle": "SANS RAYON", "adresse": "",
+                                     "commandes": ["222"], "jours": 1, "rayon": None}
+        with tempfile.TemporaryDirectory() as d:
+            chemin = ai.generer_pdf(produits, date(2026, 10, 13), os.path.join(d, "t.pdf"))
+            self.assertGreater(os.path.getsize(chemin), 1000)
+
+
+class TestRayonParNomenclature(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self._work = cs.WORK_DIR
+        cs.WORK_DIR = self.dir
+        with open(os.path.join(self.dir, "chemin_prepa_ramasse.csv"), "w", newline="") as f:
+            f.write("M2-KK-9-1;FRUITS;R\n023034000000000000;EPICERIE SALEE;F\n"
+                    "023035000000000000;EPICERIE SUCREE;G\n")
+
+    def tearDown(self):
+        cs.WORK_DIR = self._work
+
+    def test_rayons_charges_depuis_le_chemin(self):
+        self.assertEqual(cs.charger_rayons_chemin_prepa(), {
+            "M2-KK-9-1": "R",
+            "023034000000000000": "F",
+            "023035000000000000": "G",
+        })
+
+    def test_rayon_gencod_par_prefixe_commun(self):
+        rayons = cs.charger_rayons_chemin_prepa()
+        nomenclatures = {"1": "023034000000099999", "2": "199999999999999999"}
+        self.assertEqual(cs.rayon_gencod("1", nomenclatures, rayons), "F")
+        self.assertIsNone(cs.rayon_gencod("2", nomenclatures, rayons))
+        self.assertIsNone(cs.rayon_gencod("3", nomenclatures, rayons))
 
 
 class TestFichierDuJour(unittest.TestCase):

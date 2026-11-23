@@ -29,8 +29,12 @@ que AUCUNE ADRESSE ou ADRESSE INCONNUE. Le rapport du soir les retire
   routine du soir (cron externe) n'a donc pas à être connue ici.
 - Le soir, le workflow « Adresses inconnues » lance ce script (main) : il
   regroupe le fichier du jour et ceux des jours précédents qui n'auraient pas
-  été envoyés (run manqué) en UN seul PDF (code-barres, libellé, commandes), l'envoie par email pour un traitement le lendemain matin, puis
-  renomme le fichier en ..._envoye.txt pour ne jamais l'envoyer deux fois.
+  été envoyés (run manqué) en UN seul PDF, l'envoie par email pour un
+  traitement le lendemain matin, puis renomme le fichier en ..._envoye.txt
+  pour ne jamais l'envoyer deux fois. Le PDF regroupe les produits par rayon
+  (lettre déduite de gencod_nomenclatures.csv et de chemin_prepa_ramasse.csv)
+  et ne garde, par rayon, que les TOP_PAR_RAYON produits restés le plus
+  longtemps sans adresse (code-barres, libellé, commandes).
 - Avant le PDF, arbitrage_fruits_legumes.arbitrer() retire du rapport les
   fruits/légumes sans nomenclature connue (nouveau calibre/origine/variété) :
   reconnus avec confiance (nom de fruit/légume + pays d'origine dans le
@@ -62,6 +66,10 @@ JOURS_HISTORIQUE = 14
 # Adresse placeholder écrite par prepa_drive_degrade quand le gencod n'a ni
 # adresse ni nomenclature connue.
 ADRESSE_ABSENTE = "M1-ZZ-0-0"
+
+# Nombre de produits affichés par rayon dans le PDF du soir (les plus
+# anciens sans adresse d'abord, cf. generer_pdf).
+TOP_PAR_RAYON = 20
 
 # Lettres de rayon (dernière colonne de chemin_prepa_mono.csv) jamais
 # relevées : fruits, légumes, BVP.
@@ -267,6 +275,10 @@ def retirer_adresses(produits, adresses):
 
 
 def generer_pdf(produits, jour, chemin):
+    """PDF du soir : produits groupés par rayon (lettre déduite de la
+    nomenclature via chemin_prepa_ramasse, cf. main) ; dans chaque rayon,
+    seuls les TOP_PAR_RAYON produits restés le plus longtemps sans adresse
+    sont gardés ("?" pour un rayon indéterminé, en dernier)."""
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -278,6 +290,7 @@ def generer_pdf(produits, jour, chemin):
     small_c = ParagraphStyle("small_c", parent=small, alignment=1)
     tiny_c = ParagraphStyle("tiny_c", fontSize=7, leading=8, alignment=1)
     entete = ParagraphStyle("hdr", fontSize=8, leading=10, textColor=colors.white)
+    section = ParagraphStyle("section", fontSize=11, leading=14, spaceBefore=6, spaceAfter=2)
 
     def cellule_code_barres(gencod):
         try:
@@ -292,32 +305,47 @@ def generer_pdf(produits, jour, chemin):
                          (p, (0, 0), (-1, -1), 0) for p in
                          ("TOPPADDING", "BOTTOMPADDING", "LEFTPADDING", "RIGHTPADDING")]))
 
-    data = [[Paragraph(t, entete) for t in
-             ("Code-barres", "Libellé", "Commande(s)",
-              f"Jours sans adresse ({JOURS_HISTORIQUE} j)")]]
-    for gencod, p in sorted(produits.items(),
-                            key=lambda kv: (-kv[1].get("jours", 1), kv[1]["libelle"])):
-        data.append([
-            cellule_code_barres(gencod),
-            Paragraph(p["libelle"], small),
-            Paragraph("<br/>".join(p["commandes"]), small_c),
-            Paragraph(str(p.get("jours", 1)), small_c),
-        ])
+    def tableau(items):
+        data = [[Paragraph(t, entete) for t in
+                 ("Code-barres", "Libellé", "Commande(s)",
+                  f"Jours sans adresse ({JOURS_HISTORIQUE} j)")]]
+        for gencod, p in items:
+            data.append([
+                cellule_code_barres(gencod),
+                Paragraph(p["libelle"], small),
+                Paragraph("<br/>".join(p["commandes"]), small_c),
+                Paragraph(str(p.get("jours", 1)), small_c),
+            ])
+        table = Table(data, colWidths=[108, 289, 70, 60], repeatRows=1)
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#006797")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#EEF6FB")]),
+            ("GRID", (0, 0), (-1, -1), 0.3, colors.lightgrey),
+            ("TOPPADDING", (0, 0), (-1, -1), 10),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ]))
+        return table
+
+    par_rayon = {}
+    for gencod, p in produits.items():
+        par_rayon.setdefault(p.get("rayon") or "?", []).append((gencod, p))
+
+    titre = (f"Produits non adressés — {jour.strftime('%d/%m/%Y')} "
+             f"({len(produits)} produit{'s' if len(produits) > 1 else ''})")
+    elements = [Paragraph(titre, getSampleStyleSheet()["Title"]), Spacer(1, 4 * mm)]
+    for lettre in sorted(par_rayon, key=lambda l: (l == "?", l)):
+        items = sorted(par_rayon[lettre],
+                       key=lambda kv: (-kv[1].get("jours", 1), kv[1]["libelle"]))
+        nb_total = len(items)
+        items = items[:TOP_PAR_RAYON]
+        elements.append(Paragraph(f"Rayon {lettre} — top {len(items)}/{nb_total}", section))
+        elements.append(tableau(items))
+        elements.append(Spacer(1, 4 * mm))
 
     doc = SimpleDocTemplate(chemin, pagesize=A4, topMargin=8 * mm, bottomMargin=8 * mm,
                             leftMargin=3 * mm, rightMargin=3 * mm)
-    table = Table(data, colWidths=[108, 289, 70, 60], repeatRows=1)
-    table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#006797")),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#EEF6FB")]),
-        ("GRID", (0, 0), (-1, -1), 0.3, colors.lightgrey),
-        ("TOPPADDING", (0, 0), (-1, -1), 10),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
-    ]))
-    titre = (f"Produits non adressés — {jour.strftime('%d/%m/%Y')} "
-             f"({len(produits)} produit{'s' if len(produits) > 1 else ''})")
-    doc.build([Paragraph(titre, getSampleStyleSheet()["Title"]), Spacer(1, 4 * mm), table])
+    doc.build(elements)
     return chemin
 
 
@@ -422,6 +450,7 @@ def main():
     annulees = cs.numeros_annules_registre()
     historique = jours_sans_adresse(drive_svc, jusqu_au)
     nomenclatures = cs.charger_gencod_nomenclatures()
+    rayons_chemin = cs.charger_rayons_chemin_prepa()
     adresses = {_cle_gencod(g): a for g, a in
                 cs._charger_mapping_gencod_csv("gencod_adresses.csv").items()}
 
@@ -444,6 +473,7 @@ def main():
     tous_ajouts, tous_doutes, produits = afl.arbitrer(produits, nomenclatures)
     for gencod, p in produits.items():
         p["jours"] = max(1, historique.get(gencod, 1))
+        p["rayon"] = cs.rayon_gencod(_cle_gencod(gencod), nomenclatures, rayons_chemin)
     pdfs = []
     if produits:
         chemin = f"produits_non_adresses_{jour.strftime('%d_%m_%Y')}.pdf"

@@ -457,6 +457,49 @@ def cle_tri_chemin_prepa(adresses_magasin, nomenclatures, ordre_chemin):
     return cle
 
 
+def charger_rayons_chemin_prepa():
+    """Charge chemin_prepa_ramasse.csv (config Drive) : {clé: lettre de
+    rayon} (3e champ de chaque ligne — 'clé;libellé_rayon;lettre'), pour
+    toutes les clés (adresses M1/M2/R1 et codes de nomenclature)."""
+    contenu = _lire_config_drive("chemin_prepa_ramasse.csv")
+    if contenu is None:
+        chemin = os.path.join(WORK_DIR, "chemin_prepa_ramasse.csv")
+        if not os.path.exists(chemin):
+            print("  chemin_prepa_ramasse.csv introuvable — rayon par nomenclature ignoré.")
+            return {}
+        with open(chemin, encoding='utf-8-sig', errors='replace') as f:
+            contenu = f.read()
+    rayons = {}
+    for ligne in contenu.splitlines():
+        champs = ligne.split(';')
+        if len(champs) < 3:
+            continue
+        cle, lettre = champs[0].strip(), champs[2].strip()
+        if cle and lettre and cle not in rayons:
+            rayons[cle] = lettre
+    print(f"  {len(rayons)} rayons chargés depuis chemin_prepa_ramasse.csv")
+    return rayons
+
+
+def rayon_gencod(gencod, nomenclatures, rayons_chemin):
+    """Lettre de rayon (chemin_prepa_ramasse.csv) d'un gencod sans adresse
+    magasin, déduite de sa nomenclature (gencod_nomenclatures.csv) par plus
+    long préfixe commun avec les clés numériques de rayons_chemin — même
+    rayon parent que cle_tri_chemin_prepa. None si nomenclature ou rayon
+    apparenté introuvable."""
+    code_nomenclature = nomenclatures.get(gencod)
+    if not code_nomenclature:
+        return None
+    meilleure_lettre, meilleure_longueur = None, 0
+    for cle, lettre in rayons_chemin.items():
+        if not cle.isdigit():
+            continue
+        n = _longueur_prefixe_commun(code_nomenclature, cle)
+        if n > meilleure_longueur:
+            meilleure_lettre, meilleure_longueur = lettre, n
+    return meilleure_lettre
+
+
 _RE_QTY    = re.compile(r'^\s{0,8}(\d{1,3})\s{10,}(.+)')
 _RE_GENCOD = re.compile(r'^\s{8,}(\d{8,13})(?!\d)')
 
