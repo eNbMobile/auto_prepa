@@ -1598,6 +1598,13 @@ def main():
     print("\nChargement libellés coursesu ...")
     libelles_dict = charger_libelles_dict()
 
+    # Stock du matin consultable dans l'app MobUDrive (dossier des bons)
+    try:
+        import stock_mobudrive
+        stock_mobudrive.publier(stock_j, {**libelles_stock_j, **libelles_dict}, date.today(), "matin")
+    except Exception as e:
+        print(f"  Stock MobUDrive (matin) non déposé : {e}")
+
     # 2. Ventes de la période pour calculer le stock théorique (stock_j1 - cumul ventes)
     date_debut = date_j1 - timedelta(days=nb_jours - 1)
     if nb_jours > 1:
