@@ -5,7 +5,8 @@ Sauvegarde ventes_JJ_MM.csv et l'archive sur Drive, puis calcule la valeur
 vendue au Drive (UVC vendues × prix du stock du matin) et l'inscrit dans
 CA DRIVE AAAA.xlsx (onglet RÉALISATION), totale et restreinte aux classeurs
 de commande (tableau VALEUR VENDUE DRIVE CLASSEURS CDE), et dépose dans
-MobUDrive_Bons le stock du soir (stock du matin − ventes du jour) pour l'app.
+MobUDrive_Bons le stock du soir (stock du matin − ventes du jour) sous le
+nom stock.xlsx, pour l'app.
 Ne génère PAS de fichier de stock théorique.
 """
 import csv
@@ -84,7 +85,7 @@ def main():
     try:
         stock_mobudrive.publier_soir(date_j1, ventes)
     except Exception as e:
-        print(f"  Stock MobUDrive (soir) non déposé : {e}")
+        print(f"  Stock MobUDrive (soir) non déposé : {type(e).__name__}")
         _signaler_echec(date_j1, f"Stock du soir non déposé dans MobUDrive_Bons ({type(e).__name__})")
         echec = True
 
