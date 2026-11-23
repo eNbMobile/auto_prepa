@@ -34,8 +34,8 @@ class FauxDrive:
         self.crees.append(body["name"])
         return mock.Mock()
 
-    def update(self, fileId, **_):
-        self.maj.append(self.fichiers[fileId])
+    def update(self, fileId, body=None, **kw):
+        self.maj.append((self.fichiers[fileId], body, "media_body" in kw))
         return mock.Mock()
 
 
@@ -61,9 +61,10 @@ class TestStockMobUDrive(unittest.TestCase):
         drive = self._publier(["bon_x.txt"])
         self.assertEqual((drive.crees, drive.maj), (["stock.xlsx"], []))
 
-    def test_ecrase_stock_xlsx(self):
+    def test_ancien_stock_xlsx_a_la_corbeille(self):
         drive = self._publier(["stock.xlsx", "bon_x.txt"])
-        self.assertEqual((drive.crees, drive.maj), ([], ["stock.xlsx"]))
+        self.assertEqual(drive.maj, [("stock.xlsx", {"trashed": True}, False)])
+        self.assertEqual(drive.crees, ["stock.xlsx"])
 
     def test_stock_soir(self):
         matin = os.path.join(self.tmp, "matin.xlsx")
