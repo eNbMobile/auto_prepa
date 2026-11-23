@@ -1582,6 +1582,12 @@ def main():
     print(f"  → {len(stock_j)} gencods")
     upload_to_archive(fichier_j, "stocks", nom_archive_stock(date.today(), "matin"),
                       root_id=DRIVE_CONFIG_FOLDER_ID)
+    # Stock du matin consultable dans l'app MobUDrive (dossier des bons)
+    try:
+        import stock_mobudrive
+        stock_mobudrive.publier(fichier_j)
+    except Exception as e:
+        print(f"  Stock MobUDrive (matin) non déposé : {type(e).__name__}")
     for g, l in libelles_stock_j.items():
         if g not in libelles_stock:
             libelles_stock[g] = l

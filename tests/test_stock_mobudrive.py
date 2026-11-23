@@ -7,8 +7,9 @@ import os
 import sys
 import tempfile
 import unittest
-from datetime import date
 from unittest import mock
+
+import openpyxl
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -18,14 +19,15 @@ import stock_mobudrive as sm
 class FauxDrive:
     def __init__(self, noms):
         self.fichiers = {f"id{i}": n for i, n in enumerate(noms)}
-        self.crees, self.maj, self.supprimes = [], [], []
+        self.crees, self.maj = [], []
 
     def files(self):
         return self
 
-    def list(self, **_):
+    def list(self, q, **_):
         r = mock.Mock()
-        r.execute.return_value = {"files": [{"id": i, "name": n} for i, n in self.fichiers.items()]}
+        r.execute.return_value = {"files": [{"id": i} for i, n in self.fichiers.items()
+                                            if f"name='{n}'" in q]}
         return r
 
     def create(self, body, **_):
@@ -36,16 +38,11 @@ class FauxDrive:
         self.maj.append(self.fichiers[fileId])
         return mock.Mock()
 
-    def delete(self, fileId):
-        self.supprimes.append(self.fichiers[fileId])
-        return mock.Mock()
-
 
 class TestStockMobUDrive(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
-        self.patches = [mock.patch.object(sm.cs, "WORK_DIR", self.tmp),
-                        mock.patch.object(sm.cs, "DRIVE_BONS_FOLDER_ID", "bons"),
+        self.patches = [mock.patch.object(sm.cs, "DRIVE_BONS_FOLDER_ID", "bons"),
                         mock.patch("googleapiclient.http.MediaFileUpload")]
         for p in self.patches:
             p.start()
@@ -54,41 +51,36 @@ class TestStockMobUDrive(unittest.TestCase):
         for p in self.patches:
             p.stop()
 
-    def _publier(self, noms, jour, moment):
+    def _publier(self, noms):
         drive = FauxDrive(noms)
         with mock.patch.object(sm.cs, "_get_drive_service", return_value=drive):
-            ok = sm.publier({"3000000000001": 4.0}, {"3000000000001": "Lib"}, jour, moment)
-        return ok, drive
+            self.assertTrue(sm.publier("j.xlsx"))
+        return drive
+
+    def test_cree_stock_xlsx(self):
+        drive = self._publier(["bon_x.txt"])
+        self.assertEqual((drive.crees, drive.maj), (["stock.xlsx"], []))
+
+    def test_ecrase_stock_xlsx(self):
+        drive = self._publier(["stock.xlsx", "bon_x.txt"])
+        self.assertEqual((drive.crees, drive.maj), ([], ["stock.xlsx"]))
 
     def test_stock_soir(self):
-        self.assertEqual(sm.stock_soir({"1": 10.0, "2": 3.0}, {"1": 4, "9": 2}),
-                         {"1": 6.0, "2": 3.0})
-
-    def test_csv(self):
-        chemin = sm.ecrire_csv({"2": 1.5, "1": 3.0}, {"1": "A"}, os.path.join(self.tmp, "s.csv"))
-        with open(chemin, "rb") as f:
-            self.assertEqual(f.read(), "gencod;stock;libelle\n1;3;A\n2;1.5;\n".encode())
-
-    def test_matin_remplace_soir_veille(self):
-        ok, drive = self._publier(["stock_22_11_2026_soir.csv", "bon_x.txt"], date(2026, 11, 23), "matin")
-        self.assertTrue(ok)
-        self.assertEqual(drive.crees, ["stock_23_11_2026_matin.csv"])
-        self.assertEqual(drive.supprimes, ["stock_22_11_2026_soir.csv"])
-
-    def test_soir_remplace_matin_du_jour(self):
-        ok, drive = self._publier(["stock_23_11_2026_matin.csv"], date(2026, 11, 23), "soir")
-        self.assertTrue(ok)
-        self.assertEqual(drive.supprimes, ["stock_23_11_2026_matin.csv"])
-
-    def test_meme_fichier_mis_a_jour(self):
-        ok, drive = self._publier(["stock_23_11_2026_matin.csv"], date(2026, 11, 23), "matin")
-        self.assertEqual((drive.maj, drive.crees, drive.supprimes),
-                         (["stock_23_11_2026_matin.csv"], [], []))
-
-    def test_plus_recent_conserve(self):
-        ok, drive = self._publier(["stock_24_11_2026_matin.csv"], date(2026, 11, 23), "soir")
-        self.assertFalse(ok)
-        self.assertEqual((drive.crees, drive.supprimes), ([], []))
+        matin = os.path.join(self.tmp, "matin.xlsx")
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["Gencod", "Libellé", "Stock UC", "Classeur"])
+        ws.append(["3000000000001", "A", 10, "DRIVE X"])
+        ws.append([3000000000002, "B", "5,5", "DRIVE X"])
+        ws.append(["3000000000003", "C", 2, "DRIVE X"])
+        wb.save(matin)
+        sortie = sm.ecrire_stock_soir(matin, {"3000000000001": 4, "3000000000002": 1,
+                                              "3000000000009": 3},
+                                      os.path.join(self.tmp, "soir.xlsx"))
+        stock, libelles, classeurs = sm.cs.lire_stock(sortie)
+        self.assertEqual(stock, {"3000000000001": 6.0, "3000000000002": 4.5,
+                                 "3000000000003": 2.0})
+        self.assertEqual(libelles["3000000000002"], "B")
 
 
 if __name__ == "__main__":
