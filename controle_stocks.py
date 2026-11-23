@@ -638,6 +638,47 @@ def calculer_vms(gencods, date_reference, nb_semaines=5):
     return {g: cumul.get(g, 0) / nb_semaines for g in gencods}
 
 
+def publier_vms_mobudrive(gencods, vms_map):
+    """Dépose vms.xlsx (une ligne par gencod, texte "gencod;vms") dans
+    MobUDrive_Bons (DRIVE_BONS_FOLDER_ID), après avoir mis l'ancien à la
+    corbeille Drive. Retourne True si le dépôt a réussi."""
+    import openpyxl
+    from googleapiclient.http import MediaFileUpload
+
+    nom_fichier = "vms.xlsx"
+    if not DRIVE_BONS_FOLDER_ID:
+        print("  VMS MobUDrive : clé « drive_bons_folder_id » absente de config.json.")
+        return False
+    svc = _get_drive_service()
+    if not svc:
+        print("  VMS MobUDrive : Drive inaccessible.")
+        return False
+
+    os.makedirs(WORK_DIR, exist_ok=True)
+    chemin_local = os.path.join(WORK_DIR, nom_fichier)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for gencod in sorted(gencods):
+        ws.append([f"{gencod};{vms_map.get(gencod, 0.0):.1f}"])
+    wb.save(chemin_local)
+
+    res = svc.files().list(
+        q=f"name='{nom_fichier}' and '{DRIVE_BONS_FOLDER_ID}' in parents and trashed=false",
+        fields="files(id)",
+    ).execute()
+    # L'ancien vms.xlsx va à la corbeille Drive (restaurable), pas écrasé.
+    for f in res.get("files", []):
+        svc.files().update(fileId=f["id"], body={"trashed": True}).execute()
+    media = MediaFileUpload(
+        chemin_local,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        resumable=False)
+    svc.files().create(body={"name": nom_fichier, "parents": [DRIVE_BONS_FOLDER_ID]},
+                       media_body=media, fields="id").execute()
+    print(f"  {nom_fichier} → Drive MobUDrive_Bons OK")
+    return True
+
+
 # ─────────────────────────────────────────────────────────────────
 # Téléchargement BDC depuis Drive (fallback)
 # ─────────────────────────────────────────────────────────────────
@@ -1762,6 +1803,7 @@ def main():
             semaine_suivante = lundi_prochain.isocalendar()[1]
             semaines_promo = (semaine_courante, semaine_suivante)
             vms_lgv = calculer_vms(gencods_lgv, date_courante, nb_semaines=3)
+            publier_vms_mobudrive(gencods_lgv, vms_lgv)
             print("\nLecture des promos …")
             promos = charger_gencods_promo(semaines_promo)
             a_commander_lgv = []
