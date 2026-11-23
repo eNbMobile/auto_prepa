@@ -4,7 +4,8 @@ Génère les ventes du jour depuis les BDC PDFs.
 Sauvegarde ventes_JJ_MM.csv et l'archive sur Drive, puis calcule la valeur
 vendue au Drive (UVC vendues × prix du stock du matin) et l'inscrit dans
 CA DRIVE AAAA.xlsx (onglet RÉALISATION), totale et restreinte aux classeurs
-de commande (tableau VALEUR VENDUE DRIVE CLASSEURS CDE).
+de commande (tableau VALEUR VENDUE DRIVE CLASSEURS CDE), et dépose dans
+MobUDrive_Bons le stock du soir (stock du matin − ventes du jour) pour l'app.
 Ne génère PAS de fichier de stock théorique.
 """
 import csv
@@ -13,6 +14,7 @@ import sys
 from datetime import date
 
 import controle_stocks as cs
+import stock_mobudrive
 import valeur_vendue_drive as vvd
 
 
@@ -76,6 +78,14 @@ def main():
         print(f"  Valeur vendue au Drive : échec — {e}")
         _signaler_echec(date_j1, f"Valeur vendue au Drive non calculée ou non inscrite "
                                  f"dans CA DRIVE ({type(e).__name__})")
+        echec = True
+
+    # Stock du soir (stock du matin − ventes du jour) consultable dans l'app MobUDrive
+    try:
+        stock_mobudrive.publier_soir(date_j1, ventes)
+    except Exception as e:
+        print(f"  Stock MobUDrive (soir) non déposé : {e}")
+        _signaler_echec(date_j1, f"Stock du soir non déposé dans MobUDrive_Bons ({type(e).__name__})")
         echec = True
 
     if echec:
