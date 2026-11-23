@@ -4,7 +4,7 @@ Stock consultable depuis l'application MobUDrive.
 
 Dépose dans le dossier Drive des bons (MobUDrive_Bons, clé
 « drive_bons_folder_id » de config.json) le fichier stock.xlsx, toujours
-sous ce nom (le précédent est écrasé) :
+sous ce nom (le précédent est mis à la corbeille Drive, donc restaurable) :
 
   - contrôle de stocks : export du matin (j.xlsx) tel quel ;
   - routine du soir (Générer Ventes) : stock du matin du jour dont la
@@ -64,8 +64,8 @@ def ecrire_stock_soir(chemin_matin, ventes, chemin_sortie):
 
 
 def publier(chemin_local):
-    """Dépose chemin_local sous le nom stock.xlsx dans MobUDrive_Bons (écrase
-    le fichier existant). Retourne True si le dépôt a réussi."""
+    """Dépose chemin_local sous le nom stock.xlsx dans MobUDrive_Bons, après
+    avoir mis l'ancien à la corbeille. Retourne True si le dépôt a réussi."""
     from googleapiclient.http import MediaFileUpload
 
     dossier = cs.DRIVE_BONS_FOLDER_ID
@@ -81,12 +81,12 @@ def publier(chemin_local):
         fields="files(id)",
     ).execute()
     existants = res.get("files", [])
+    # L'ancien stock.xlsx va à la corbeille Drive (restaurable), pas écrasé.
+    for f in existants:
+        svc.files().update(fileId=f["id"], body={"trashed": True}).execute()
     media = MediaFileUpload(chemin_local, mimetype=_MIME_XLSX, resumable=False)
-    if existants:
-        svc.files().update(fileId=existants[0]["id"], media_body=media).execute()
-    else:
-        svc.files().create(body={"name": NOM_FICHIER, "parents": [dossier]},
-                           media_body=media, fields="id").execute()
+    svc.files().create(body={"name": NOM_FICHIER, "parents": [dossier]},
+                       media_body=media, fields="id").execute()
     print(f"  {NOM_FICHIER} → Drive MobUDrive_Bons OK")
     return True
 
