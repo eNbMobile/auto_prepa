@@ -63,6 +63,7 @@ DRIVE_CONFIG_FOLDER_ID = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "")
 
 DRIVE_CONTROLE_FOLDER_ID = ""
 DRIVE_BDC_FOLDER_ID      = ""
+DRIVE_BONS_FOLDER_ID     = ""  # MobUDrive_Bons : stock consultable dans l'app
 
 _config_drive_index = None   # {nom: file_id}
 _config_drive_cache = {}     # {nom: contenu texte}
@@ -1482,6 +1483,7 @@ def envoyer_email_lgv(pdf_lgv, nb, semaine_suivante, nb_promo=0, semaines_promo=
 def _charger_config():
     """Charge config.json depuis DRIVE_CONFIG_FOLDER_ID et initialise les globals."""
     global DRIVE_CONTROLE_FOLDER_ID, DRIVE_BDC_FOLDER_ID, EMAIL_DESTINATAIRE, EMAIL_COPIE_STOCK
+    global DRIVE_BONS_FOLDER_ID
     if not DRIVE_CONFIG_FOLDER_ID:
         print("ERREUR : secret DRIVE_CONFIG_FOLDER_ID manquant.")
         sys.exit(1)
@@ -1510,6 +1512,7 @@ def _charger_config():
         DRIVE_BDC_FOLDER_ID      = cfg["drive_bdc_folder_id"]
         EMAIL_DESTINATAIRE       = cfg["email_destinataire"]
         EMAIL_COPIE_STOCK        = cfg["email_destinataire_2"]
+        DRIVE_BONS_FOLDER_ID     = str(cfg.get("drive_bons_folder_id", "") or "").strip()
     except Exception as e:
         print(f"ERREUR chargement config Drive : {e}")
         sys.exit(1)
@@ -1588,6 +1591,13 @@ def main():
     # Charger le dictionnaire complet coursesu.com (priorité sur xlsx tronqué)
     print("\nChargement libellés coursesu ...")
     libelles_dict = charger_libelles_dict()
+
+    # Stock du matin consultable dans l'app MobUDrive (dossier des bons)
+    try:
+        import stock_mobudrive
+        stock_mobudrive.publier(stock_j, {**libelles_stock_j, **libelles_dict}, date.today(), "matin")
+    except Exception as e:
+        print(f"  Stock MobUDrive (matin) non déposé : {e}")
 
     # 2. Ventes de la période pour calculer le stock théorique (stock_j1 - cumul ventes)
     date_debut = date_j1 - timedelta(days=nb_jours - 1)
