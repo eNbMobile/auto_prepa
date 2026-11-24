@@ -98,7 +98,7 @@ class TestLivraisonTerminee(unittest.TestCase):
         # comme livree.
         lister, _ = _faux_lister({"deliveredAndFinished": []})
         with mock.patch.object(shopopop, "_lister_livraisons", lister):
-            self.assertFalse(shopopop.livraison_terminee("t", "14156", JOUR, "ROZENN HER"))
+            self.assertFalse(shopopop.livraison_terminee("t", "14156", JOUR, "ROBERT NADINE"))
 
     def test_onglet_terminees_indisponible_retourne_none(self):
         lister, _ = _faux_lister({})

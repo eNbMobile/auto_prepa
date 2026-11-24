@@ -388,8 +388,8 @@ def livraison_terminee(access_token, drive_id, date_livraison, nom_complet):
     positive dans l'onglet "Terminées", et non une simple déduction par
     l'absence de "Programmées" : une commande "ramassée" par le livreur mais
     pas encore livrée quitte elle aussi "Programmées", sans pour autant être
-    "Terminée" (statut intermédiaire, ex. commande HER ROZENN du
-    24/11/2026 marquée à tort comme livrée par l'ancienne logique).
+    "Terminée" (statut intermédiaire, pouvant faire marquer à tort une
+    livraison comme confirmée par l'ancienne logique).
     Retourne True si trouvée dans "Terminées", False si absente (toujours
     "Programmées", en cours de livraison, ou autre statut intermédiaire), ou
     None si la vérification a échoué (connexion/API, ou onglet "Terminées"
