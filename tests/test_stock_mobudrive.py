@@ -57,6 +57,16 @@ class TestStockMobUDrive(unittest.TestCase):
             self.assertTrue(sm.publier("j.xlsx"))
         return drive
 
+    def test_dossier_passe_en_parametre(self):
+        # controle_stocks.py lancé en script : config chargée dans __main__,
+        # le module importé par stock_mobudrive n'a pas l'identifiant.
+        drive = FauxDrive([])
+        with mock.patch.object(sm.cs, "DRIVE_BONS_FOLDER_ID", ""), \
+             mock.patch.object(sm.cs, "_get_drive_service", return_value=drive):
+            self.assertFalse(sm.publier("j.xlsx"))
+            self.assertTrue(sm.publier("j.xlsx", "bons"))
+        self.assertEqual(drive.crees, ["stock.xlsx"])
+
     def test_cree_stock_xlsx(self):
         drive = self._publier(["bon_x.txt"])
         self.assertEqual((drive.crees, drive.maj), (["stock.xlsx"], []))

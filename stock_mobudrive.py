@@ -63,12 +63,16 @@ def ecrire_stock_soir(chemin_matin, ventes, chemin_sortie):
     return chemin_sortie
 
 
-def publier(chemin_local):
+def publier(chemin_local, dossier=None):
     """Dépose chemin_local sous le nom stock.xlsx dans MobUDrive_Bons, après
-    avoir mis l'ancien à la corbeille. Retourne True si le dépôt a réussi."""
+    avoir mis l'ancien à la corbeille. Retourne True si le dépôt a réussi.
+
+    `dossier` : identifiant de MobUDrive_Bons. À fournir quand l'appelant est
+    controle_stocks.py lancé en script : sa config est chargée dans
+    __main__, pas dans le module controle_stocks importé ici."""
     from googleapiclient.http import MediaFileUpload
 
-    dossier = cs.DRIVE_BONS_FOLDER_ID
+    dossier = dossier or cs.DRIVE_BONS_FOLDER_ID
     if not dossier:
         print("  Stock MobUDrive : clé « drive_bons_folder_id » absente de config.json.")
         return False
