@@ -3,8 +3,10 @@
 Workflow "Vérif LAD" : chaque soir, pour chaque commande du jour en
 LIVRAISON (onglet du mois de LIVRAISON DRIVE 2026, colonne Date =
 aujourd'hui), vérifie côté back-office Shopopop (nom/prénom du
-destinataire) qu'elle n'est plus dans l'onglet "Programmées" — c'est-à-dire
-qu'elle est bien passée dans "Livrées" (ou un autre statut final).
+destinataire) qu'elle est bien passée dans l'onglet "Terminées" —
+vérification positive, pas une simple déduction par l'absence de
+"Programmées" : une commande "ramassée" par le livreur mais pas encore
+livrée quitte elle aussi "Programmées", sans pour autant être "Terminée".
 
 Vérifie aussi dans l'autre sens : que chaque commande présente dans
 l'onglet "Terminées" de Shopopop pour aujourd'hui figure bien dans notre
@@ -12,7 +14,8 @@ fichier LIVRAISON DRIVE 2026 (sinon une livraison faite par erreur, ou une
 commande absente de notre suivi, passerait inaperçue).
 
 Une commande est signalée en anomalie si :
-- elle est toujours dans "Programmées" (pas encore livrée) ;
+- elle n'est pas encore dans "Terminées" (toujours "Programmée" ou en cours
+  de livraison) ;
 - la vérification Shopopop elle-même a échoué (connexion/API) ;
 - elle est dans "Terminées" côté Shopopop mais absente de notre fichier.
 
@@ -108,14 +111,15 @@ def main():
     anomalies = []
     for ligne, nom_complet, km in commandes:
         confidentiel.masquer(nom_complet)
-        sortie = shopopop.livraison_sortie_programmees(
+        terminee = shopopop.livraison_terminee(
             shopopop_token, shopopop_drive_id, aujourdhui, nom_complet)
-        if sortie is None:
+        if terminee is None:
             print(f"  Ligne {ligne} : ECHEC de la vérification Shopopop")
             anomalies.append((nom_complet, "échec de la vérification Shopopop (connexion/API)"))
-        elif sortie is False:
-            print(f"  Ligne {ligne} : toujours 'Programmée' (pas livrée)")
-            anomalies.append((nom_complet, "toujours 'Programmée' (pas livrée)"))
+        elif terminee is False:
+            print(f"  Ligne {ligne} : pas encore 'Terminée' (toujours 'Programmée' ou en cours)")
+            anomalies.append((nom_complet, "pas encore 'Terminée' côté Shopopop "
+                                            "(toujours 'Programmée' ou en cours)"))
         else:
             print(f"  Ligne {ligne} : OK (livrée) — nom passé en vert")
             ld.marquer_livree(sheets_svc, spreadsheet_id, aujourdhui, ligne)

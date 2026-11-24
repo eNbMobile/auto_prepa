@@ -73,6 +73,39 @@ class TestTerminees(unittest.TestCase):
         self.assertIsNone(shopopop._statut_terminees)
 
 
+class TestLivraisonTerminee(unittest.TestCase):
+    """Vérification positive du workflow "Vérif LAD" : une commande n'est
+    marquée livrée (vert) que si elle est trouvée dans "Terminées", jamais
+    sur simple absence de "Programmées" (une commande ramassée mais pas
+    encore livrée quitte aussi "Programmées", sans etre "Terminée")."""
+
+    def setUp(self):
+        shopopop._statut_terminees = None
+        shopopop._terminees_indisponible = False
+
+    def tearDown(self):
+        self.setUp()
+
+    def test_trouvee_dans_terminees(self):
+        lister, _ = _faux_lister({"deliveredAndFinished": [_item("Céline", "Dubray", 2000)]})
+        with mock.patch.object(shopopop, "_lister_livraisons", lister):
+            self.assertTrue(shopopop.livraison_terminee("t", "14156", JOUR, "DUBRAY CELINE"))
+
+    def test_absente_de_terminees_mais_aussi_de_programmees_pas_marquee_livree(self):
+        # Statut intermediaire (ramassee, en cours de livraison) : absente de
+        # "Terminees" (et donc de "Programmees" aussi, mais peu importe ici,
+        # seule "Terminees" est interrogee) -> ne doit jamais etre consideree
+        # comme livree.
+        lister, _ = _faux_lister({"deliveredAndFinished": []})
+        with mock.patch.object(shopopop, "_lister_livraisons", lister):
+            self.assertFalse(shopopop.livraison_terminee("t", "14156", JOUR, "ROZENN HER"))
+
+    def test_onglet_terminees_indisponible_retourne_none(self):
+        lister, _ = _faux_lister({})
+        with mock.patch.object(shopopop, "_lister_livraisons", lister):
+            self.assertIsNone(shopopop.livraison_terminee("t", "14156", JOUR, "DUBRAY CELINE"))
+
+
 class TestNomsAbsentsDe(unittest.TestCase):
     """Vérification inverse du workflow "Vérif LAD" : une commande
     'Terminée' côté Shopopop mais absente de notre fichier de livraison."""

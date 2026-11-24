@@ -382,17 +382,30 @@ def distance_km(access_token, drive_id, date_livraison, nom_complet):
     return round(metres / 1000, 2) if isinstance(metres, (int, float)) else None
 
 
-def livraison_sortie_programmees(access_token, drive_id, date_livraison, nom_complet):
+def livraison_terminee(access_token, drive_id, date_livraison, nom_complet):
     """Vérifie si la livraison du destinataire `nom_complet` prévue pour
-    `date_livraison` a quitté l'onglet "Programmées" de Shopopop (donc
-    vraisemblablement passée en "Terminées").
-    Retourne True si absente de "Programmées" (livrée), False si toujours
-    "Programmées" (pas encore livrée), ou None si la vérification a échoué
-    (connexion/API) — à distinguer d'un True, pour ne pas signaler à tort
-    une livraison comme confirmée en cas de panne."""
+    `date_livraison` est confirmée "Terminée" côté Shopopop — vérification
+    positive dans l'onglet "Terminées", et non une simple déduction par
+    l'absence de "Programmées" : une commande "ramassée" par le livreur mais
+    pas encore livrée quitte elle aussi "Programmées", sans pour autant être
+    "Terminée" (statut intermédiaire, ex. commande HER ROZENN du
+    24/11/2026 marquée à tort comme livrée par l'ancienne logique).
+    Retourne True si trouvée dans "Terminées", False si absente (toujours
+    "Programmées", en cours de livraison, ou autre statut intermédiaire), ou
+    None si la vérification a échoué (connexion/API, ou onglet "Terminées"
+    inaccessible) — à distinguer d'un False, pour ne pas signaler à tort une
+    livraison comme anomalie en cas de panne."""
+    if not access_token or not _tokens(nom_complet):
+        return None
     try:
-        it = _rechercher_livraison_programmee(access_token, drive_id, date_livraison, nom_complet)
+        items = _lister_terminees(access_token, drive_id, date_livraison)
     except Exception as e:
         print(f"    Recherche Shopopop échouée : {e}")
         return None
-    return it is None
+    if items is None:
+        return None
+    it, noms_vus = _chercher_destinataire(items, nom_complet)
+    if not it and noms_vus:
+        print(f"    Shopopop : destinataire absent des {len(noms_vus)} livraison(s) "
+              f"'Terminees' du {date_livraison.strftime('%d/%m/%Y')}.")
+    return it is not None
