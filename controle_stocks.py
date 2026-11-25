@@ -33,7 +33,7 @@ _SORTIE_CANDIDATS = [
     ("bon_prepa.txt",        1, 4),  # gencod;libellé;prix;remise;qty (toujours généré)
 ]
 
-SEUIL_STOCK_BAS = 2  # stock J <= ce seuil → alerte "stock insuffisant Drive"
+SEUIL_STOCK_BAS = 2  # stock J moins ventes du jour et du lendemain <= ce seuil → alerte "stock insuffisant Drive"
 
 CLASSEUR_DELOTAGE   = "DRIVE DELOTAGE"          # comparé normalisé (majuscules, sans accents)
 CLASSEUR_LGV        = "DRIVE LGV"               # idem, pour l'alerte "LGV à commander"
@@ -1418,7 +1418,8 @@ def generer_pdf_ecarts(compares, date_j1, date_debut=None):
 
 
 def generer_pdf_stock_insuffisant(stock_bas, date_courante, vms_map=None):
-    """Génère un PDF listant tous les produits dont le stock J est <= SEUIL_STOCK_BAS.
+    """Génère un PDF listant tous les produits dont le stock J, une fois les
+    ventes du jour et du lendemain déduites, est <= SEUIL_STOCK_BAS.
     Retourne le chemin ou None."""
     if not stock_bas:
         return None
@@ -1430,10 +1431,10 @@ def generer_pdf_stock_insuffisant(stock_bas, date_courante, vms_map=None):
 
 
 def generer_pdf_a_deloter(a_deloter, date_courante, vms_map=None):
-    """Génère un PDF listant les produits en stock insuffisant (stock J <=
-    SEUIL_STOCK_BAS) mais rattachés au classeur "DRIVE DÉLOTAGE" — exclus du
-    PDF stock insuffisant, à traiter via le délotage plutôt qu'un
-    réapprovisionnement. Retourne le chemin ou None."""
+    """Génère un PDF listant les produits en stock insuffisant (cf.
+    generer_pdf_stock_insuffisant) mais rattachés au classeur "DRIVE
+    DÉLOTAGE" — exclus du PDF stock insuffisant, à traiter via le délotage
+    plutôt qu'un réapprovisionnement. Retourne le chemin ou None."""
     if not a_deloter:
         return None
 
@@ -1497,8 +1498,8 @@ def envoyer_email_pdf(pdf_ecarts, pdf_stock_bas, pdf_a_deloter, date_j1, nb_ecar
         if pdf_stock_bas:
             date_label = (date_courante or date_j1).strftime('%d/%m/%Y')
             corps += (f"  Stocks insuffisant Drive - {date_label} "
-                      f"(stock J ≤ {SEUIL_STOCK_BAS}) : {nb_stock_bas} produit"
-                      f"{'s' if nb_stock_bas > 1 else ''}\n\n")
+                      f"(stock J ≤ {SEUIL_STOCK_BAS} après ventes du jour et du lendemain) : "
+                      f"{nb_stock_bas} produit{'s' if nb_stock_bas > 1 else ''}\n\n")
         if pdf_a_deloter:
             date_label = (date_courante or date_j1).strftime('%d/%m/%Y')
             corps += (f"  Articles à deloter - {date_label} : {nb_a_deloter} produit"
@@ -1699,6 +1700,16 @@ def main():
             if gencod not in libelles_extra and gencod in l_day:
                 libelles_extra[gencod] = l_day[gencod]
 
+    # Ventes prévisionnelles (aujourd'hui + demain) à déduire du stock du
+    # jour avant de juger un produit en stock insuffisant : un stock encore
+    # correct ce matin mais déjà entièrement vendu par les BDC du jour et du
+    # lendemain doit être signalé, pas seulement un stock déjà <= 2.
+    print("\nChargement ventes prévisionnelles (aujourd'hui + demain) …")
+    ventes_prevision = []
+    for d in (date.today(), date.today() + timedelta(days=1)):
+        v_prev, _ = generer_ventes(d)
+        ventes_prevision.append(v_prev)
+
     # 3. Comparaison — uniquement les 1087 gencods R1
     gencods_r1 = charger_gencods_r1()
     tous = gencods_r1 if gencods_r1 is not None else (set(stock_j1) | set(stock_j))
@@ -1742,7 +1753,8 @@ def main():
         # tuple : gencod, s_j1, v, s_theo, s_j, ecart, statut, libelle
         row = (gencod, s_j1, v, s_theo, s_j, ecart, statut, lib)
 
-        if present_j and s_j <= SEUIL_STOCK_BAS:
+        restant_prevision = s_j - sum(vp.get(gencod, 0) for vp in ventes_prevision)
+        if present_j and restant_prevision <= SEUIL_STOCK_BAS:
             classeur = classeurs_stock.get(gencod, '')
             if _normaliser_classeur(classeur) == _normaliser_classeur(CLASSEUR_A_ENLEVER):
                 pass  # produit à enlever du catalogue, exclu des stocks insuffisants
