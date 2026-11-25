@@ -1269,11 +1269,13 @@ def upload_to_archive(local_path, subfolder, filename=None, root_id=None):
 # PDF des écarts + envoi email
 # ─────────────────────────────────────────────────────────────────
 
-def _construire_pdf_tableau(rows, titre_html, nom_pdf, complet=True, vms_map=None, diff=False):
+def _construire_pdf_tableau(rows, titre_html, nom_pdf, complet=True, vms_map=None, diff=False,
+                            prevision_map=None):
     """Génère un PDF tableau pour la liste de lignes fournie. Retourne le chemin ou None.
 
     complet=True  : code-barres, libellé, J-1, ventes, théo, J, écart.
-    complet=False : code-barres, libellé, stock du jour (+ VMS si vms_map fourni).
+    complet=False : code-barres, libellé, stock du jour (+ ventes prévisionnelles et
+                    stock restant si prevision_map fourni, + VMS si vms_map fourni).
     diff=True     : code-barres, libellé, J-1, J, différence (prioritaire sur complet).
     """
     try:
@@ -1317,6 +1319,14 @@ def _construire_pdf_tableau(rows, titre_html, nom_pdf, complet=True, vms_map=Non
     elif complet:
         col_widths = [108, 246, 33, 40, 33, 33, 34]  # ≈ 527 pt (marges 3mm, sans colonne gencod)
         hdr_txts = ['Code-barres', 'Libellé', 'J-1', 'Ventes', 'Théo', 'J', 'Écart']
+    elif prevision_map is not None and vms_map is not None:
+        col_widths = [108, 170, 60, 75, 60, 54]  # ≈ 527 pt
+        hdr_txts = ['Code-barres', 'Libellé', 'Stock du jour',
+                    'Ventes prévisionnelles', 'Stock restant', 'VMS']
+    elif prevision_map is not None:
+        col_widths = [108, 219, 70, 80, 50]  # ≈ 527 pt
+        hdr_txts = ['Code-barres', 'Libellé', 'Stock du jour',
+                    'Ventes prévisionnelles', 'Stock restant']
     elif vms_map is not None:
         col_widths = [108, 296, 53, 70]  # ≈ 527 pt
         hdr_txts = ['Code-barres', 'Libellé', 'Stock du jour', 'VMS']
@@ -1368,6 +1378,10 @@ def _construire_pdf_tableau(rows, titre_html, nom_pdf, complet=True, vms_map=Non
             ])
         else:
             ligne = [bc_cell, Paragraph(lib, small), Paragraph(str(int(s_j)), small)]
+            if prevision_map is not None:
+                ventes_prev, restant = prevision_map.get(gencod, (0, s_j))
+                ligne.append(Paragraph(str(int(ventes_prev)), small))
+                ligne.append(Paragraph(str(int(restant)), small))
             if vms_map is not None:
                 vms_txt = f"{vms_map.get(gencod, 0.0):.1f}".replace('.', ',')
                 ligne.append(Paragraph(vms_txt, small))
@@ -1417,7 +1431,7 @@ def generer_pdf_ecarts(compares, date_j1, date_debut=None):
     return _construire_pdf_tableau(ecarts, titre_html, nom_pdf)
 
 
-def generer_pdf_stock_insuffisant(stock_bas, date_courante, vms_map=None):
+def generer_pdf_stock_insuffisant(stock_bas, date_courante, vms_map=None, prevision_map=None):
     """Génère un PDF listant tous les produits dont le stock J, une fois les
     ventes du jour et du lendemain déduites, est <= SEUIL_STOCK_BAS.
     Retourne le chemin ou None."""
@@ -1427,7 +1441,8 @@ def generer_pdf_stock_insuffisant(stock_bas, date_courante, vms_map=None):
     nom_pdf = f"stock_insuffisant_{date_courante.strftime('%Y%m%d')}.pdf"
     titre_html = (f"<b>Stocks insuffisant Drive - {date_courante.strftime('%d/%m/%Y')}</b>"
                   f"&nbsp;&nbsp;({len(stock_bas)} produit{'s' if len(stock_bas) > 1 else ''})")
-    return _construire_pdf_tableau(stock_bas, titre_html, nom_pdf, complet=False, vms_map=vms_map)
+    return _construire_pdf_tableau(stock_bas, titre_html, nom_pdf, complet=False, vms_map=vms_map,
+                                   prevision_map=prevision_map)
 
 
 def generer_pdf_a_deloter(a_deloter, date_courante, vms_map=None):
@@ -1718,6 +1733,7 @@ def main():
     orphelins  = []
     stock_bas  = []
     a_deloter  = []
+    prevision_stock_bas = {}  # gencod -> (ventes prévisionnelles, stock restant après ventes)
 
     sans_classeur = 0
     for gencod in sorted(tous):
@@ -1753,7 +1769,8 @@ def main():
         # tuple : gencod, s_j1, v, s_theo, s_j, ecart, statut, libelle
         row = (gencod, s_j1, v, s_theo, s_j, ecart, statut, lib)
 
-        restant_prevision = s_j - sum(vp.get(gencod, 0) for vp in ventes_prevision)
+        ventes_prev_gencod = sum(vp.get(gencod, 0) for vp in ventes_prevision)
+        restant_prevision = s_j - ventes_prev_gencod
         if present_j and restant_prevision <= SEUIL_STOCK_BAS:
             classeur = classeurs_stock.get(gencod, '')
             if _normaliser_classeur(classeur) == _normaliser_classeur(CLASSEUR_A_ENLEVER):
@@ -1762,6 +1779,7 @@ def main():
                 a_deloter.append(row)
             else:
                 stock_bas.append(row)
+                prevision_stock_bas[gencod] = (ventes_prev_gencod, restant_prevision)
 
         # Stock à 0 deux jours de suite : écart non significatif, on ne le
         # remonte pas dans le rapport d'écarts (mais il reste dans stock_bas
@@ -1821,7 +1839,8 @@ def main():
         vms_map = calculer_vms([r[0] for r in stock_bas] + [r[0] for r in a_deloter], date_courante)
         if stock_bas:
             print("\nGénération PDF stocks insuffisants …")
-            nom_pdf_stock_bas = generer_pdf_stock_insuffisant(stock_bas, date_courante, vms_map)
+            nom_pdf_stock_bas = generer_pdf_stock_insuffisant(stock_bas, date_courante, vms_map,
+                                                              prevision_stock_bas)
         if a_deloter:
             print("\nGénération PDF articles à déloter …")
             nom_pdf_a_deloter = generer_pdf_a_deloter(a_deloter, date_courante, vms_map)
