@@ -13,6 +13,10 @@ insuffisant Drive » du contrôle, trié selon le chemin de préparation) est
 envoyé par mail aux deux adresses du contrôle de stocks (email_destinataire
 et email_destinataire_2 de config.json).
 
+Les ventes d'un jour déjà archivées (Archives/ventes/ventes_JJ_MM.csv) sont
+réutilisées si aucun BDC n'est arrivé et aucune annulation n'a été inscrite
+depuis ; sinon elles sont recalculées depuis les BDC.
+
 Sans --dates (mode par défaut) : ventes d'aujourd'hui + ventes de demain
 (heure de Paris) déduites du stock du jour.
 
@@ -47,6 +51,74 @@ def jours_par_defaut(aujourd_hui=None):
     """Mode par défaut : aujourd'hui et demain (heure de Paris)."""
     j = aujourd_hui or datetime.now(ZoneInfo("Europe/Paris")).date()
     return [j, j + timedelta(days=1)]
+
+
+def _ids(svc, q, champs="id"):
+    """Fichiers Drive (pagination) répondant à la requête q."""
+    fichiers, jeton = [], None
+    while True:
+        res = svc.files().list(q=q, fields=f"nextPageToken, files({champs})",
+                               pageSize=1000, pageToken=jeton).execute()
+        fichiers.extend(res.get("files", []))
+        jeton = res.get("nextPageToken")
+        if not jeton:
+            return fichiers
+
+
+def archive_a_jour(heure_archive, heures_bdc, heure_registre):
+    """L'archive des ventes est réutilisable si aucun BDC n'a été créé ou
+    modifié après elle et si le registre des annulations n'a pas changé depuis
+    (heures RFC 3339 de Drive, comparables comme chaînes)."""
+    if not heure_archive:
+        return False
+    if any(h > heure_archive for h in heures_bdc):
+        return False
+    return not (heure_registre and heure_registre > heure_archive)
+
+
+def ventes_archivees(d):
+    """({gencod: qty}, {gencod: libellé}) depuis Archives/ventes/ventes_JJ_MM.csv
+    (Drive config) si l'archive est à jour (voir archive_a_jour), sinon None :
+    les ventes sont alors recalculées depuis les BDC."""
+    try:
+        svc = cs._get_drive_service()
+        if not svc or not cs.DRIVE_CONFIG_FOLDER_ID or not cs.DRIVE_BDC_FOLDER_ID:
+            return None
+        nom = f"ventes_{d.strftime('%d_%m')}.csv"
+        archives = cs._trouver_dossier_drive(svc, cs.DRIVE_CONFIG_FOLDER_ID, "Archives")
+        dossier_ventes = archives and cs._trouver_dossier_drive(svc, archives, "ventes")
+        if not dossier_ventes:
+            return None
+        csv = _ids(svc, f"name='{nom}' and '{dossier_ventes}' in parents and trashed=false",
+                   "id,modifiedTime")
+        if not csv:
+            return None
+        mois = cs._trouver_dossier_drive(svc, cs.DRIVE_BDC_FOLDER_ID, d.strftime("%m_%Y"))
+        jour = mois and cs._trouver_dossier_drive(svc, mois, d.strftime("%d_%m"))
+        heures_bdc = []
+        if jour:
+            for f in _ids(svc, f"'{jour}' in parents and name contains 'BonDeCommande' "
+                               f"and trashed=false", "createdTime,modifiedTime"):
+                heures_bdc += [f.get("createdTime", ""), f.get("modifiedTime", "")]
+        import auto_prepa as ap
+        heure_registre = None
+        dossier_annul = ap._dossier_annulations(svc, creer=False)
+        if dossier_annul:
+            reg = _ids(svc, f"name='{ap._FICHIER_ANNULATIONS}' and '{dossier_annul}' "
+                            f"in parents and trashed=false", "modifiedTime")
+            heure_registre = reg[0].get("modifiedTime") if reg else None
+        if not archive_a_jour(csv[0].get("modifiedTime"), heures_bdc, heure_registre):
+            print(f"  {nom} archivé mais pas à jour (nouveau BDC ou annulation) — recalcul.")
+            return None
+        chemin = os.path.join(cs.WORK_DIR, nom)
+        if not cs.telecharger_fichier_archive("ventes", nom, chemin,
+                                              root_id=cs.DRIVE_CONFIG_FOLDER_ID):
+            return None
+        print(f"  Aucun nouveau BDC depuis {nom} : ventes archivées réutilisées.")
+        return cs._charger_ventes_csv(chemin)
+    except Exception as e:
+        print(f"  Archive des ventes illisible ({type(e).__name__}) — recalcul.")
+        return None
 
 
 def calculer_stock_insuffisant(stock_j1, classeurs, ventes_jours, gencods_r1, libelles):
@@ -130,7 +202,7 @@ def main():
     ventes_jours = []
     for d in jours:
         print(f"\nVentes du {d.strftime('%d/%m/%Y')} …")
-        v, l = cs.generer_ventes(d)
+        v, l = ventes_archivees(d) or cs.generer_ventes(d)
         ventes_jours.append(v)
         for g, lib in l.items():
             libelles.setdefault(g, lib)

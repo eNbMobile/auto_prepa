@@ -31,6 +31,19 @@ class TestJoursParDefaut(unittest.TestCase):
                          [date(2026, 11, 30), date(2026, 12, 1)])
 
 
+class TestArchiveAJour(unittest.TestCase):
+    A = "2026-11-24T21:30:00.000Z"
+
+    def test_aucun_bdc_ni_annulation_apres(self):
+        self.assertTrue(csi.archive_a_jour(self.A, ["2026-11-24T18:00:00.000Z"],
+                                           "2026-11-24T10:00:00.000Z"))
+
+    def test_nouveau_bdc_ou_annulation_apres(self):
+        self.assertFalse(csi.archive_a_jour(self.A, ["2026-11-25T06:00:00.000Z"], None))
+        self.assertFalse(csi.archive_a_jour(self.A, [], "2026-11-25T06:00:00.000Z"))
+        self.assertFalse(csi.archive_a_jour(None, [], None))
+
+
 class TestCalcul(unittest.TestCase):
     def test_restant_apres_ventes_cumulees(self):
         stock = {"1": 4.0, "2": 5.0, "3": 0.0, "4": 1.0, "5": 1.0, "6": 0.0}
