@@ -32,9 +32,10 @@ que AUCUNE ADRESSE ou ADRESSE INCONNUE. Le rapport du soir les retire
   été envoyés (run manqué) en UN seul PDF, l'envoie par email pour un
   traitement le lendemain matin, puis renomme le fichier en ..._envoye.txt
   pour ne jamais l'envoyer deux fois. Le PDF regroupe les produits par rayon
-  (lettre déduite de gencod_nomenclatures.csv et de chemin_prepa_ramasse.csv)
-  et ne garde, par rayon, que les TOP_PAR_RAYON produits restés le plus
-  longtemps sans adresse (code-barres, libellé, commandes).
+  (lettre déduite de gencod_nomenclatures.csv et de chemin_prepa_ramasse.csv,
+  affichée sous son nom : NOMS_RAYONS) et ne garde, par rayon, que les
+  TOP_PAR_RAYON produits restés le plus longtemps sans adresse (code-barres,
+  libellé, commandes).
 - Avant le PDF, arbitrage_fruits_legumes.arbitrer() retire du rapport les
   fruits/légumes sans nomenclature connue (nouveau calibre/origine/variété) :
   reconnus avec confiance (nom de fruit/légume + pays d'origine dans le
@@ -74,6 +75,32 @@ TOP_PAR_RAYON = 20
 # Lettres de rayon (dernière colonne de chemin_prepa_mono.csv) jamais
 # relevées : fruits, légumes, BVP.
 RAYONS_EXCLUS = {"R", "S", "U"}
+
+# Nom des rayons affiché dans le PDF du soir à la place de la lettre
+# (lettres de chemin_prepa_ramasse.csv). Lettre absente : « Rayon X ».
+NOMS_RAYONS = {
+    "G": "Liquides",
+    "H": "Entretien / Bazar",
+    "J": "Hygiène / Beauté / Bébé",
+    "K": "Textile",
+    "L": "Épicerie sucrée",
+    "M": "Épicerie salée",
+    "N": "Lait / Œufs",
+    "O": "Charcuterie / Traiteur LS",
+    "P": "Boucherie / Poissonnerie / Fromage à la coupe",
+    "Q": "Crèmerie / Fromage LS",
+    "R": "Fruits",
+    "S": "Légumes",
+    "T": "Surgelés",
+    "U": "BVP",
+}
+
+
+def nom_rayon(lettre):
+    """Nom du rayon d'une lettre ("?" : rayon indéterminé)."""
+    if lettre == "?":
+        return "Rayon indéterminé"
+    return NOMS_RAYONS.get(lettre, f"Rayon {lettre}")
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -339,7 +366,7 @@ def generer_pdf(produits, jour, chemin):
                        key=lambda kv: (-kv[1].get("jours", 1), kv[1]["libelle"]))
         nb_total = len(items)
         items = items[:TOP_PAR_RAYON]
-        elements.append(Paragraph(f"Rayon {lettre} — top {len(items)}/{nb_total}", section))
+        elements.append(Paragraph(f"{nom_rayon(lettre)} — top {len(items)}/{nb_total}", section))
         elements.append(tableau(items))
         elements.append(Spacer(1, 4 * mm))
 
