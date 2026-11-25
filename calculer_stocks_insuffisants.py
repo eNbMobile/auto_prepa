@@ -13,13 +13,17 @@ insuffisant Drive » du contrôle, trié selon le chemin de préparation) est
 envoyé par mail aux deux adresses du contrôle de stocks (email_destinataire
 et email_destinataire_2 de config.json).
 
+Sans --dates (mode par défaut) : ventes d'aujourd'hui + ventes de demain
+(heure de Paris) déduites du stock du jour.
+
 Usage :
-  python3 calculer_stocks_insuffisants.py --dates "16/11/2026 17/11/2026" [--j1 j1.xlsx]
+  python3 calculer_stocks_insuffisants.py [--dates "16/11/2026 17/11/2026"] [--j1 j1.xlsx]
 """
 import os
 import re
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import controle_stocks as cs
 
@@ -37,6 +41,12 @@ def parser_dates(texte):
         except ValueError:
             raise ValueError(f"date invalide : {m} (attendu JJ/MM/AAAA)")
     return sorted(jours)
+
+
+def jours_par_defaut(aujourd_hui=None):
+    """Mode par défaut : aujourd'hui et demain (heure de Paris)."""
+    j = aujourd_hui or datetime.now(ZoneInfo("Europe/Paris")).date()
+    return [j, j + timedelta(days=1)]
 
 
 def calculer_stock_insuffisant(stock_j1, classeurs, ventes_jours, gencods_r1, libelles):
@@ -98,8 +108,9 @@ def _option(args, nom, defaut=None):
 
 def main():
     args = sys.argv[1:]
+    texte_dates = (_option(args, "--dates", "") or "").strip()
     try:
-        jours = parser_dates(_option(args, "--dates", ""))
+        jours = parser_dates(texte_dates) if texte_dates else jours_par_defaut()
     except ValueError as e:
         print(f"ERREUR : {e}")
         sys.exit(1)

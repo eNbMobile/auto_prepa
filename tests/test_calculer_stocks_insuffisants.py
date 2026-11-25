@@ -25,6 +25,12 @@ class TestParserDates(unittest.TestCase):
             csi.parser_dates("  ")
 
 
+class TestJoursParDefaut(unittest.TestCase):
+    def test_aujourd_hui_et_demain(self):
+        self.assertEqual(csi.jours_par_defaut(date(2026, 11, 30)),
+                         [date(2026, 11, 30), date(2026, 12, 1)])
+
+
 class TestCalcul(unittest.TestCase):
     def test_restant_apres_ventes_cumulees(self):
         stock = {"1": 4.0, "2": 5.0, "3": 0.0, "4": 1.0, "5": 1.0, "6": 0.0}
