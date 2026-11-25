@@ -87,7 +87,7 @@ NOMS_RAYONS = {
     "M": "Épicerie salée",
     "N": "Lait / Œufs",
     "O": "Charcuterie / Traiteur LS",
-    "P": "Boucherie / Poissonnerie / Fromage à la coupe",
+    "P": "Métiers",
     "Q": "Crèmerie / Fromage LS",
     "R": "Fruits",
     "S": "Légumes",
