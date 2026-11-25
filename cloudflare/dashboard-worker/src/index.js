@@ -137,6 +137,15 @@ const WORKFLOWS = {
     file: 'calculer_stocks_insuffisants.yml',
     label: 'Calculer Stocks Insuffisants',
     buildInputs(params) {
+      const j1 = String(params.j1 || '').trim() || 'j1.xlsx';
+      if (/['\\]/.test(j1)) throw new Error('Nom de fichier J1 invalide.');
+      if ((params.mode || 'auto') !== 'dates') {
+        // Mode par défaut : le script prend aujourd'hui + demain (heure de Paris).
+        return {
+          inputs: { dates: '', j1 },
+          detail: `${j1} moins les ventes d'aujourd'hui et de demain`,
+        };
+      }
       const morceaux = String(params.dates || '').split(/[\s,;]+/).filter(Boolean);
       if (!morceaux.length) throw new Error('Saisis au moins un jour de ventes (JJ/MM/AAAA).');
       const dates = [];
@@ -145,8 +154,6 @@ const WORKFLOWS = {
         if (!d) throw new Error(`Date invalide : ${m} (format attendu JJ/MM/AAAA).`);
         if (!dates.includes(d)) dates.push(d);
       }
-      const j1 = String(params.j1 || '').trim() || 'j1.xlsx';
-      if (/['\\]/.test(j1)) throw new Error('Nom de fichier J1 invalide.');
       return {
         inputs: { dates: dates.join(' '), j1 },
         detail: `${j1} moins les ventes du ${dates.join(', ')}`,
@@ -471,14 +478,22 @@ const PAGE = `<!doctype html>
     <!--carte:calculer_stocks_insuffisants-->
     <section class="card">
       <h2>Calculer Stocks Insuffisants</h2>
-      <p class="hint">Stock J1 moins les ventes du ou des jours choisis : envoie le PDF
-        des stocks insuffisants par mail aux deux adresses du contrôle de stocks.</p>
+      <p class="hint">Stock du jour moins les ventes d'aujourd'hui et de demain (ou des jours
+        choisis) : envoie le PDF des stocks insuffisants par mail aux deux adresses du
+        contrôle de stocks.</p>
       <form data-workflow="calculer_stocks_insuffisants">
         <div class="fields">
           <div class="field">
-            <label for="csi-dates">Jour(s) de ventes</label>
+            <label for="csi-mode">Jours de ventes</label>
+            <select id="csi-mode" name="mode" data-date-toggle>
+              <option value="auto" selected>Aujourd'hui + demain</option>
+              <option value="dates">Saisir des dates…</option>
+            </select>
+          </div>
+          <div class="field date-wrap" hidden>
+            <label for="csi-dates">Date(s)</label>
             <input type="text" id="csi-dates" name="dates" placeholder="16/11/2026 17/11/2026"
-                   autocomplete="off" required>
+                   autocomplete="off">
           </div>
           <div class="field">
             <label for="csi-j1">Fichier J1</label>
@@ -548,7 +563,7 @@ const PAGE = `<!doctype html>
 <script>
 document.querySelectorAll('select[data-date-toggle]').forEach((select) => {
   const wrap = select.closest('form').querySelector('.date-wrap');
-  const sync = () => { wrap.hidden = select.value !== 'date'; };
+  const sync = () => { wrap.hidden = !['date', 'dates'].includes(select.value); };
   select.addEventListener('change', sync);
   sync();
 });

@@ -4,8 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       dates:
-        description: "Jour(s) de ventes (JJ/MM/AAAA, plusieurs séparés par un espace)"
-        required: true
+        description: "Jour(s) de ventes (JJ/MM/AAAA, plusieurs séparés par un espace) — vide : aujourd'hui + demain"
+        required: false
+        default: ""
         type: string
       j1:
         description: "Nom du fichier J1 dans le dossier Drive du contrôle de stocks"
