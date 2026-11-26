@@ -2,14 +2,20 @@ name: copier_visuels_drive
 
 # Workflow ponctuel : copie les visuels produits déjà présents dans le
 # bucket R2 « visuels » (cf. cloudflare/visuels-r2-worker) vers un dossier
-# Drive, pour en avoir une sauvegarde hors Cloudflare. Reprenable : à
-# chaque run, les fichiers déjà copiés sur Drive sont listés et sautés, ce
-# qui permet de relancer le workflow sans tout retélécharger si un run
-# s'arrête avant la fin (timeout, limite d'API, etc.).
+# Drive, pour en avoir une sauvegarde hors Cloudflare.
+#
+# Les visuels sont téléchargés en parallèle depuis l'URL publique
+# visuels.coopu.workers.dev (pas de limite de débit comme sur l'API de
+# gestion Cloudflare), regroupés par lots dans des zips, puis chaque zip
+# est envoyé sur Drive en upload reprenable ("resumable"). Un lot (zip)
+# déjà présent sur Drive est sauté, ce qui permet de relancer le workflow
+# sans tout retélécharger si un run s'arrête avant la fin.
 #
 # Secrets du dépôt :
 #   CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID  (déjà utilisés pour déployer
-#                                                 les workers Cloudflare)
+#                                                 les workers Cloudflare ;
+#                                                 ici uniquement pour lister
+#                                                 les clés du bucket)
 #   GOOGLE_TOKEN_JSON, DRIVE_CONFIG_FOLDER_ID    (déjà utilisés ailleurs)
 
 on:
@@ -36,7 +42,11 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID:  ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           python3 - <<'EOF'
-          import json, os, pathlib, sys, time, urllib.error, urllib.parse, urllib.request
+          import concurrent.futures as futures
+          import json, os, pathlib, sys, time, urllib.error, urllib.parse, urllib.request, zipfile
+
+          TAILLE_LOT = 3000       # visuels par zip
+          TELECHARGEMENTS_PARALLELES = 30
 
           # ── Auth Google (même mécanisme que collecte_ean.yml) ──────────────
           token_json = os.environ.get("GOOGLE_TOKEN_JSON", "").strip()
@@ -100,17 +110,37 @@ jobs:
                       break
               return fichiers
 
-          def drive_create_file(parent_id, name, content_bytes, mime):
-              boundary = "------FormBoundary7MA4YWxkTrZu0gW"
-              meta = json.dumps({"name": name, "parents": [parent_id]})
-              body = (
-                  f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
-                  + meta + f"\r\n--{boundary}\r\nContent-Type: {mime}\r\n\r\n"
-              ).encode() + content_bytes + f"\r\n--{boundary}--".encode()
-              url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart"
-              return json.loads(_requete(
-                  url, {**H, "Content-Type": f"multipart/related; boundary={boundary}"},
-                  data=body, method="POST", timeout=60))
+          def drive_resumable_upload(parent_id, name, local_path, mime="application/zip", taille_bloc=8 * 1024 * 1024):
+              """Envoi reprenable (protocole resumable de l'API Drive) : adapté
+              aux zips de plusieurs centaines de Mo, contrairement à l'upload
+              multipart simple utilisé ailleurs pour les petits fichiers JSON."""
+              taille = os.path.getsize(local_path)
+              init = urllib.request.Request(
+                  "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable",
+                  data=json.dumps({"name": name, "parents": [parent_id]}).encode(),
+                  headers={**H, "Content-Type": "application/json; charset=UTF-8",
+                           "X-Upload-Content-Type": mime, "X-Upload-Content-Length": str(taille)},
+                  method="POST")
+              reponse = urllib.request.urlopen(init, timeout=60)
+              session_url = reponse.headers.get("Location")
+              resultat = None
+              with open(local_path, "rb") as f:
+                  octet = 0
+                  while octet < taille:
+                      morceau = f.read(taille_bloc)
+                      fin = octet + len(morceau) - 1
+                      req = urllib.request.Request(session_url, data=morceau, method="PUT", headers={
+                          **H, "Content-Length": str(len(morceau)),
+                          "Content-Range": f"bytes {octet}-{fin}/{taille}",
+                      })
+                      try:
+                          r = urllib.request.urlopen(req, timeout=180)
+                          resultat = json.loads(r.read())
+                      except urllib.error.HTTPError as e:
+                          if e.code != 308:   # 308 = bloc reçu, suite de l'envoi
+                              raise
+                      octet += len(morceau)
+              return resultat
 
           # ── Dossier Drive de destination (config/visuels) ──────────────────
           config_id = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "").strip()
@@ -132,11 +162,11 @@ jobs:
               visuels_folder_id = r["id"]
               print(f"Dossier Drive 'visuels' créé : {visuels_folder_id}")
 
-          print("Liste des visuels déjà copiés sur Drive ...")
+          print("Liste des lots déjà copiés sur Drive ...")
           deja_copies = {f["name"] for f in drive_list(f"'{visuels_folder_id}' in parents and trashed=false")}
-          print(f"  {len(deja_copies)} déjà présents sur Drive (seront sautés)")
+          print(f"  {len(deja_copies)} lot(s) déjà présent(s) sur Drive (seront sautés)")
 
-          # ── Cloudflare R2 (bucket « visuels ») ──────────────────────────────
+          # ── Liste des clés du bucket R2 (API de gestion Cloudflare) ────────
           cf_token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
           cf_account = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
           if not cf_token or not cf_account:
@@ -146,7 +176,7 @@ jobs:
           BUCKET = "visuels"
 
           def cf_list_objects():
-              cursor = None
+              cles, cursor = [], None
               while True:
                   params = {"per_page": "1000"}
                   if cursor:
@@ -156,47 +186,72 @@ jobs:
                   r = json.loads(_requete(url, CF_H))
                   if not r.get("success"):
                       print("  ERREUR listing R2 :", r.get("errors"))
-                      return
-                  for obj in r.get("result", []):
-                      yield obj["key"]
+                      break
+                  cles.extend(obj["key"] for obj in r.get("result", []))
                   cursor = (r.get("result_info") or {}).get("cursor")
                   if not cursor:
-                      return
+                      break
+              return cles
 
-          def cf_get_object(key):
-              url = (f"https://api.cloudflare.com/client/v4/accounts/{cf_account}"
-                     f"/r2/buckets/{BUCKET}/objects/{urllib.parse.quote(key)}")
-              return _requete(url, CF_H, timeout=60)
+          # ── Téléchargement des visuels (URL publique, sans limite de débit
+          #    comme celle de l'API de gestion Cloudflare) ────────────────────
+          VISUELS_BASE = "https://visuels.coopu.workers.dev/"
 
-          def mime_pour(cle):
-              ext = cle.rsplit(".", 1)[-1].lower() if "." in cle else ""
-              return {"png": "image/png", "jpg": "image/jpeg",
-                      "jpeg": "image/jpeg"}.get(ext, "application/octet-stream")
+          def telecharger_visuel(cle, tentatives=3):
+              url = VISUELS_BASE + urllib.parse.quote(cle)
+              derniere_erreur = None
+              for essai in range(tentatives):
+                  try:
+                      with urllib.request.urlopen(url, timeout=20) as r:
+                          return cle, r.read()
+                  except Exception as e:
+                      derniere_erreur = e
+                      time.sleep(0.5 * (essai + 1))
+              print(f"  Erreur téléchargement {cle} : {derniere_erreur}")
+              return cle, None
 
-          total = copies = erreurs = 0
-          for cle in cf_list_objects():
-              total += 1
+          print("Listing des visuels sur R2 ...")
+          cles = cf_list_objects()
+          print(f"{len(cles)} visuels dans le bucket R2.")
+
+          lots = [cles[i:i + TAILLE_LOT] for i in range(0, len(cles), TAILLE_LOT)]
+          print(f"{len(lots)} lot(s) de {TAILLE_LOT} visuels maximum.")
+
+          total_copies = total_erreurs = 0
+          for num, lot in enumerate(lots, start=1):
+              nom_zip = f"visuels_part{num:03d}.zip"
+              if nom_zip in deja_copies:
+                  print(f"Lot {num}/{len(lots)} ({nom_zip}) déjà sur Drive, ignoré.")
+                  continue
+
               ensure_fresh_token()
-              if cle in deja_copies:
-                  continue
-              try:
-                  contenu = cf_get_object(cle)
-              except Exception as e:
-                  erreurs += 1
-                  print(f"  Erreur téléchargement R2 {cle} : {e}")
-                  continue
-              try:
-                  drive_create_file(visuels_folder_id, cle, contenu, mime_pour(cle))
-                  deja_copies.add(cle)
-                  copies += 1
-                  if copies % 200 == 0:
-                      print(f"  {copies} visuels copiés sur Drive ({total} vus sur R2)...")
-              except Exception as e:
-                  erreurs += 1
-                  print(f"  Erreur upload Drive {cle} : {e}")
+              print(f"Lot {num}/{len(lots)} : téléchargement de {len(lot)} visuels ...")
+              chemin_zip = f"/tmp/{nom_zip}"
+              erreurs_lot = 0
+              with zipfile.ZipFile(chemin_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+                  with futures.ThreadPoolExecutor(max_workers=TELECHARGEMENTS_PARALLELES) as pool:
+                      for cle, contenu in pool.map(telecharger_visuel, lot):
+                          if contenu is None:
+                              erreurs_lot += 1
+                              continue
+                          zf.writestr(cle, contenu)
 
-          print(f"\nTerminé : {total} visuels listés sur R2, {copies} copiés sur Drive ce run, "
-                f"{erreurs} erreur(s), {len(deja_copies)} au total sur Drive.")
+              taille_mo = os.path.getsize(chemin_zip) / (1024 * 1024)
+              print(f"  Zip constitué ({taille_mo:.1f} Mo, {len(lot) - erreurs_lot} visuels), envoi vers Drive ...")
+              ensure_fresh_token()
+              try:
+                  drive_resumable_upload(visuels_folder_id, nom_zip, chemin_zip)
+                  total_copies += len(lot) - erreurs_lot
+                  total_erreurs += erreurs_lot
+                  print(f"  Lot {num} envoyé sur Drive.")
+              except Exception as e:
+                  print(f"  ERREUR envoi Drive {nom_zip} : {e}")
+                  total_erreurs += len(lot) - erreurs_lot
+              finally:
+                  os.remove(chemin_zip)
+
+          print(f"\nTerminé : {len(cles)} visuels sur R2 en {len(lots)} lot(s), "
+                f"{total_copies} copiés ce run, {total_erreurs} erreur(s).")
           EOF
 
       - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
