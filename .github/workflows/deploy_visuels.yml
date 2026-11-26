@@ -1,6 +1,6 @@
 name: Deployer visuels
 
-# Publie les visuels produits sur https://visuels.coopu.workers.dev/<gencod>.png
+# Publie les visuels produits sur https://visuels-<n>.coopu.workers.dev/<gencod>.png
 # (lus par anticipation_commandes.py). Les images sont récupérées en FTP sur
 # l'hébergement Plesk (/httpdocs/mobUDrive/visuels) : pour ajouter des
 # visuels, les déposer là puis relancer ce workflow. Le téléchargement
@@ -110,9 +110,40 @@ jobs:
           path: cloudflare/visuels-worker/public
           key: visuels-${{ github.run_id }}
 
+      # Limite gratuite Cloudflare : 20 000 fichiers par worker. Les visuels
+      # sont répartis sur 4 workers visuels-0..3 selon gencod % 4 (même règle
+      # que _url_visuel dans anticipation_commandes.py).
+      - name: Répartir les visuels sur les workers
+        run: |
+          python3 - <<'PY'
+          import os, re, sys
+          NB = 4
+          src = "cloudflare/visuels-worker/public"
+          base = "cloudflare/visuels-worker/workers"
+          compte = [0] * NB
+          for i in range(NB):
+              d = f"{base}/visuels-{i}"
+              os.makedirs(f"{d}/public", exist_ok=True)
+              with open(f"{d}/wrangler.toml", "w") as f:
+                  f.write(f'name = "visuels-{i}"\ncompatibility_date = "2024-11-01"\n\n'
+                          '[assets]\ndirectory = "./public"\nnot_found_handling = "none"\n')
+          for nom in os.listdir(src):
+              chiffres = re.sub(r"\D", "", os.path.splitext(nom)[0])
+              n = int(chiffres) % NB if chiffres else 0
+              os.link(f"{src}/{nom}", f"{base}/visuels-{n}/public/{nom}")
+              compte[n] += 1
+          for i, c in enumerate(compte):
+              print(f"visuels-{i} : {c} visuel(s)")
+          if max(compte) > 20000:
+              sys.exit("Un worker dépasse 20 000 visuels : augmenter NB (ici et dans anticipation_commandes.py)")
+          PY
+
       - name: Déployer
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: cloudflare/visuels-worker
+        env:
+          CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          for d in cloudflare/visuels-worker/workers/visuels-*; do
+            echo "Déploiement de $(basename "$d")"
+            (cd "$d" && npx --yes wrangler@4 deploy)
+          done

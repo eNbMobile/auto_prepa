@@ -47,7 +47,17 @@ import controle_stocks as cs
 _TZ = ZoneInfo("Europe/Paris")
 
 # Photos produits : servies par nom de gencod, extension inconnue a priori.
-_VISUELS_BASE_URL = "https://visuels.coopu.workers.dev/"
+# Repartis sur _VISUELS_NB_WORKERS workers (limite gratuite Cloudflare :
+# 20 000 fichiers par worker) selon le gencod : visuels-<n>.coopu.workers.dev.
+# Meme regle que dans .github/workflows/deploy_visuels.yml.
+_VISUELS_NB_WORKERS = 4
+_VISUELS_BASE_URL = "https://visuels-<n>.coopu.workers.dev/"
+
+
+def _url_visuel(gencod, ext):
+    chiffres = re.sub(r"\D", "", gencod)
+    n = int(chiffres) % _VISUELS_NB_WORKERS if chiffres else 0
+    return f"https://visuels-{n}.coopu.workers.dev/{gencod}{ext}"
 _PHOTO_EXTENSIONS = (".jpg", ".png")
 
 # Lettres d'anticipation dont le rayon est connu : format PDF dedie (photo,
@@ -261,7 +271,7 @@ def _lister_bons_commande(drive_svc, jour_id):
 
 
 def _telecharger_photo(gencod, cache, erreurs=None):
-    """Recupere la photo produit (jpg ou png) depuis visuels.coopu.workers.dev.
+    """Recupere la photo produit (jpg ou png) depuis visuels-<n>.coopu.workers.dev.
 
     Retourne les octets de l'image, ou None si introuvable. Resultat mis en
     cache par gencod pour eviter de re-telecharger le meme visuel plusieurs
@@ -274,7 +284,7 @@ def _telecharger_photo(gencod, cache, erreurs=None):
         return cache[gencod]
     derniere_erreur = None
     for ext in _PHOTO_EXTENSIONS:
-        url = f"{_VISUELS_BASE_URL}{gencod}{ext}"
+        url = _url_visuel(gencod, ext)
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req, timeout=10) as resp:
