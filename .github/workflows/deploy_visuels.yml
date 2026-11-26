@@ -16,6 +16,10 @@ concurrency:
   group: deploy_visuels
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  actions: write   # suppression des anciens caches visuels
+
 jobs:
   deployer:
     runs-on: ubuntu-latest
@@ -47,7 +51,8 @@ jobs:
           sudo apt-get install -y -qq lftp > /dev/null
           dest=cloudflare/visuels-worker/public
           mkdir -p "$dest"
-          echo "Déjà en cache : $(find "$dest" -maxdepth 1 -type f | wc -l) visuel(s)"
+          avant=$(find "$dest" -maxdepth 1 -type f | wc -l)
+          echo "Déjà en cache : $avant visuel(s)"
           # Compteur toutes les 30 s pendant le téléchargement
           ( while sleep 30; do
               echo "$(date -u +%H:%M:%S) : $(find "$dest" -maxdepth 1 -type f | wc -l) visuel(s) récupéré(s)"
@@ -95,7 +100,8 @@ jobs:
           # Fichiers partiels (temporaires .in.*) laissés par l'interruption
           find "$dest" -maxdepth 1 -type f \( -name '.in.*' -o -size 0 \) -delete
           n=$(find "$dest" -maxdepth 1 -type f | wc -l)
-          echo "Total : $n visuel(s) récupéré(s)"
+          echo "Total : $n visuel(s) récupéré(s), dont $((n - avant)) nouveau(x)"
+          echo "nouveaux=$((n - avant))" >> "$GITHUB_OUTPUT"
           if [ "$code" = 124 ]; then
             echo "::warning::Téléchargement interrompu à 45 min ($n visuels) : relancer le workflow pour récupérer la suite."
           elif [ "$code" != 0 ]; then
@@ -103,12 +109,27 @@ jobs:
           fi
           [ "$n" -gt 0 ] || { echo "::error::Aucun visuel récupéré"; exit 1; }
 
+      # Cache sauvegardé seulement s'il y a du nouveau, puis anciens caches
+      # visuels supprimés : seul le plus récent (~4 Go) est gardé, pour ne pas évincer
+      # les caches des autres workflows (limite de 10 Go par dépôt).
       - name: Mettre en cache les visuels récupérés
-        if: always()
+        id: cache_save
+        if: always() && steps.ftp.outputs.nouveaux != '0'
         uses: actions/cache/save@v4
         with:
           path: cloudflare/visuels-worker/public
           key: visuels-${{ github.run_id }}
+
+      - name: Supprimer les anciens caches visuels
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # On garde le plus récent, on supprime les autres
+          gh cache list --repo "${{ github.repository }}" --key visuels- --limit 100 \
+              --sort created_at --order desc --json key --jq '.[].key' \
+            | tail -n +2 \
+            | while read -r k; do gh cache delete "$k" --repo "${{ github.repository }}" && echo "Cache $k supprimé"; done || true
 
       # Limite gratuite Cloudflare : 20 000 fichiers par worker. Les visuels
       # sont répartis sur 2 workers visuels-0..1 selon gencod % 2 (même règle
