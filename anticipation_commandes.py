@@ -50,7 +50,7 @@ _TZ = ZoneInfo("Europe/Paris")
 # Repartis sur _VISUELS_NB_WORKERS workers (limite gratuite Cloudflare :
 # 20 000 fichiers par worker) selon le gencod : visuels-<n>.coopu.workers.dev.
 # Meme regle que dans .github/workflows/deploy_visuels.yml.
-_VISUELS_NB_WORKERS = 4
+_VISUELS_NB_WORKERS = 2
 _VISUELS_BASE_URL = "https://visuels-<n>.coopu.workers.dev/"
 
 
