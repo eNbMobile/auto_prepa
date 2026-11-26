@@ -26,9 +26,25 @@ class TestParserDates(unittest.TestCase):
 
 
 class TestJoursParDefaut(unittest.TestCase):
-    def test_aujourd_hui_et_demain(self):
-        self.assertEqual(csi.jours_par_defaut(date(2026, 11, 30)),
-                         [date(2026, 11, 30), date(2026, 12, 1)])
+    def test_aujourd_hui_a_j_plus_7(self):
+        jours = csi.jours_par_defaut(date(2026, 11, 30))
+        self.assertEqual(len(jours), 8)
+        self.assertEqual(jours[0], date(2026, 11, 30))
+        self.assertEqual(jours[1], date(2026, 12, 1))
+        self.assertEqual(jours[-1], date(2026, 12, 7))
+
+
+class TestTexteJours(unittest.TestCase):
+    def test_periode_consecutive(self):
+        jours = csi.jours_par_defaut(date(2026, 11, 30))
+        self.assertEqual(csi.texte_jours(jours), "30/11/2026 au 07/12/2026")
+
+    def test_jours_saisis(self):
+        self.assertEqual(csi.texte_jours([date(2026, 11, 16), date(2026, 11, 17)]),
+                         "16/11/2026 & 17/11/2026")
+        self.assertEqual(csi.texte_jours([date(2026, 11, 16), date(2026, 11, 18),
+                                          date(2026, 11, 19)]),
+                         "16/11/2026 & 18/11/2026 & 19/11/2026")
 
 
 class TestArchiveAJour(unittest.TestCase):
