@@ -47,7 +47,7 @@ import controle_stocks as cs
 _TZ = ZoneInfo("Europe/Paris")
 
 # Photos produits : servies par nom de gencod, extension inconnue a priori.
-_VISUELS_BASE_URL = "http://enbmobile.nl/mobUDrive/visuels/"
+_VISUELS_BASE_URL = "https://visuels.coopu.workers.dev/"
 _PHOTO_EXTENSIONS = (".jpg", ".png")
 
 # Lettres d'anticipation dont le rayon est connu : format PDF dedie (photo,
@@ -261,7 +261,7 @@ def _lister_bons_commande(drive_svc, jour_id):
 
 
 def _telecharger_photo(gencod, cache, erreurs=None):
-    """Recupere la photo produit (jpg ou png) depuis enbmobile.nl/mobUDrive/visuels/.
+    """Recupere la photo produit (jpg ou png) depuis visuels.coopu.workers.dev.
 
     Retourne les octets de l'image, ou None si introuvable. Resultat mis en
     cache par gencod pour eviter de re-telecharger le meme visuel plusieurs
