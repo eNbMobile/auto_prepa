@@ -111,13 +111,13 @@ jobs:
           key: visuels-${{ github.run_id }}
 
       # Limite gratuite Cloudflare : 20 000 fichiers par worker. Les visuels
-      # sont répartis sur 4 workers visuels-0..3 selon gencod % 4 (même règle
-      # que _url_visuel dans anticipation_commandes.py).
+      # sont répartis sur 2 workers visuels-0..1 selon gencod % 2 (même règle
+      # que _url_visuel dans anticipation_commandes.py et l'appli MobUDrive).
       - name: Répartir les visuels sur les workers
         run: |
           python3 - <<'PY'
           import os, re, sys
-          NB = 4
+          NB = 2
           src = "cloudflare/visuels-worker/public"
           base = "cloudflare/visuels-worker/workers"
           compte = [0] * NB
@@ -146,4 +146,10 @@ jobs:
           for d in cloudflare/visuels-worker/workers/visuels-*; do
             echo "Déploiement de $(basename "$d")"
             (cd "$d" && npx --yes wrangler@4 deploy)
+          done
+          # Workers visuels-N devenus inutiles (si NB a été réduit)
+          nb=$(ls -d cloudflare/visuels-worker/workers/visuels-* | wc -l)
+          for i in $(seq "$nb" 9); do
+            npx --yes wrangler@4 delete --name "visuels-$i" --force > /dev/null 2>&1 \
+              && echo "Worker visuels-$i supprimé" || true
           done
