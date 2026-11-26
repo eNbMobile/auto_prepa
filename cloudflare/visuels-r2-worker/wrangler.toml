@@ -1,0 +1,10 @@
+# Visuels produits servis depuis le bucket R2 « visuels » :
+# https://visuels.coopu.workers.dev/<gencod>.png
+# Ajout de visuels : tableau de bord Cloudflare > R2 > visuels > Upload.
+name = "visuels"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+[[r2_buckets]]
+binding = "VISUELS"
+bucket_name = "visuels"

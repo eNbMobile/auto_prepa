@@ -1,0 +1,73 @@
+name: Migrer visuels vers R2
+
+# Envoie dans le bucket R2 « visuels » les visuels déjà récupérés depuis Plesk
+# (cache « visuels-* » du workflow deploy_visuels), puis déploie le worker
+# « visuels » qui les sert sur https://visuels.coopu.workers.dev/<gencod>.png.
+# Les visuels déjà présents dans le bucket ne sont pas renvoyés.
+#
+# Secrets : CLOUDFLARE_API_TOKEN (Workers + R2 en écriture), CLOUDFLARE_ACCOUNT_ID.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: migrer_visuels_r2
+  cancel-in-progress: false
+
+jobs:
+  migrer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Restaurer les visuels récupérés depuis Plesk
+        uses: actions/cache/restore@v4
+        with:
+          path: cloudflare/visuels-worker/public
+          key: visuels-migration
+          restore-keys: visuels-
+
+      # Envoi par l'API S3 de R2 (l'API REST est limitée à ~4 requêtes/s).
+      # Identifiants S3 dérivés du jeton Cloudflare : clé = id du jeton,
+      # secret = SHA-256 de sa valeur. « sync » ne renvoie pas les visuels
+      # déjà présents dans le bucket.
+      - name: Envoyer les visuels dans R2
+        env:
+          CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          command -v aws > /dev/null || pip install -q awscli
+          src=cloudflare/visuels-worker/public
+          n=$(find "$src" -maxdepth 1 -name '*.png' | wc -l)
+          echo "$n visuel(s) en cache"
+          [ "$n" -gt 0 ] || { echo "::error::Aucun visuel en cache"; exit 1; }
+          id=""
+          for url in "https://api.cloudflare.com/client/v4/user/tokens/verify" \
+                     "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify"; do
+            id=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$url" \
+                 | python3 -c "import sys,json; print((json.load(sys.stdin).get('result') or {}).get('id',''))" 2>/dev/null)
+            [ -n "$id" ] && break
+          done
+          [ -n "$id" ] || { echo "::error::Jeton Cloudflare non vérifiable"; exit 1; }
+          echo "::add-mask::$id"
+          secret=$(printf '%s' "$CLOUDFLARE_API_TOKEN" | sha256sum | cut -d' ' -f1)
+          echo "::add-mask::$secret"
+          export AWS_ACCESS_KEY_ID="$id" AWS_SECRET_ACCESS_KEY="$secret" AWS_DEFAULT_REGION=auto
+          export AWS_REQUEST_CHECKSUM_CALCULATION=when_required AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
+          aws configure set default.s3.max_concurrent_requests 50
+          endpoint="https://$CLOUDFLARE_ACCOUNT_ID.r2.cloudflarestorage.com"
+          ( while sleep 30; do echo "$(date -u +%H:%M:%S) : envoi en cours…"; done ) &
+          compteur=$!
+          aws s3 sync "$src" s3://visuels --endpoint-url "$endpoint" \
+              --exclude '*' --include '*.png' --content-type image/png --only-show-errors
+          kill $compteur 2>/dev/null || true
+          total=$(aws s3 ls s3://visuels --endpoint-url "$endpoint" | wc -l)
+          echo "Visuels dans le bucket R2 : $total"
+
+      - name: Déployer le worker visuels
+        env:
+          CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: cd cloudflare/visuels-r2-worker && npx --yes wrangler@4 deploy
