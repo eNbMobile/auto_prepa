@@ -17,8 +17,10 @@ Les ventes d'un jour déjà archivées (Archives/ventes/ventes_JJ_MM.csv) sont
 réutilisées si aucun BDC n'est arrivé et aucune annulation n'a été inscrite
 depuis ; sinon elles sont recalculées depuis les BDC.
 
-Sans --dates (mode par défaut) : ventes d'aujourd'hui + ventes de demain
-(heure de Paris) déduites du stock du jour.
+Sans --dates (mode par défaut) : toutes les commandes du jour et toutes les
+commandes futures déjà passées, soit les ventes d'aujourd'hui à J+7 (heure
+de Paris ; le client ne peut pas commander au-delà de 7 jours), déduites du
+stock du jour.
 
 --seuil N : seuil de détection (stock restant <= N), 2 par défaut
 (SEUIL_STOCK_BAS).
@@ -53,10 +55,24 @@ def parser_dates(texte):
     return sorted(jours)
 
 
+# Le client ne peut pas commander plus de 7 jours à l'avance.
+HORIZON_COMMANDES_JOURS = 7
+
+
 def jours_par_defaut(aujourd_hui=None):
-    """Mode par défaut : aujourd'hui et demain (heure de Paris)."""
+    """Mode par défaut : aujourd'hui et chaque jour jusqu'à J+7 inclus (heure
+    de Paris) : toutes les commandes du jour et toutes les commandes futures."""
     j = aujourd_hui or datetime.now(ZoneInfo("Europe/Paris")).date()
-    return [j, j + timedelta(days=1)]
+    return [j + timedelta(days=i) for i in range(HORIZON_COMMANDES_JOURS + 1)]
+
+
+def texte_jours(jours):
+    """« 26/11/2026 » ou « 26/11/2026 & 27/11/2026 » ; à partir de 3 jours
+    consécutifs : « 26/11/2026 au 03/12/2026 »."""
+    consecutifs = all((b - a).days == 1 for a, b in zip(jours, jours[1:]))
+    if len(jours) >= 3 and consecutifs:
+        return f"{jours[0].strftime('%d/%m/%Y')} au {jours[-1].strftime('%d/%m/%Y')}"
+    return " & ".join(d.strftime('%d/%m/%Y') for d in jours)
 
 
 def _ids(svc, q, champs="id"):
@@ -244,9 +260,10 @@ def main():
                                           cs.charger_ordre_chemin_prepa()))
     vms_map = cs.calculer_vms([r[0] for r in rows], date.today())
 
-    dates_txt = " & ".join(d.strftime('%d/%m/%Y') for d in jours)
-    nom_pdf = os.path.join(cs.WORK_DIR, "stock_insuffisant_"
-                           + "_".join(d.strftime('%Y%m%d') for d in jours) + ".pdf")
+    dates_txt = texte_jours(jours)
+    suffixe = (f"{jours[0].strftime('%Y%m%d')}_au_{jours[-1].strftime('%Y%m%d')}"
+               if " au " in dates_txt else "_".join(d.strftime('%Y%m%d') for d in jours))
+    nom_pdf = os.path.join(cs.WORK_DIR, f"stock_insuffisant_{suffixe}.pdf")
     titre = (f"<b>Stocks insuffisant Drive - {nom_j1} - ventes du {dates_txt}</b>"
              f"&nbsp;&nbsp;({len(rows)} produit{'s' if len(rows) > 1 else ''})")
     # Colonnes : stock du matin (J1), ventes prévisionnelles, stock restant

@@ -142,10 +142,10 @@ const WORKFLOWS = {
       const seuil = String(params.seuil || '').trim() || '2';
       if (!/^\d{1,3}$/.test(seuil)) throw new Error('Seuil invalide (nombre entier attendu).');
       if ((params.mode || 'auto') !== 'dates') {
-        // Mode par défaut : le script prend aujourd'hui + demain (heure de Paris).
+        // Mode par défaut : le script prend aujourd'hui + toutes les commandes futures (J+7, heure de Paris).
         return {
           inputs: { dates: '', j1, seuil },
-          detail: `${j1} moins les ventes d'aujourd'hui et de demain, seuil ${seuil}`,
+          detail: `${j1} moins les commandes d'aujourd'hui et futures (jusqu'à J+7), seuil ${seuil}`,
         };
       }
       const morceaux = String(params.dates || '').split(/[\s,;]+/).filter(Boolean);
@@ -480,15 +480,15 @@ const PAGE = `<!doctype html>
     <!--carte:calculer_stocks_insuffisants-->
     <section class="card">
       <h2>Calculer Stocks Insuffisants</h2>
-      <p class="hint">Stock du jour moins les ventes d'aujourd'hui et de demain (ou des jours
-        choisis) : envoie le PDF des stocks insuffisants par mail aux deux adresses du
+      <p class="hint">Stock du jour moins les commandes d'aujourd'hui et toutes les commandes futures
+        (jusqu'à J+7), ou des jours choisis : envoie le PDF des stocks insuffisants par mail aux deux adresses du
         contrôle de stocks, puis dépose le fichier J1 dans MobUDrive (stock.xlsx).</p>
       <form data-workflow="calculer_stocks_insuffisants">
         <div class="fields">
           <div class="field">
             <label for="csi-mode">Jours de ventes</label>
             <select id="csi-mode" name="mode" data-date-toggle>
-              <option value="auto" selected>Aujourd'hui + demain</option>
+              <option value="auto" selected>Aujourd'hui + commandes futures (J+7)</option>
               <option value="dates">Saisir des dates…</option>
             </select>
           </div>

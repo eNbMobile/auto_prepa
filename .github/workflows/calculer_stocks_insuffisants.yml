@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       dates:
-        description: "Jour(s) de ventes (JJ/MM/AAAA, plusieurs séparés par un espace) — vide : aujourd'hui + demain"
+        description: "Jour(s) de ventes (JJ/MM/AAAA, plusieurs séparés par un espace) — vide : aujourd'hui + toutes les commandes futures (jusqu'à J+7)"
         required: false
         default: ""
         type: string
