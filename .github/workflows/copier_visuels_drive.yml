@@ -1,0 +1,212 @@
+name: copier_visuels_drive
+
+# Workflow ponctuel : copie les visuels produits déjà présents dans le
+# bucket R2 « visuels » (cf. cloudflare/visuels-r2-worker) vers un dossier
+# Drive, pour en avoir une sauvegarde hors Cloudflare. Reprenable : à
+# chaque run, les fichiers déjà copiés sur Drive sont listés et sautés, ce
+# qui permet de relancer le workflow sans tout retélécharger si un run
+# s'arrête avant la fin (timeout, limite d'API, etc.).
+#
+# Secrets du dépôt :
+#   CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID  (déjà utilisés pour déployer
+#                                                 les workers Cloudflare)
+#   GOOGLE_TOKEN_JSON, DRIVE_CONFIG_FOLDER_ID    (déjà utilisés ailleurs)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: copier_visuels_drive
+  cancel-in-progress: false
+
+jobs:
+  copier:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Copier les visuels R2 vers Drive
+        env:
+          GOOGLE_TOKEN_JSON:      ${{ secrets.GOOGLE_TOKEN_JSON }}
+          DRIVE_CONFIG_FOLDER_ID: ${{ secrets.DRIVE_CONFIG_FOLDER_ID }}
+          CLOUDFLARE_API_TOKEN:   ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID:  ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, pathlib, sys, time, urllib.error, urllib.parse, urllib.request
+
+          # ── Auth Google (même mécanisme que collecte_ean.yml) ──────────────
+          token_json = os.environ.get("GOOGLE_TOKEN_JSON", "").strip()
+          if not token_json:
+              print("Pas de GOOGLE_TOKEN_JSON → skip")
+              sys.exit(0)
+          token = json.loads(token_json)
+
+          def refresh_access_token():
+              data = urllib.parse.urlencode({
+                  "client_id":     token["client_id"],
+                  "client_secret": token["client_secret"],
+                  "refresh_token": token["refresh_token"],
+                  "grant_type":    "refresh_token",
+              }).encode()
+              resp = json.loads(urllib.request.urlopen(
+                  urllib.request.Request("https://oauth2.googleapis.com/token", data=data), timeout=30
+              ).read())
+              token["access_token"] = resp["access_token"]
+              pathlib.Path(pathlib.Path.home() / ".auto_prepa_token.json").write_text(json.dumps(token))
+              return resp["access_token"], resp.get("expires_in", 3600)
+
+          access, expires_in = refresh_access_token()
+          token_expiry = time.time() + expires_in - 300
+          H = {"Authorization": f"Bearer {access}"}
+
+          def ensure_fresh_token():
+              global access, token_expiry
+              if time.time() < token_expiry:
+                  return
+              access, expires_in = refresh_access_token()
+              token_expiry = time.time() + expires_in - 300
+              H["Authorization"] = f"Bearer {access}"
+              print("  (token Google rafraîchi)")
+
+          def _requete(url, headers, data=None, method=None, timeout=30, tentatives=3):
+              derniere_erreur = None
+              for essai in range(tentatives):
+                  try:
+                      req = urllib.request.Request(url, data=data, headers=headers, method=method)
+                      return urllib.request.urlopen(req, timeout=timeout).read()
+                  except urllib.error.HTTPError as e:
+                      derniere_erreur = e
+                      if e.code in (429, 500, 502, 503, 504) and essai < tentatives - 1:
+                          time.sleep(2 * (essai + 1))
+                          continue
+                      raise
+              raise derniere_erreur
+
+          def drive_list(q, fields="files(id,name)", page_size=1000):
+              fichiers, page_token = [], None
+              while True:
+                  params = {"q": q, "fields": f"nextPageToken,{fields}", "pageSize": str(page_size)}
+                  if page_token:
+                      params["pageToken"] = page_token
+                  url = "https://www.googleapis.com/drive/v3/files?" + urllib.parse.urlencode(params)
+                  r = json.loads(_requete(url, H))
+                  fichiers.extend(r.get("files", []))
+                  page_token = r.get("nextPageToken")
+                  if not page_token:
+                      break
+              return fichiers
+
+          def drive_create_file(parent_id, name, content_bytes, mime):
+              boundary = "------FormBoundary7MA4YWxkTrZu0gW"
+              meta = json.dumps({"name": name, "parents": [parent_id]})
+              body = (
+                  f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
+                  + meta + f"\r\n--{boundary}\r\nContent-Type: {mime}\r\n\r\n"
+              ).encode() + content_bytes + f"\r\n--{boundary}--".encode()
+              url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart"
+              return json.loads(_requete(
+                  url, {**H, "Content-Type": f"multipart/related; boundary={boundary}"},
+                  data=body, method="POST", timeout=60))
+
+          # ── Dossier Drive de destination (config/visuels) ──────────────────
+          config_id = os.environ.get("DRIVE_CONFIG_FOLDER_ID", "").strip()
+          if not config_id:
+              print("DRIVE_CONFIG_FOLDER_ID manquant → skip")
+              sys.exit(0)
+
+          dossiers = drive_list(
+              f"name='visuels' and '{config_id}' in parents"
+              " and mimeType='application/vnd.google-apps.folder' and trashed=false")
+          if dossiers:
+              visuels_folder_id = dossiers[0]["id"]
+          else:
+              r = json.loads(_requete(
+                  "https://www.googleapis.com/drive/v3/files",
+                  {**H, "Content-Type": "application/json"},
+                  data=json.dumps({"name": "visuels", "mimeType": "application/vnd.google-apps.folder",
+                                    "parents": [config_id]}).encode(), method="POST"))
+              visuels_folder_id = r["id"]
+              print(f"Dossier Drive 'visuels' créé : {visuels_folder_id}")
+
+          print("Liste des visuels déjà copiés sur Drive ...")
+          deja_copies = {f["name"] for f in drive_list(f"'{visuels_folder_id}' in parents and trashed=false")}
+          print(f"  {len(deja_copies)} déjà présents sur Drive (seront sautés)")
+
+          # ── Cloudflare R2 (bucket « visuels ») ──────────────────────────────
+          cf_token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+          cf_account = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+          if not cf_token or not cf_account:
+              print("Secrets Cloudflare manquants (CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID) → skip")
+              sys.exit(1)
+          CF_H = {"Authorization": f"Bearer {cf_token}"}
+          BUCKET = "visuels"
+
+          def cf_list_objects():
+              cursor = None
+              while True:
+                  params = {"per_page": "1000"}
+                  if cursor:
+                      params["cursor"] = cursor
+                  url = (f"https://api.cloudflare.com/client/v4/accounts/{cf_account}"
+                         f"/r2/buckets/{BUCKET}/objects?" + urllib.parse.urlencode(params))
+                  r = json.loads(_requete(url, CF_H))
+                  if not r.get("success"):
+                      print("  ERREUR listing R2 :", r.get("errors"))
+                      return
+                  for obj in r.get("result", []):
+                      yield obj["key"]
+                  cursor = (r.get("result_info") or {}).get("cursor")
+                  if not cursor:
+                      return
+
+          def cf_get_object(key):
+              url = (f"https://api.cloudflare.com/client/v4/accounts/{cf_account}"
+                     f"/r2/buckets/{BUCKET}/objects/{urllib.parse.quote(key)}")
+              return _requete(url, CF_H, timeout=60)
+
+          def mime_pour(cle):
+              ext = cle.rsplit(".", 1)[-1].lower() if "." in cle else ""
+              return {"png": "image/png", "jpg": "image/jpeg",
+                      "jpeg": "image/jpeg"}.get(ext, "application/octet-stream")
+
+          total = copies = erreurs = 0
+          for cle in cf_list_objects():
+              total += 1
+              ensure_fresh_token()
+              if cle in deja_copies:
+                  continue
+              try:
+                  contenu = cf_get_object(cle)
+              except Exception as e:
+                  erreurs += 1
+                  print(f"  Erreur téléchargement R2 {cle} : {e}")
+                  continue
+              try:
+                  drive_create_file(visuels_folder_id, cle, contenu, mime_pour(cle))
+                  deja_copies.add(cle)
+                  copies += 1
+                  if copies % 200 == 0:
+                      print(f"  {copies} visuels copiés sur Drive ({total} vus sur R2)...")
+              except Exception as e:
+                  erreurs += 1
+                  print(f"  Erreur upload Drive {cle} : {e}")
+
+          print(f"\nTerminé : {total} visuels listés sur R2, {copies} copiés sur Drive ce run, "
+                f"{erreurs} erreur(s), {len(deja_copies)} au total sur Drive.")
+          EOF
+
+      - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TOKEN_FILE="$HOME/.auto_prepa_token.json"
+          if [ -f "$TOKEN_FILE" ]; then
+            gh secret set GOOGLE_TOKEN_JSON \
+              --body "$(cat "$TOKEN_FILE")" \
+              --repo "${{ github.repository }}"
+            echo "Secret GOOGLE_TOKEN_JSON mis à jour."
+          fi
