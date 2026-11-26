@@ -1,7 +1,7 @@
 # Visuels produits (<gencod>.png / .jpg), servis en fichiers statiques sur
 # https://visuels.coopu.workers.dev/<gencod>.png
 # Le dossier public/ n'est pas versionné : il est rempli au déploiement par
-# .github/workflows/deploy_visuels.yml à partir de visuels.zip (Drive).
+# .github/workflows/deploy_visuels.yml depuis le FTP Plesk.
 name = "visuels"
 compatibility_date = "2024-11-01"
 
