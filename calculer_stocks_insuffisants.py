@@ -20,8 +20,14 @@ depuis ; sinon elles sont recalculées depuis les BDC.
 Sans --dates (mode par défaut) : ventes d'aujourd'hui + ventes de demain
 (heure de Paris) déduites du stock du jour.
 
+--seuil N : seuil de détection (stock restant <= N), 2 par défaut
+(SEUIL_STOCK_BAS).
+
+Le fichier J1 observé est aussi déposé dans MobUDrive_Bons sous le nom
+stock.xlsx (l'ancien est mis à la corbeille), après l'envoi du mail.
+
 Usage :
-  python3 calculer_stocks_insuffisants.py [--dates "16/11/2026 17/11/2026"] [--j1 j1.xlsx]
+  python3 calculer_stocks_insuffisants.py [--dates "16/11/2026 17/11/2026"] [--j1 j1.xlsx] [--seuil 2]
 """
 import os
 import re
@@ -84,12 +90,12 @@ def ventes_archivees(d):
         svc = cs._get_drive_service()
         if not svc or not cs.DRIVE_CONFIG_FOLDER_ID or not cs.DRIVE_BDC_FOLDER_ID:
             return None
-        nom = f"ventes_{d.strftime('%d_%m')}.csv"
+        nom_csv = f"ventes_{d.strftime('%d_%m')}.csv"
         archives = cs._trouver_dossier_drive(svc, cs.DRIVE_CONFIG_FOLDER_ID, "Archives")
         dossier_ventes = archives and cs._trouver_dossier_drive(svc, archives, "ventes")
         if not dossier_ventes:
             return None
-        csv = _ids(svc, f"name='{nom}' and '{dossier_ventes}' in parents and trashed=false",
+        csv = _ids(svc, f"name='{nom_csv}' and '{dossier_ventes}' in parents and trashed=false",
                    "id,modifiedTime")
         if not csv:
             return None
@@ -108,13 +114,13 @@ def ventes_archivees(d):
                             f"in parents and trashed=false", "modifiedTime")
             heure_registre = reg[0].get("modifiedTime") if reg else None
         if not archive_a_jour(csv[0].get("modifiedTime"), heures_bdc, heure_registre):
-            print(f"  {nom} archivé mais pas à jour (nouveau BDC ou annulation) — recalcul.")
+            print(f"  {nom_csv} archivé mais pas à jour (nouveau BDC ou annulation) — recalcul.")
             return None
-        chemin = os.path.join(cs.WORK_DIR, nom)
-        if not cs.telecharger_fichier_archive("ventes", nom, chemin,
+        chemin = os.path.join(cs.WORK_DIR, nom_csv)
+        if not cs.telecharger_fichier_archive("ventes", nom_csv, chemin,
                                               root_id=cs.DRIVE_CONFIG_FOLDER_ID):
             return None
-        print(f"  Aucun nouveau BDC depuis {nom} : ventes archivées réutilisées.")
+        print(f"  Aucun nouveau BDC depuis {nom_csv} : ventes archivées réutilisées.")
         return cs._charger_ventes_csv(chemin)
     except Exception as e:
         print(f"  Archive des ventes illisible ({type(e).__name__}) — recalcul.")
@@ -170,6 +176,16 @@ def envoyer_par_mail(chemin, dates_txt, nom_j1, nb):
     return True
 
 
+def publier_mobudrive(chemin_j1):
+    """Dépose le fichier J1 observé dans MobUDrive_Bons sous le nom stock.xlsx
+    (l'ancien stock.xlsx est mis à la corbeille)."""
+    try:
+        import stock_mobudrive
+        stock_mobudrive.publier(chemin_j1)
+    except Exception as e:
+        print(f"  Stock MobUDrive non déposé : {type(e).__name__}")
+
+
 def _option(args, nom, defaut=None):
     if nom in args:
         i = args.index(nom)
@@ -187,6 +203,13 @@ def main():
         print(f"ERREUR : {e}")
         sys.exit(1)
     nom_j1 = (_option(args, "--j1") or "j1.xlsx").strip()
+    texte_seuil = (_option(args, "--seuil", "") or "").strip()
+    if texte_seuil:
+        try:
+            cs.SEUIL_STOCK_BAS = int(texte_seuil)
+        except ValueError:
+            print(f"ERREUR : seuil invalide : {texte_seuil} (nombre entier attendu)")
+            sys.exit(1)
 
     cs._charger_config()
     os.makedirs(cs.WORK_DIR, exist_ok=True)
@@ -213,6 +236,7 @@ def main():
     print(f"\n{len(rows)} produit(s) en stock insuffisant (restant <= {cs.SEUIL_STOCK_BAS}).")
     if not rows:
         print("Aucun stock insuffisant : pas de PDF.")
+        publier_mobudrive(f_j1)
         return
 
     rows.sort(key=cs.cle_tri_chemin_prepa(cs.charger_adresses_magasin(),
@@ -225,8 +249,14 @@ def main():
                            + "_".join(d.strftime('%Y%m%d') for d in jours) + ".pdf")
     titre = (f"<b>Stocks insuffisant Drive - {nom_j1} - ventes du {dates_txt}</b>"
              f"&nbsp;&nbsp;({len(rows)} produit{'s' if len(rows) > 1 else ''})")
-    pdf = cs._construire_pdf_tableau(rows, titre, nom_pdf, complet=False, vms_map=vms_map)
-    if not pdf or not envoyer_par_mail(pdf, dates_txt, nom_j1, len(rows)):
+    # Colonnes : stock du matin (J1), ventes prévisionnelles, stock restant
+    prevision_map = {r[0]: (r[2], r[4]) for r in rows}
+    rows_pdf = [(g, s, v, 0, s, 0, '', lib) for g, s, v, _, _, _, _, lib in rows]
+    pdf = cs._construire_pdf_tableau(rows_pdf, titre, nom_pdf, complet=False, vms_map=vms_map,
+                                     prevision_map=prevision_map)
+    envoye = bool(pdf) and envoyer_par_mail(pdf, dates_txt, nom_j1, len(rows))
+    publier_mobudrive(f_j1)  # après le mail : ne le retarde jamais
+    if not envoye:
         print("ERREUR : PDF non généré ou non envoyé par mail.")
         sys.exit(1)
 

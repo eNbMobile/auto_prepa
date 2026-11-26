@@ -13,6 +13,11 @@ on:
         required: false
         default: "j1.xlsx"
         type: string
+      seuil:
+        description: "Seuil de stock insuffisant (stock restant <= seuil)"
+        required: false
+        default: "2"
+        type: string
 
 concurrency:
   group: calculer_stocks_insuffisants
@@ -50,7 +55,8 @@ jobs:
           WORK_DIR: "v 4.0.0"
           DATES: ${{ inputs.dates }}
           J1: ${{ inputs.j1 }}
-        run: python3 bootstrap.py calculer_stocks_insuffisants.py --dates "$DATES" --j1 "${J1:-j1.xlsx}"
+          SEUIL: ${{ inputs.seuil }}
+        run: python3 bootstrap.py calculer_stocks_insuffisants.py --dates "$DATES" --j1 "${J1:-j1.xlsx}" --seuil "${SEUIL:-2}"
 
       - name: Mettre à jour GOOGLE_TOKEN_JSON si rafraîchi
         if: always()

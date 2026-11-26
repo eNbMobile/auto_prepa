@@ -139,11 +139,13 @@ const WORKFLOWS = {
     buildInputs(params) {
       const j1 = String(params.j1 || '').trim() || 'j1.xlsx';
       if (/['\\]/.test(j1)) throw new Error('Nom de fichier J1 invalide.');
+      const seuil = String(params.seuil || '').trim() || '2';
+      if (!/^\d{1,3}$/.test(seuil)) throw new Error('Seuil invalide (nombre entier attendu).');
       if ((params.mode || 'auto') !== 'dates') {
         // Mode par défaut : le script prend aujourd'hui + demain (heure de Paris).
         return {
-          inputs: { dates: '', j1 },
-          detail: `${j1} moins les ventes d'aujourd'hui et de demain`,
+          inputs: { dates: '', j1, seuil },
+          detail: `${j1} moins les ventes d'aujourd'hui et de demain, seuil ${seuil}`,
         };
       }
       const morceaux = String(params.dates || '').split(/[\s,;]+/).filter(Boolean);
@@ -155,8 +157,8 @@ const WORKFLOWS = {
         if (!dates.includes(d)) dates.push(d);
       }
       return {
-        inputs: { dates: dates.join(' '), j1 },
-        detail: `${j1} moins les ventes du ${dates.join(', ')}`,
+        inputs: { dates: dates.join(' '), j1, seuil },
+        detail: `${j1} moins les ventes du ${dates.join(', ')}, seuil ${seuil}`,
       };
     },
   },
@@ -480,7 +482,7 @@ const PAGE = `<!doctype html>
       <h2>Calculer Stocks Insuffisants</h2>
       <p class="hint">Stock du jour moins les ventes d'aujourd'hui et de demain (ou des jours
         choisis) : envoie le PDF des stocks insuffisants par mail aux deux adresses du
-        contrôle de stocks.</p>
+        contrôle de stocks, puis dépose le fichier J1 dans MobUDrive (stock.xlsx).</p>
       <form data-workflow="calculer_stocks_insuffisants">
         <div class="fields">
           <div class="field">
@@ -498,6 +500,15 @@ const PAGE = `<!doctype html>
           <div class="field">
             <label for="csi-j1">Fichier J1</label>
             <input type="text" id="csi-j1" name="j1" value="j1.xlsx" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="csi-seuil">Seuil (stock restant ≤)</label>
+            <select id="csi-seuil" name="seuil">
+              <option value="2" selected>2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+            </select>
           </div>
           <button type="submit">Calculer</button>
         </div>
