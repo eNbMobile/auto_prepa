@@ -1,0 +1,37 @@
+name: Nettoyer anciens visuels
+
+# Ponctuel, après la migration des visuels vers R2 : supprime les anciens
+# workers visuels-0 / visuels-1 et le cache GitHub des visuels Plesk (~3,6 Go).
+# Les visuels sont désormais dans le bucket R2 « visuels »
+# (https://visuels.coopu.workers.dev/<gencod>.png).
+#
+# Secrets : CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write   # suppression des caches
+
+jobs:
+  nettoyer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Supprimer les workers visuels-0 et visuels-1
+        env:
+          CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          for w in visuels-0 visuels-1; do
+            npx --yes wrangler@4 delete --name "$w" --force > /dev/null 2>&1 \
+              && echo "Worker $w supprimé" || echo "Worker $w absent ou non supprimé"
+          done
+
+      - name: Supprimer le cache des visuels Plesk
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh cache list --repo "${{ github.repository }}" --key visuels- --limit 100 --json key --jq '.[].key' \
+            | while read -r k; do gh cache delete "$k" --repo "${{ github.repository }}" && echo "Cache $k supprimé"; done || true
