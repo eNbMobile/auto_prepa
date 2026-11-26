@@ -76,7 +76,7 @@ jobs:
           echo "$sortie" | grep -iE 'error|fatal|fail|denied|refused|timeout|ssl|tls|login|[0-9]{3} ' \
             | grep -viE 'vhosts|subject|issuer' \
             | sed -E 's/[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/<ip>/g' | head -n 10 || true
-          echo "Premiers visuels listés : $(echo "$sortie" | grep -cE '\.(png|jpg)$')"
+          echo "Premiers visuels listés : $(echo "$sortie" | grep -cE '\.png$')"
           # Arrêt volontaire à 45 min : on publie et on met en cache ce qui
           # est récupéré ; le run suivant continue (fichiers existants ignorés).
           set +e
@@ -87,7 +87,7 @@ jobs:
             set net:max-retries 3;
             set net:timeout 30;
             set xfer:use-temp-file true;
-            mirror --only-missing --parallel=10 --no-perms --verbose=0 --include-glob '*.png' --include-glob '*.jpg' /httpdocs/mobUDrive/visuels $dest;
+            mirror --only-missing --parallel=10 --no-perms --verbose=0 --include-glob '*.png' /httpdocs/mobUDrive/visuels $dest;
             quit"
           code=$?
           set -e

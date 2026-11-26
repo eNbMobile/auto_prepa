@@ -58,7 +58,7 @@ def _url_visuel(gencod, ext):
     chiffres = re.sub(r"\D", "", gencod)
     n = int(chiffres) % _VISUELS_NB_WORKERS if chiffres else 0
     return f"https://visuels-{n}.coopu.workers.dev/{gencod}{ext}"
-_PHOTO_EXTENSIONS = (".jpg", ".png")
+_PHOTO_EXTENSIONS = (".png",)
 
 # Lettres d'anticipation dont le rayon est connu : format PDF dedie (photo,
 # code-barres, prix, ...). Les lettres absentes d'ici (rayon pas encore
@@ -271,7 +271,7 @@ def _lister_bons_commande(drive_svc, jour_id):
 
 
 def _telecharger_photo(gencod, cache, erreurs=None):
-    """Recupere la photo produit (jpg ou png) depuis visuels-<n>.coopu.workers.dev.
+    """Recupere la photo produit (png) depuis visuels-<n>.coopu.workers.dev.
 
     Retourne les octets de l'image, ou None si introuvable. Resultat mis en
     cache par gencod pour eviter de re-telecharger le meme visuel plusieurs
