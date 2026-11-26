@@ -4,18 +4,19 @@ name: copier_visuels_drive
 # bucket R2 « visuels » (cf. cloudflare/visuels-r2-worker) vers un dossier
 # Drive, pour en avoir une sauvegarde hors Cloudflare.
 #
-# Les visuels sont téléchargés en parallèle depuis l'URL publique
-# visuels.coopu.workers.dev (pas de limite de débit comme sur l'API de
-# gestion Cloudflare), regroupés par lots dans des zips, puis chaque zip
-# est envoyé sur Drive en upload reprenable ("resumable"). Un lot (zip)
-# déjà présent sur Drive est sauté, ce qui permet de relancer le workflow
-# sans tout retélécharger si un run s'arrête avant la fin.
+# Les visuels sont téléchargés en parallèle via l'API de gestion Cloudflare
+# (pas via l'URL publique visuels.coopu.workers.dev : Cloudflare bloque en
+# 403 systématique les requêtes vers ce domaine depuis les IP des runners
+# GitHub Actions, probablement une protection anti-bot au niveau de la zone
+# — l'API de gestion n'est, elle, pas bloquée). Les visuels sont regroupés
+# par lots dans des zips, puis chaque zip est envoyé sur Drive en upload
+# reprenable ("resumable"). Un lot (zip) déjà présent sur Drive est sauté,
+# ce qui permet de relancer le workflow sans tout retélécharger si un run
+# s'arrête avant la fin.
 #
 # Secrets du dépôt :
 #   CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID  (déjà utilisés pour déployer
-#                                                 les workers Cloudflare ;
-#                                                 ici uniquement pour lister
-#                                                 les clés du bucket)
+#                                                 les workers Cloudflare)
 #   GOOGLE_TOKEN_JSON, DRIVE_CONFIG_FOLDER_ID    (déjà utilisés ailleurs)
 
 on:
@@ -46,7 +47,7 @@ jobs:
           import json, os, pathlib, sys, time, urllib.error, urllib.parse, urllib.request, zipfile
 
           TAILLE_LOT = 3000       # visuels par zip
-          TELECHARGEMENTS_PARALLELES = 30
+          TELECHARGEMENTS_PARALLELES = 15   # l'API Cloudflare limite le débit par compte
 
           # ── Auth Google (même mécanisme que collecte_ean.yml) ──────────────
           token_json = os.environ.get("GOOGLE_TOKEN_JSON", "").strip()
@@ -193,22 +194,16 @@ jobs:
                       break
               return cles
 
-          # ── Téléchargement des visuels (URL publique, sans limite de débit
-          #    comme celle de l'API de gestion Cloudflare) ────────────────────
-          VISUELS_BASE = "https://visuels.coopu.workers.dev/"
-
-          def telecharger_visuel(cle, tentatives=3):
-              url = VISUELS_BASE + urllib.parse.quote(cle)
-              derniere_erreur = None
-              for essai in range(tentatives):
-                  try:
-                      with urllib.request.urlopen(url, timeout=20) as r:
-                          return cle, r.read()
-                  except Exception as e:
-                      derniere_erreur = e
-                      time.sleep(0.5 * (essai + 1))
-              print(f"  Erreur téléchargement {cle} : {derniere_erreur}")
-              return cle, None
+          # ── Téléchargement des visuels (API de gestion Cloudflare ; l'URL
+          #    publique du worker est bloquée en 403 depuis les runners) ─────
+          def telecharger_visuel(cle):
+              url = (f"https://api.cloudflare.com/client/v4/accounts/{cf_account}"
+                     f"/r2/buckets/{BUCKET}/objects/{urllib.parse.quote(cle)}")
+              try:
+                  return cle, _requete(url, CF_H, timeout=30)
+              except Exception as e:
+                  print(f"  Erreur téléchargement {cle} : {e}")
+                  return cle, None
 
           print("Listing des visuels sur R2 ...")
           cles = cf_list_objects()
