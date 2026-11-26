@@ -58,11 +58,14 @@ jobs:
           export AWS_REQUEST_CHECKSUM_CALCULATION=when_required AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
           aws configure set default.s3.max_concurrent_requests 50
           endpoint="https://$CLOUDFLARE_ACCOUNT_ID.r2.cloudflarestorage.com"
-          ( while sleep 30; do echo "$(date -u +%H:%M:%S) : envoi en cours…"; done ) &
-          compteur=$!
+          # Compteur : une ligne tous les 500 visuels envoyés (+ les erreurs)
+          set -o pipefail
           aws s3 sync "$src" s3://visuels --endpoint-url "$endpoint" \
-              --exclude '*' --include '*.png' --content-type image/png --only-show-errors
-          kill $compteur 2>/dev/null || true
+              --exclude '*' --include '*.png' --content-type image/png --no-progress 2>&1 \
+            | awk -v total="$n" '
+                /^upload:/ { k++; if (k % 500 == 0) { print k " visuel(s) envoyé(s) (sur " total " en cache)"; fflush() } next }
+                { print; fflush() }
+                END { print "Envoyés pendant ce run : " k+0 }'
           total=$(aws s3 ls s3://visuels --endpoint-url "$endpoint" | wc -l)
           echo "Visuels dans le bucket R2 : $total"
 
